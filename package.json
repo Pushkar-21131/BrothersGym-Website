@@ -1,0 +1,49 @@
+{
+  "name": "brothers-gym",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "audit:check": "npm audit --audit-level=high",
+    "audit:full": "npm audit"
+  },
+  "dependencies": {
+    "@sentry/nextjs": "^10.65.0",
+    "bcryptjs": "^3.0.3",
+    "clsx": "^2.1.1",
+    "date-fns": "^4.4.0",
+    "dotenv": "17.3.1",
+    "drizzle-orm": "0.45.2",
+    "exceljs": "^4.4.0",
+    "jose": "^6.2.7",
+    "jspdf": "^4.2.1",
+    "jspdf-autotable": "^5.0.8",
+    "lucide-react": "^0.469.0",
+    "next": "^15.5.20",
+    "pg": "8.20.0",
+    "razorpay": "^2.9.6",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "react-hot-toast": "^2.6.0",
+    "recharts": "^3.9.2",
+    "resend": "^6.17.2",
+    "tailwind-merge": "^3.6.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.3.3",
+    "@types/bcryptjs": "^2.4.6",
+    "@types/node": "22.19.15",
+    "@types/pg": "8.18.0",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "drizzle-kit": "^0.31.10",
+    "eslint": "9.39.4",
+    "eslint-config-next": "16.2.6",
+    "postcss": "^8.5.20",
+    "tailwindcss": "4.1.17",
+    "typescript": "5.9.3"
+  }
+}

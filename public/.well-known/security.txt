@@ -1,0 +1,22 @@
+Contact: mailto:security@brothersgym.in
+Contact: https://wa.me/917042061402
+Expires: 2027-12-31T23:59:59.000Z
+Preferred-Languages: en, hi
+Canonical: https://brothersgym.in/.well-known/security.txt
+Policy: https://brothersgym.in/privacy
+
+# If you discover a security vulnerability in Brothers Gym website,
+# please report it responsibly to the contacts above.
+# We appreciate coordinated disclosure and will respond within 48 hours.
+#
+# In scope:
+# - Authentication bypass
+# - SQL injection
+# - XSS vulnerabilities
+# - Payment tampering
+# - Personal data exposure
+#
+# Out of scope:
+# - Social engineering
+# - Physical attacks
+# - Denial of service (DoS)

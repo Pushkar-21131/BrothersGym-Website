@@ -1,0 +1,62 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1783553317935,
+      "tag": "0000_lethal_mandroid",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1783622452775,
+      "tag": "0001_broad_layla_miller",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1783676490614,
+      "tag": "0002_rapid_harpoon",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1783983974018,
+      "tag": "0003_loud_phantom_reporter",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1784048431064,
+      "tag": "0004_tricky_amazoness",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1784067665052,
+      "tag": "0005_wise_roughhouse",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1784630008071,
+      "tag": "0006_bumpy_morg",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1786216361367,
+      "tag": "0007_outgoing_vermin",
+      "breakpoints": true
+    }
+  ]
+}

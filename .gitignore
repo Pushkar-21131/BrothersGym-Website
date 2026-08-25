@@ -1,0 +1,46 @@
+# Dependencies
+node_modules
+/.pnp
+.pnp.js
+
+# Testing
+/coverage
+
+# Next.js
+/.next/
+/out/
+
+# Production
+/build
+
+# Environment variables — CRITICAL
+# .env.example is deliberately NOT ignored: it holds placeholders only and is
+# the template a new deployment copies to .env. Ignoring it means a fresh clone
+# has no record of which variables the app needs.
+.env
+.env*.local
+.env.local
+.env.development
+.env.production
+
+# Debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Vercel
+.vercel
+
+# TypeScript
+*.tsbuildinfo
+next-env.d.ts
+
+# System
+.DS_Store
+*.pem
+
+# Drizzle
+# NOTE: drizzle/meta/_journal.json must be COMMITTED. It is the ledger that
+# records which migrations have run; without it `drizzle-kit` cannot tell
+# applied migrations from pending ones and a fresh deploy re-runs everything.
+# It was previously ignored here — that was a bug.

@@ -60,7 +60,7 @@ export default async function PrivacyPolicyPage() {
             <li>Membership plan type and duration</li>
             <li>Fees paid and payment method</li>
             <li>Joining date and expiry date</li>
-            <li>Payment transaction records (via Razorpay)</li>
+            <li>Payment transaction records (UPI reference / UTR number)</li>
           </ul>
         </SubSection>
 
@@ -85,8 +85,9 @@ export default async function PrivacyPolicyPage() {
             important updates.
           </li>
           <li>
-            <strong className="text-white">Payment Processing:</strong> To securely
-            process your online payments through Razorpay.
+            <strong className="text-white">Payment Processing:</strong> To confirm
+            online UPI payments made directly to the gym&apos;s UPI account and activate
+            your membership.
           </li>
           <li>
             <strong className="text-white">Safety & Emergency:</strong> To contact your
@@ -142,9 +143,10 @@ export default async function PrivacyPolicyPage() {
             protects login pages from bot attacks.
           </li>
           <li>
-            <strong className="text-white">PCI-DSS Compliance:</strong> Payment
-            processing is handled by Razorpay (PCI-DSS Level 1 certified). We never
-            store your card or UPI details.
+            <strong className="text-white">No Card Details Collected:</strong> Online
+            payments are made by UPI inside your own UPI app. We never see or store your
+            card, bank, or UPI PIN details — only the amount and an optional reference
+            number you share to help us confirm the payment.
           </li>
         </ul>
       </Section>
@@ -156,9 +158,10 @@ export default async function PrivacyPolicyPage() {
         </p>
         <ul>
           <li>
-            <strong className="text-white">Razorpay:</strong> RBI-authorized payment
-            gateway for processing online payments. Handles all card/UPI/netbanking
-            transactions securely. We never see or store your payment credentials.
+            <strong className="text-white">UPI Apps &amp; Banks:</strong> Online
+            payments are made by UPI directly from your app (Google Pay, PhonePe, Paytm,
+            or your bank) to the gym&apos;s UPI account, over India&apos;s RBI-operated
+            UPI network. We never see or store your payment credentials.
           </li>
           <li>
             <strong className="text-white">Resend:</strong> For sending OTP verification

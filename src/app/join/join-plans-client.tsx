@@ -8,7 +8,10 @@ import {
   verifyOnlinePayment,
   lookupMemberSecure,
   getPublicPlansForBranch,
+  createManualJoinRequest,
+  submitManualPaymentClaim,
 } from "@/app/actions/payments";
+import { buildWhatsAppLink } from "@/lib/whatsapp";
 
 declare global {
   interface Window {
@@ -44,12 +47,36 @@ type VerifiedMember = {
   lastPlan: string | null;
 };
 
+// Everything the pay-by-UPI + acknowledgement screens need, returned by
+// createManualJoinRequest.
+type PayInfo = {
+  joinId: number;
+  reference: string;
+  amount: number;
+  planName: string;
+  planDurationDays: number;
+  branchName: string;
+  branchPhone: string | null;
+  upiConfigured: boolean;
+  upiId: string | null;
+  payeeName: string;
+  upiString: string | null;
+  qrDataUrl: string | null;
+  email: string | null;
+  isRenewal: boolean;
+};
+
 export default function JoinPlansClient({
   initialBranches,
+  paymentMode = "manual",
 }: {
   initialBranches: Branch[];
+  paymentMode?: "manual" | "razorpay";
 }) {
-  const [step, setStep] = useState<1 | 2 | 3>(1);
+  // Steps 1–3 are the funnel (branch → plan → details). 4 = pay by UPI,
+  // 5 = acknowledgement. Steps 4/5 only ever show in manual mode; the Razorpay
+  // path opens the gateway overlay from step 3 and never advances the step.
+  const [step, setStep] = useState<1 | 2 | 3 | 4 | 5>(1);
   const [selectedBranch, setSelectedBranch] = useState<Branch | null>(null);
   const [memberType, setMemberType] = useState<"new" | "renewal">("new");
   const [plans, setPlans] = useState<Plan[]>([]);
@@ -65,6 +92,12 @@ export default function JoinPlansClient({
   const [loading, setLoading] = useState(false);
   const [formError, setFormError] = useState<string>("");
   const [consentChecked, setConsentChecked] = useState(false);
+
+  // Manual UPI flow state.
+  const [payInfo, setPayInfo] = useState<PayInfo | null>(null);
+  const [utr, setUtr] = useState("");
+  const [claimLoading, setClaimLoading] = useState(false);
+  const [alreadyConfirmed, setAlreadyConfirmed] = useState(false);
 
   // Guard against a stale response overwriting plans after the user switches
   // branch (or navigates away) mid-fetch. The initial reset is an intentional
@@ -98,7 +131,7 @@ export default function JoinPlansClient({
     planFilter === "cardio" ? p.includesCardio : !p.includesCardio
   );
 
-  function goToStep(next: 1 | 2 | 3) {
+  function goToStep(next: 1 | 2 | 3 | 4 | 5) {
     setStep(next);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -109,7 +142,7 @@ export default function JoinPlansClient({
   // in quick succession doesn't queue two competing step changes.
   const stepTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  function goToStepAfterAnimation(next: 1 | 2 | 3) {
+  function goToStepAfterAnimation(next: 1 | 2 | 3 | 4 | 5) {
     if (stepTimer.current) clearTimeout(stepTimer.current);
     stepTimer.current = setTimeout(() => goToStep(next), 350);
   }
@@ -152,6 +185,25 @@ export default function JoinPlansClient({
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
+  // Full reset back to the start — used by "start a new request" on the pay and
+  // acknowledgement screens.
+  function resetAll() {
+    setSelectedBranch(null);
+    setSelectedPlan(null);
+    setPlans([]);
+    setVerified(null);
+    setMemberType("new");
+    setSearchGymId("");
+    setSearchPhone("");
+    setPayInfo(null);
+    setUtr("");
+    setAlreadyConfirmed(false);
+    setConsentChecked(false);
+    setFormError("");
+    setStep(1);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
   function switchToRenewal() {
     setMemberType("renewal");
     setSelectedPlan(null);
@@ -189,7 +241,27 @@ export default function JoinPlansClient({
     toast.success(`✓ Verified: ${result.member!.name}`);
   }
 
-  async function handlePay(e: React.FormEvent<HTMLFormElement>) {
+  async function copyText(text: string, label: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success(`${label} copied`);
+    } catch {
+      toast.error("Couldn't copy — please select and copy it manually.");
+    }
+  }
+
+  // Pre-filled WhatsApp message the member sends the owner to nudge a
+  // confirmation. Only rendered when the branch has a phone number.
+  function ownerWhatsAppLink(info: PayInfo): string {
+    const msg =
+      `Hi Brothers Gym! I've just paid ₹${info.amount} for the ${info.planName} plan` +
+      `${info.branchName ? ` at ${info.branchName}` : ""} via UPI.\n\n` +
+      `Reference: ${info.reference}\n\n` +
+      `Please confirm my membership when you get a moment. Thank you! 🙏`;
+    return buildWhatsAppLink(info.branchPhone || "", msg);
+  }
+
+  async function handleContinue(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setFormError("");
 
@@ -219,6 +291,45 @@ export default function JoinPlansClient({
       formData.set("existingMemberId", String(verified.id));
     }
 
+    // ===== MANUAL UPI FLOW (default) =====
+    // Create the pending request, then move to the pay-by-UPI screen. No
+    // external gateway, no script — the member pays out of band and the owner
+    // confirms.
+    if (paymentMode === "manual") {
+      setLoading(true);
+      const res = await createManualJoinRequest(formData);
+      setLoading(false);
+
+      if ("error" in res) {
+        const msg = res.error || "Could not start the payment step.";
+        toast.error(msg);
+        setFormError(msg);
+        return;
+      }
+
+      setPayInfo({
+        joinId: res.joinId,
+        reference: res.reference,
+        amount: res.amount,
+        planName: res.planName,
+        planDurationDays: res.planDurationDays,
+        branchName: res.branchName,
+        branchPhone: res.branchPhone,
+        upiConfigured: res.upiConfigured,
+        upiId: res.upiId,
+        payeeName: res.payeeName,
+        upiString: res.upiString,
+        qrDataUrl: res.qrDataUrl,
+        email: res.email,
+        isRenewal: res.isRenewal,
+      });
+      setUtr("");
+      setAlreadyConfirmed(false);
+      goToStep(4);
+      return;
+    }
+
+    // ===== RAZORPAY FLOW (parked; PAYMENT_MODE=razorpay) =====
     setLoading(true);
     const order = await createOnlineJoinOrder(formData);
     setLoading(false);
@@ -288,11 +399,33 @@ export default function JoinPlansClient({
     rzp.open();
   }
 
+  async function handleClaim() {
+    if (!payInfo) return;
+    setClaimLoading(true);
+    const res = await submitManualPaymentClaim({
+      joinId: payInfo.joinId,
+      upiReference: utr.trim() || undefined,
+    });
+    setClaimLoading(false);
+
+    if ("error" in res) {
+      toast.error(res.error || "Could not record your payment. Please try again.");
+      return;
+    }
+
+    setAlreadyConfirmed("alreadyConfirmed" in res && res.alreadyConfirmed === true);
+    goToStep(5);
+  }
+
   const renewalBlocked = memberType === "renewal" && !verified;
 
   return (
     <>
-      <Script src="https://checkout.razorpay.com/v1/checkout.js" />
+      {/* The gateway script and its external connection are only needed for the
+          parked Razorpay path; manual mode ships no third-party JS. */}
+      {paymentMode === "razorpay" && (
+        <Script src="https://checkout.razorpay.com/v1/checkout.js" />
+      )}
 
       <div className="bg-effects">
         <div className="bg-orb bg-orb-1"></div>
@@ -314,7 +447,11 @@ export default function JoinPlansClient({
           <h1>
             Join <span className="highlight">Brothers Gym</span> Online
           </h1>
-          <p>Pick your preferred branch and plan. Pay securely via UPI, Cards or Netbanking.</p>
+          <p>
+            {paymentMode === "razorpay"
+              ? "Pick your preferred branch and plan. Pay securely via UPI, Cards or Netbanking."
+              : "Pick your preferred branch and plan. Pay by UPI — your membership is confirmed once the gym receives it."}
+          </p>
           <div className="payment-icons">
             <div className="payment-icon">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -323,55 +460,61 @@ export default function JoinPlansClient({
               </svg>
               UPI
             </div>
-            <div className="payment-icon">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <rect x="1" y="4" width="22" height="16" rx="2" />
-                <line x1="1" y1="10" x2="23" y2="10" />
-              </svg>
-              Cards
-            </div>
-            <div className="payment-icon">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M3 21h18M3 10h18M5 6l7-3 7 3M4 10v11M20 10v11M8 14v3M12 14v3M16 14v3" />
-              </svg>
-              Netbanking
-            </div>
+            {paymentMode === "razorpay" && (
+              <>
+                <div className="payment-icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <rect x="1" y="4" width="22" height="16" rx="2" />
+                    <line x1="1" y1="10" x2="23" y2="10" />
+                  </svg>
+                  Cards
+                </div>
+                <div className="payment-icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M3 21h18M3 10h18M5 6l7-3 7 3M4 10v11M20 10v11M8 14v3M12 14v3M16 14v3" />
+                  </svg>
+                  Netbanking
+                </div>
+              </>
+            )}
           </div>
         </div>
 
-        {/* PROGRESS BAR */}
-        <div className="progress-bar">
-          <div className="progress-step">
-            <div className={`step-circle ${step === 1 ? "active" : step > 1 ? "completed" : ""}`}>
-              {step > 1 ? (
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
-                  <polyline points="20 6 9 17 4 12" />
-                </svg>
-              ) : "1"}
+        {/* PROGRESS BAR — only for the funnel (steps 1–3) */}
+        {step <= 3 && (
+          <div className="progress-bar">
+            <div className="progress-step">
+              <div className={`step-circle ${step === 1 ? "active" : step > 1 ? "completed" : ""}`}>
+                {step > 1 ? (
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+                    <polyline points="20 6 9 17 4 12" />
+                  </svg>
+                ) : "1"}
+              </div>
+              <span className={`step-label ${step === 1 ? "active" : step > 1 ? "completed" : ""}`}>Branch</span>
             </div>
-            <span className={`step-label ${step === 1 ? "active" : step > 1 ? "completed" : ""}`}>Branch</span>
-          </div>
-          <div className={`step-connector ${step > 1 ? "filled" : ""}`}>
-            <div className="fill"></div>
-          </div>
-          <div className="progress-step">
-            <div className={`step-circle ${step === 2 ? "active" : step > 2 ? "completed" : ""}`}>
-              {step > 2 ? (
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
-                  <polyline points="20 6 9 17 4 12" />
-                </svg>
-              ) : "2"}
+            <div className={`step-connector ${step > 1 ? "filled" : ""}`}>
+              <div className="fill"></div>
             </div>
-            <span className={`step-label ${step === 2 ? "active" : step > 2 ? "completed" : ""}`}>Plan</span>
+            <div className="progress-step">
+              <div className={`step-circle ${step === 2 ? "active" : step > 2 ? "completed" : ""}`}>
+                {step > 2 ? (
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+                    <polyline points="20 6 9 17 4 12" />
+                  </svg>
+                ) : "2"}
+              </div>
+              <span className={`step-label ${step === 2 ? "active" : step > 2 ? "completed" : ""}`}>Plan</span>
+            </div>
+            <div className={`step-connector ${step > 2 ? "filled" : ""}`}>
+              <div className="fill"></div>
+            </div>
+            <div className="progress-step">
+              <div className={`step-circle ${step === 3 ? "active" : ""}`}>3</div>
+              <span className={`step-label ${step === 3 ? "active" : ""}`}>Details</span>
+            </div>
           </div>
-          <div className={`step-connector ${step > 2 ? "filled" : ""}`}>
-            <div className="fill"></div>
-          </div>
-          <div className="progress-step">
-            <div className={`step-circle ${step === 3 ? "active" : ""}`}>3</div>
-            <span className={`step-label ${step === 3 ? "active" : ""}`}>Details</span>
-          </div>
-        </div>
+        )}
 
         {/* STEP 1: BRANCH */}
         {step === 1 && (
@@ -744,7 +887,7 @@ export default function JoinPlansClient({
               </div>
             </div>
 
-            <form onSubmit={handlePay}>
+            <form onSubmit={handleContinue}>
               <div className="form-card">
                 <div className="form-title">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -869,26 +1012,53 @@ export default function JoinPlansClient({
                     <p className="trust-sub">256-bit HTTPS</p>
                   </div>
                 </div>
-                <div className="trust-item">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
-                    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-                  </svg>
-                  <div>
-                    <p className="trust-title">Razorpay</p>
-                    <p className="trust-sub">RBI Approved</p>
-                  </div>
-                </div>
-                <div className="trust-item">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
-                    <polyline points="20 6 9 17 4 12" />
-                  </svg>
-                  <div>
-                    {/* Razorpay holds this certification, not Brothers Gym.
-                        Dropping the attribution reads as a claim about us. */}
-                    <p className="trust-title">PCI-DSS</p>
-                    <p className="trust-sub">Razorpay Level 1</p>
-                  </div>
-                </div>
+                {paymentMode === "razorpay" ? (
+                  <>
+                    <div className="trust-item">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
+                        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                      </svg>
+                      <div>
+                        <p className="trust-title">Razorpay</p>
+                        <p className="trust-sub">RBI Approved</p>
+                      </div>
+                    </div>
+                    <div className="trust-item">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
+                        <polyline points="20 6 9 17 4 12" />
+                      </svg>
+                      <div>
+                        {/* Razorpay holds this certification, not Brothers Gym.
+                            Dropping the attribution reads as a claim about us. */}
+                        <p className="trust-title">PCI-DSS</p>
+                        <p className="trust-sub">Razorpay Level 1</p>
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="trust-item">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
+                        <rect x="1" y="4" width="22" height="16" rx="2" />
+                        <line x1="1" y1="10" x2="23" y2="10" />
+                      </svg>
+                      <div>
+                        <p className="trust-title">Pay by UPI</p>
+                        <p className="trust-sub">Any UPI app</p>
+                      </div>
+                    </div>
+                    <div className="trust-item">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
+                        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                        <polyline points="9 12 11 14 15 10" />
+                      </svg>
+                      <div>
+                        <p className="trust-title">Owner Confirmed</p>
+                        <p className="trust-sub">Real human check</p>
+                      </div>
+                    </div>
+                  </>
+                )}
                 <div className="trust-item">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
                     <line x1="12" y1="1" x2="12" y2="23" />
@@ -916,7 +1086,7 @@ export default function JoinPlansClient({
                     >
                       <path d="M21 12a9 9 0 11-6.219-8.56" />
                     </svg>
-                    Processing Payment...
+                    {paymentMode === "razorpay" ? "Processing Payment..." : "Setting up payment..."}
                   </>
                 ) : (
                   <>
@@ -924,7 +1094,7 @@ export default function JoinPlansClient({
                       <rect x="1" y="4" width="22" height="16" rx="2" />
                       <line x1="1" y1="10" x2="23" y2="10" />
                     </svg>
-                    Pay & Join Now
+                    {paymentMode === "razorpay" ? "Pay & Join Now" : "Continue to Payment"}
                   </>
                 )}
               </button>
@@ -934,9 +1104,302 @@ export default function JoinPlansClient({
                   <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
                   <path d="M7 11V7a5 5 0 0110 0v4" />
                 </svg>
-                Your payment is processed by Razorpay. We never see or store card/UPI details.
+                {paymentMode === "razorpay"
+                  ? "Your payment is processed by Razorpay. We never see or store card/UPI details."
+                  : "You pay the gym's UPI directly from your own app. We never see or store your UPI PIN or bank details."}
               </div>
             </form>
+          </div>
+        )}
+
+        {/* STEP 4: PAY BY UPI (manual mode) */}
+        {step === 4 && payInfo && (
+          <div>
+            <div className="selected-branch-banner">
+              <div className="selected-branch-info">
+                <div className="branch-icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <rect x="1" y="4" width="22" height="16" rx="2" />
+                    <line x1="1" y1="10" x2="23" y2="10" />
+                  </svg>
+                </div>
+                <div>
+                  <div className="selected-branch-label">Almost done — pay to confirm</div>
+                  <div className="selected-branch-name">
+                    {payInfo.branchName || "Brothers Gym"}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Payment summary */}
+            <div className="order-summary">
+              <div className="order-title">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z" />
+                  <line x1="3" y1="6" x2="21" y2="6" />
+                  <path d="M16 10a4 4 0 01-8 0" />
+                </svg>
+                Payment Summary
+              </div>
+              <div className="order-row">
+                <span className="label">Plan</span>
+                <span className="value">{payInfo.planName}</span>
+              </div>
+              <div className="order-row">
+                <span className="label">Duration</span>
+                <span className="value">{payInfo.planDurationDays} days</span>
+              </div>
+              <div className="order-row">
+                <span className="label">{payInfo.isRenewal ? "Renewal" : "New member"}</span>
+                <span className="value">{payInfo.reference}</span>
+              </div>
+              <div className="order-row total">
+                <span className="label">Amount to Pay</span>
+                <span className="value">₹{payInfo.amount.toLocaleString("en-IN")}</span>
+              </div>
+            </div>
+
+            {payInfo.upiConfigured ? (
+              <div className="pay-upi-card">
+                <div className="order-title" style={{ justifyContent: "center" }}>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <rect x="3" y="3" width="7" height="7" />
+                    <rect x="14" y="3" width="7" height="7" />
+                    <rect x="3" y="14" width="7" height="7" />
+                    <line x1="14" y1="14" x2="14" y2="21" />
+                    <line x1="18" y1="14" x2="21" y2="14" />
+                    <line x1="18" y1="18" x2="21" y2="18" />
+                    <line x1="18" y1="21" x2="21" y2="21" />
+                  </svg>
+                  Pay ₹{payInfo.amount.toLocaleString("en-IN")} by UPI
+                </div>
+                <p className="section-subtitle" style={{ textAlign: "center" }}>
+                  On your phone, tap the button below to open your UPI app. On a
+                  computer, scan the QR with any UPI app (GPay, PhonePe, Paytm…).
+                  The amount is already filled in.
+                </p>
+
+                {payInfo.qrDataUrl && (
+                  <div className="pay-qr">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={payInfo.qrDataUrl}
+                      alt={`UPI QR to pay ₹${payInfo.amount} to ${payInfo.payeeName}`}
+                      width={240}
+                      height={240}
+                    />
+                  </div>
+                )}
+
+                {payInfo.upiString && (
+                  <a className="submit-btn" href={payInfo.upiString}>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <rect x="5" y="2" width="14" height="20" rx="2" ry="2" />
+                      <line x1="12" y1="18" x2="12" y2="18" />
+                    </svg>
+                    Open in UPI app
+                  </a>
+                )}
+
+                {payInfo.upiId && (
+                  <div className="copy-field">
+                    <div className="copy-field-main">
+                      <div className="copy-field-label">
+                        UPI ID{payInfo.payeeName ? ` — ${payInfo.payeeName}` : ""}
+                      </div>
+                      <div className="copy-field-value">{payInfo.upiId}</div>
+                    </div>
+                    <button
+                      type="button"
+                      className="copy-btn"
+                      onClick={() => copyText(payInfo.upiId!, "UPI ID")}
+                    >
+                      Copy
+                    </button>
+                  </div>
+                )}
+
+                <div className="copy-field">
+                  <div className="copy-field-main">
+                    <div className="copy-field-label">Your reference — keep this</div>
+                    <div className="copy-field-value">{payInfo.reference}</div>
+                  </div>
+                  <button
+                    type="button"
+                    className="copy-btn"
+                    onClick={() => copyText(payInfo.reference, "Reference")}
+                  >
+                    Copy
+                  </button>
+                </div>
+
+                <div className="pay-divider">
+                  <span>After you&apos;ve paid</span>
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label" htmlFor="utr-input">
+                    UPI Reference / UTR number <span className="optional">(optional)</span>
+                  </label>
+                  <input
+                    id="utr-input"
+                    type="text"
+                    className="form-input"
+                    placeholder="12-digit number shown in your UPI app"
+                    value={utr}
+                    onChange={(e) => setUtr(e.target.value)}
+                    inputMode="numeric"
+                    maxLength={32}
+                  />
+                </div>
+
+                <button
+                  type="button"
+                  className="submit-btn"
+                  onClick={handleClaim}
+                  disabled={claimLoading}
+                >
+                  {claimLoading ? (
+                    <>
+                      <svg
+                        width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+                        style={{ animation: "spin 1s linear infinite" }}
+                      >
+                        <path d="M21 12a9 9 0 11-6.219-8.56" />
+                      </svg>
+                      Saving…
+                    </>
+                  ) : (
+                    <>
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+                        <polyline points="20 6 9 17 4 12" />
+                      </svg>
+                      I&apos;ve paid
+                    </>
+                  )}
+                </button>
+                <p className="secure-note" style={{ marginTop: 12 }}>
+                  The UTR is optional — you can skip it. The gym confirms from
+                  their own UPI record.
+                </p>
+              </div>
+            ) : (
+              <div className="pay-not-configured">
+                <strong>Online payment isn&apos;t set up for this branch yet.</strong>
+                <p>
+                  Please call or WhatsApp the gym to pay and activate your
+                  membership. Keep this reference handy:
+                </p>
+                <div className="reference-badge">{payInfo.reference}</div>
+              </div>
+            )}
+
+            {/* Ask the owner */}
+            {payInfo.branchPhone && (
+              <div className="owner-actions">
+                <a className="owner-btn" href={`tel:${payInfo.branchPhone}`}>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72 12.84 12.84 0 00.7 2.81 2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45 12.84 12.84 0 002.81.7A2 2 0 0122 16.92z" />
+                  </svg>
+                  Call the gym
+                </a>
+                <a
+                  className="owner-btn whatsapp"
+                  href={ownerWhatsAppLink(payInfo)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <svg viewBox="0 0 24 24" fill="currentColor" stroke="none">
+                    <path d="M12.04 2C6.58 2 2.13 6.45 2.13 11.91c0 1.75.46 3.45 1.32 4.95L2 22l5.25-1.38c1.45.79 3.08 1.21 4.79 1.21 5.46 0 9.91-4.45 9.91-9.91C21.95 6.45 17.5 2 12.04 2zm5.8 14.02c-.24.68-1.4 1.3-1.94 1.35-.5.05-1.13.24-3.66-.77-3.08-1.24-5.06-4.4-5.21-4.6-.15-.2-1.24-1.65-1.24-3.15s.79-2.24 1.07-2.54c.28-.3.61-.38.81-.38.2 0 .4 0 .58.01.19.01.44-.07.68.52.24.6.83 2.06.9 2.21.07.15.12.32.02.52-.1.2-.15.32-.3.5-.15.17-.31.38-.44.51-.15.15-.3.31-.13.6.17.3.76 1.25 1.63 2.02 1.12 1 2.06 1.31 2.36 1.46.3.15.47.13.64-.08.17-.2.74-.86.94-1.16.2-.3.4-.25.67-.15.27.1 1.71.81 2 .96.3.15.5.22.57.35.07.12.07.72-.17 1.4z" />
+                  </svg>
+                  WhatsApp the gym
+                </a>
+              </div>
+            )}
+
+            <button type="button" className="pay-startover" onClick={resetAll}>
+              Start a new request
+            </button>
+          </div>
+        )}
+
+        {/* STEP 5: ACKNOWLEDGEMENT (manual mode) */}
+        {step === 5 && payInfo && (
+          <div>
+            <div className="ack-card">
+              <div className="ack-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+                  <polyline points="20 6 9 17 4 12" />
+                </svg>
+              </div>
+              <div className="ack-title">
+                {alreadyConfirmed ? "You're all set! 🎉" : "Thanks — we've got it! 💪"}
+              </div>
+              <p className="ack-text">
+                {alreadyConfirmed
+                  ? "Your membership is already confirmed. Check your status below for your Gym ID and validity."
+                  : "We've recorded your payment and notified the gym. Your Gym ID activates as soon as the owner confirms your payment — usually within a few hours."}
+              </p>
+
+              <div className="copy-field ack-ref">
+                <div className="copy-field-main">
+                  <div className="copy-field-label">Your reference</div>
+                  <div className="copy-field-value">{payInfo.reference}</div>
+                </div>
+                <button
+                  type="button"
+                  className="copy-btn"
+                  onClick={() => copyText(payInfo.reference, "Reference")}
+                >
+                  Copy
+                </button>
+              </div>
+
+              {payInfo.email && !alreadyConfirmed && (
+                <p className="ack-text" style={{ fontSize: 13 }}>
+                  We&apos;ll email your confirmation to <strong>{payInfo.email}</strong>{" "}
+                  once it&apos;s done.
+                </p>
+              )}
+
+              <a
+                className="status-link"
+                href={`/join/status?ref=${encodeURIComponent(payInfo.reference)}`}
+              >
+                Check my status
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <line x1="5" y1="12" x2="19" y2="12" />
+                  <polyline points="12 5 19 12 12 19" />
+                </svg>
+              </a>
+            </div>
+
+            {payInfo.branchPhone && (
+              <div className="owner-actions">
+                <a className="owner-btn" href={`tel:${payInfo.branchPhone}`}>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72 12.84 12.84 0 00.7 2.81 2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45 12.84 12.84 0 002.81.7A2 2 0 0122 16.92z" />
+                  </svg>
+                  Call the gym
+                </a>
+                <a
+                  className="owner-btn whatsapp"
+                  href={ownerWhatsAppLink(payInfo)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <svg viewBox="0 0 24 24" fill="currentColor" stroke="none">
+                    <path d="M12.04 2C6.58 2 2.13 6.45 2.13 11.91c0 1.75.46 3.45 1.32 4.95L2 22l5.25-1.38c1.45.79 3.08 1.21 4.79 1.21 5.46 0 9.91-4.45 9.91-9.91C21.95 6.45 17.5 2 12.04 2zm5.8 14.02c-.24.68-1.4 1.3-1.94 1.35-.5.05-1.13.24-3.66-.77-3.08-1.24-5.06-4.4-5.21-4.6-.15-.2-1.24-1.65-1.24-3.15s.79-2.24 1.07-2.54c.28-.3.61-.38.81-.38.2 0 .4 0 .58.01.19.01.44-.07.68.52.24.6.83 2.06.9 2.21.07.15.12.32.02.52-.1.2-.15.32-.3.5-.15.17-.31.38-.44.51-.15.15-.3.31-.13.6.17.3.76 1.25 1.63 2.02 1.12 1 2.06 1.31 2.36 1.46.3.15.47.13.64-.08.17-.2.74-.86.94-1.16.2-.3.4-.25.67-.15.27.1 1.71.81 2 .96.3.15.5.22.57.35.07.12.07.72-.17 1.4z" />
+                  </svg>
+                  WhatsApp the gym
+                </a>
+              </div>
+            )}
+
+            <button type="button" className="pay-startover" onClick={resetAll}>
+              Join another membership
+            </button>
           </div>
         )}
       </div>

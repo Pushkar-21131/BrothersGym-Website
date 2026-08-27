@@ -2,6 +2,8 @@
 
 import Razorpay from "razorpay";
 import crypto from "crypto";
+import QRCode from "qrcode";
+import { Resend } from "resend";
 import { db } from "@/db";
 import { members, payments, onlineJoins, membershipPlans, branches } from "@/db/schema";
 import { and, eq, desc, sql } from "drizzle-orm";
@@ -9,6 +11,12 @@ import { revalidatePath } from "next/cache";
 import { checkRateLimit, getClientInfo } from "@/lib/security";
 import { sanitizeError } from "@/lib/errors";
 import { fulfilPaidJoin } from "@/lib/fulfil-join";
+import {
+  deriveJoinReference,
+  parseJoinReference,
+  buildUpiPayString,
+} from "@/lib/manual-join";
+import { fromHeader, ownerNewJoinAlertEmail } from "@/lib/email-templates";
 
 /**
  * Razorpay's Key ID is the same value whether it is read from RAZORPAY_KEY_ID or
@@ -509,5 +517,408 @@ export async function verifyOnlinePayment(data: {
     };
   } catch (e) {
     return { error: sanitizeError(e, "Verification failed") };
+  }
+}
+
+// ============================================================================
+// MANUAL UPI JOIN FLOW  (PAYMENT_MODE=manual — the active flow)
+// ============================================================================
+// The member pays the branch's UPI ID out of band — scanning a QR or opening a
+// upi:// link with the amount locked — and the OWNER confirms receipt in the
+// admin panel. The Razorpay actions above stay parked for PAYMENT_MODE=razorpay.
+// The write half lives in src/lib/fulfil-join.ts (fulfilManualJoin); the owner's
+// confirm/reject actions live in src/app/actions/join-requests.ts.
+
+/**
+ * Create a pending join request and hand back everything the pay-by-UPI screen
+ * needs. Mirrors createOnlineJoinOrder — same validation, same server-side
+ * renewal re-proof, same active-plan lookup — but writes NO Razorpay order.
+ */
+export async function createManualJoinRequest(formData: FormData) {
+  const consentToHealthData = formData.get("consentToHealthData") === "true";
+  if (!consentToHealthData) {
+    return { error: "You must accept the Privacy Policy and Terms to proceed." };
+  }
+
+  const { ip } = await getClientInfo();
+  const rl = await checkRateLimit(`join:${ip}`);
+  if (!rl.allowed) {
+    return {
+      error: `Too many attempts. Try again in ${rl.blockMinutesLeft} minutes.`,
+    };
+  }
+
+  const branchId = Number(formData.get("branchId"));
+  const joinType = String(formData.get("joinType") || "new");
+  const name = String(formData.get("name") || "").trim();
+  const email = String(formData.get("email") || "").trim();
+  const contactNumber = String(formData.get("contactNumber") || "").trim();
+  const address = String(formData.get("address") || "").trim();
+  const parentName = String(formData.get("parentName") || "").trim();
+  const emergencyContact = String(formData.get("emergencyContact") || "").trim();
+  const planCode = String(formData.get("planCode") || "");
+  const existingMemberId = formData.get("existingMemberId")
+    ? Number(formData.get("existingMemberId"))
+    : null;
+
+  if (!branchId) return { error: "Please select a branch" };
+  if (!name) return { error: "Name is required" };
+  if (!contactNumber) return { error: "Contact number is required" };
+  if (!address) return { error: "Address is required" };
+  if (!parentName) return { error: "Parent / Father name is required" };
+  if (!emergencyContact) return { error: "Emergency contact is required" };
+
+  try {
+    // ===== RESOLVE THE RENEWAL TARGET, SERVER-SIDE =====
+    // Identical proof to createOnlineJoinOrder: existingMemberId comes from the
+    // browser and can't be trusted, so re-prove the phone before binding a
+    // renewal to a member row — otherwise a renewal could target anyone's
+    // membership.
+    let verifiedMemberId: number | null = null;
+    const isRenewal = joinType === "renewal" || joinType === "existing";
+
+    if (isRenewal) {
+      if (!existingMemberId) {
+        return { error: "Please verify your Gym ID and phone number first" };
+      }
+
+      const target = await db
+        .select()
+        .from(members)
+        .where(
+          and(eq(members.id, existingMemberId), eq(members.branchId, branchId))
+        )
+        .limit(1);
+
+      const submittedPhone = normalisePhone(contactNumber);
+      const storedPhone = target.length
+        ? normalisePhone(target[0].contactNumber)
+        : null;
+
+      if (
+        !target.length ||
+        !submittedPhone ||
+        !storedPhone ||
+        submittedPhone !== storedPhone
+      ) {
+        return {
+          error:
+            "We couldn't match that membership. Please verify your Gym ID and phone number again.",
+        };
+      }
+
+      verifiedMemberId = target[0].id;
+    }
+
+    // Fetch plan from DB (must be active to be joinable).
+    const planRows = await db
+      .select()
+      .from(membershipPlans)
+      .where(
+        and(
+          eq(membershipPlans.branchId, branchId),
+          eq(membershipPlans.code, planCode as any),
+          eq(membershipPlans.isActive, true)
+        )
+      )
+      .limit(1);
+
+    if (planRows.length === 0) {
+      return { error: "Selected plan is not available for this branch" };
+    }
+    const plan = planRows[0];
+
+    const branchRow = await db
+      .select()
+      .from(branches)
+      .where(eq(branches.id, branchId))
+      .limit(1);
+    const branch = branchRow[0];
+    const branchCode = branch?.code || "BG";
+
+    // Create the pending request. No Razorpay order: there is nothing to charge
+    // here. The row exists so the owner sees the request even if the member pays
+    // but never taps "I've paid".
+    const join = await db
+      .insert(onlineJoins)
+      .values({
+        branchId,
+        name,
+        email: email || null,
+        contactNumber,
+        address,
+        planCode: plan.code,
+        amount: plan.price,
+        status: "pending",
+        memberId: verifiedMemberId,
+        parentName,
+        emergencyContact,
+      })
+      .returning();
+
+    const joinId = join[0].id;
+    const reference = deriveJoinReference(branchCode, joinId);
+
+    // Build the UPI payload + QR only when the branch has a payee configured.
+    // Without a upiId there is nothing to pay to; the client shows a "contact the
+    // gym" message with the Call/WhatsApp buttons and the reference.
+    const upiId = branch?.upiId?.trim() || "";
+    const payeeName = branch?.upiName?.trim() || branch?.name || "Brothers Gym";
+
+    let upiString: string | null = null;
+    let qrDataUrl: string | null = null;
+
+    if (upiId) {
+      upiString = buildUpiPayString({
+        upiId,
+        payeeName,
+        amount: plan.price,
+        note: `Brothers Gym ${reference}`,
+      });
+      try {
+        qrDataUrl = await QRCode.toDataURL(upiString, {
+          margin: 1,
+          width: 320,
+          errorCorrectionLevel: "M",
+        });
+      } catch (e) {
+        // Not fatal — the deep link and copy-UPI-ID still work without the QR.
+        console.error("[ManualJoin] QR generation failed:", e);
+        qrDataUrl = null;
+      }
+    }
+
+    return {
+      success: true,
+      joinId,
+      reference,
+      amount: plan.price,
+      planName: plan.name,
+      planDurationDays: plan.durationDays,
+      branchName: branch?.name || "",
+      branchPhone: branch?.phone || null,
+      upiConfigured: Boolean(upiId),
+      upiId: upiId || null,
+      payeeName,
+      upiString,
+      qrDataUrl,
+      email: email || null,
+      isRenewal,
+    };
+  } catch (e) {
+    return { error: sanitizeError(e, "Failed to create join request") };
+  }
+}
+
+/**
+ * Best-effort email to the branch owner that a member has claimed a UPI payment.
+ * Not exported (this file is "use server", so every export is a public endpoint)
+ * and the caller wraps it in try/catch — a failed ping must never fail the claim.
+ */
+async function notifyOwnerOfClaim(
+  join: typeof onlineJoins.$inferSelect,
+  utr: string | null
+) {
+  const branchRow = await db
+    .select()
+    .from(branches)
+    .where(eq(branches.id, join.branchId))
+    .limit(1);
+  const branch = branchRow[0];
+  const ownerEmail = branch?.ownerEmail?.trim();
+  if (!ownerEmail) return;
+
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey || /x{4,}/i.test(apiKey)) return; // unset or still a placeholder
+
+  // Prefer the plan's display name; fall back to the stored code.
+  const planRow = await db
+    .select({ name: membershipPlans.name })
+    .from(membershipPlans)
+    .where(
+      and(
+        eq(membershipPlans.branchId, join.branchId),
+        eq(membershipPlans.code, join.planCode as any)
+      )
+    )
+    .limit(1);
+
+  const reference = deriveJoinReference(branch?.code || "BG", join.id);
+  const { subject, html, text } = ownerNewJoinAlertEmail({
+    memberName: join.name,
+    contactNumber: join.contactNumber,
+    amount: join.amount,
+    branchName: branch?.name || "",
+    reference,
+    upiReference: utr || join.upiReference,
+    isRenewal: Boolean(join.memberId),
+    planName: planRow[0]?.name,
+  });
+
+  await new Resend(apiKey).emails.send({
+    from: fromHeader(),
+    to: ownerEmail,
+    subject,
+    html,
+    text,
+  });
+}
+
+/**
+ * The member tapped "I've paid". Flip pending → claimed, capture an optional
+ * UTR, and ping the owner. Public and rate-limited. The UTR is never required —
+ * the owner confirms from their own bank record, so a member who doesn't have
+ * the reference number to hand is never blocked.
+ */
+export async function submitManualPaymentClaim(data: {
+  joinId: number;
+  upiReference?: string;
+}) {
+  const { ip } = await getClientInfo();
+  const rl = await checkRateLimit(`claim:${ip}`);
+  if (!rl.allowed) {
+    return {
+      error: `Too many attempts. Try again in ${rl.blockMinutesLeft} minutes.`,
+    };
+  }
+
+  try {
+    const joins = await db
+      .select()
+      .from(onlineJoins)
+      .where(eq(onlineJoins.id, data.joinId))
+      .limit(1);
+    if (!joins.length) return { error: "Request not found." };
+    const join = joins[0];
+
+    // Idempotent: a member double-tapping "I've paid" after the owner already
+    // confirmed shouldn't see an error.
+    if (join.status === "paid") {
+      return { success: true, alreadyConfirmed: true };
+    }
+    if (join.status === "rejected") {
+      return {
+        error:
+          "This request was cancelled. Please start a new join, or contact the gym.",
+      };
+    }
+
+    // Normalise the UTR: strip spaces, cap length. A UTR is ~12 digits; 32 is a
+    // generous ceiling that still blocks someone pasting an essay into the field.
+    const utr =
+      (data.upiReference || "").replace(/\s/g, "").slice(0, 32) || null;
+
+    if (join.status === "pending") {
+      await db
+        .update(onlineJoins)
+        .set({ status: "claimed", claimedAt: new Date(), upiReference: utr })
+        .where(
+          and(eq(onlineJoins.id, join.id), eq(onlineJoins.status, "pending"))
+        );
+    } else if (join.status === "claimed" && utr && !join.upiReference) {
+      // Member came back to add a UTR they didn't have the first time.
+      await db
+        .update(onlineJoins)
+        .set({ upiReference: utr })
+        .where(eq(onlineJoins.id, join.id));
+    }
+
+    // Ping the owner. Awaited but best-effort: a serverless invocation can be
+    // frozen the moment this action returns, so fire-and-forget could drop the
+    // email — and a failed ping must never fail the member's claim.
+    try {
+      await notifyOwnerOfClaim(join, utr);
+    } catch (e) {
+      console.error("[ManualJoin] owner alert failed:", e);
+    }
+
+    revalidatePath("/admin/join-requests");
+    return { success: true };
+  } catch (e) {
+    return { error: sanitizeError(e, "Couldn't record your payment") };
+  }
+}
+
+/**
+ * Self-serve status check for the member. Public and rate-limited, with a single
+ * GENERIC error for every failure (mirrors lookupMemberSecure) so the endpoint
+ * can't be walked to discover which references exist. The reference locates the
+ * row; the phone number is the proof.
+ */
+export async function getJoinStatus(data: { reference: string; phone: string }) {
+  const GENERIC = {
+    error:
+      "We couldn't find a request matching that reference and phone number. Please check both.",
+  };
+
+  const { ip } = await getClientInfo();
+  const rl = await checkRateLimit(`joinstatus:${ip}`);
+  if (!rl.allowed) {
+    return {
+      error: `Too many attempts. Try again in ${rl.blockMinutesLeft} minutes.`,
+    };
+  }
+
+  const parsed = parseJoinReference(data.reference);
+  const phone = normalisePhone(data.phone);
+  if (!parsed || !phone) return GENERIC;
+
+  try {
+    const joins = await db
+      .select()
+      .from(onlineJoins)
+      .where(eq(onlineJoins.id, parsed.joinId))
+      .limit(1);
+    if (!joins.length) return GENERIC;
+    const join = joins[0];
+
+    const branchRow = await db
+      .select()
+      .from(branches)
+      .where(eq(branches.id, join.branchId))
+      .limit(1);
+    const branch = branchRow[0];
+
+    // The branch code the member typed must match the row's real branch, and the
+    // phone must match — either failing returns the same generic error, so a
+    // typo'd reference that happens to hit a real id still reveals nothing.
+    if (
+      !branch ||
+      parsed.branchCode.toUpperCase() !== branch.code.toUpperCase()
+    ) {
+      return GENERIC;
+    }
+    const storedPhone = normalisePhone(join.contactNumber);
+    if (!storedPhone || storedPhone !== phone) return GENERIC;
+
+    // Surface the Gym ID + expiry only once fulfilled.
+    let gymId: number | null = null;
+    let expiry: string | null = null;
+    if (join.status === "paid" && join.memberId) {
+      const m = (
+        await db
+          .select()
+          .from(members)
+          .where(eq(members.id, join.memberId))
+          .limit(1)
+      )[0];
+      gymId = m?.gymId ?? null;
+      expiry = m?.membershipExpiry ?? null;
+    }
+
+    return {
+      success: true,
+      status: join.status,
+      reference: deriveJoinReference(branch.code, join.id),
+      memberName: join.name,
+      amount: join.amount,
+      branchName: branch.name,
+      branchPhone: branch.phone || null,
+      gymId,
+      expiry,
+      claimedAt: join.claimedAt ? join.claimedAt.toISOString() : null,
+    };
+  } catch (e) {
+    return { error: sanitizeError(e, "Status check failed") };
   }
 }

@@ -21,7 +21,11 @@ export async function updateBranchAction(id: number, formData: FormData) {
   const phone = String(formData.get("phone") || "").trim();
   const ownerName = String(formData.get("ownerName") || "").trim();
   const ownerEmail = String(formData.get("ownerEmail") || "").trim().toLowerCase();
-  const mapUrl = String(formData.get("mapUrl") || "").trim(); 
+  const mapUrl = String(formData.get("mapUrl") || "").trim();
+  // Manual UPI payments: the payee VPA money is sent to, and the name the UPI
+  // app shows the payer. upiName is not lowercased — it's a display name.
+  const upiId = String(formData.get("upiId") || "").trim();
+  const upiName = String(formData.get("upiName") || "").trim();
   const isActive = formData.get("isActive") === "true";
 
   if (!name || !address) {
@@ -37,7 +41,9 @@ export async function updateBranchAction(id: number, formData: FormData) {
         phone: phone || null,
         ownerName: ownerName || null,
         ownerEmail: ownerEmail || null,
-        mapUrl: mapUrl || null, 
+        mapUrl: mapUrl || null,
+        upiId: upiId || null,
+        upiName: upiName || null,
         isActive,
       })
       .where(eq(branches.id, id));

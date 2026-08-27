@@ -303,7 +303,7 @@ export default async function Home() {
               },
               {
                 q: "Can I join online?",
-                a: "Yes! Visit our Join Online page, choose your preferred branch, pick a plan, and pay via UPI, cards, or netbanking through Razorpay.",
+                a: "Yes! Visit our Join Online page, choose your preferred branch, pick a plan, and pay by UPI. Your membership is activated once the gym confirms your payment.",
               },
               {
                 q: "Can I use my membership at both branches?",
@@ -608,7 +608,7 @@ export default async function Home() {
                 name: "Can I join Brothers Gym online?",
                 acceptedAnswer: {
                   "@type": "Answer",
-                  text: "Yes! Visit our Join Online page, choose your preferred branch, pick a plan, and pay via UPI, cards, or netbanking through Razorpay.",
+                  text: "Yes! Visit our Join Online page, choose your preferred branch, pick a plan, and pay by UPI. Your membership is activated once the gym confirms your payment.",
                 },
               },
             ],

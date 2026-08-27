@@ -1117,6 +1117,299 @@
   padding-bottom: 3rem;
 }
 
+/* ============================================
+   MANUAL UPI PAY (STEP 4) + ACKNOWLEDGEMENT (STEP 5)
+   ============================================ */
+
+/* The submit-btn style is reused for anchors (Open in UPI app); strip the
+   default link underline/colour so it reads as the same gold button. */
+a.submit-btn {
+  text-decoration: none;
+  color: #000;
+}
+
+.pay-upi-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 20px;
+  padding: 28px;
+  margin-bottom: 20px;
+}
+
+.pay-upi-card .submit-btn {
+  margin-top: 14px;
+}
+
+/* QR sits on its own white plate so it scans cleanly against the dark UI. */
+.pay-qr {
+  display: flex;
+  justify-content: center;
+  margin: 20px 0 4px;
+}
+
+.pay-qr img {
+  width: 240px;
+  height: 240px;
+  max-width: 100%;
+  background: #fff;
+  padding: 12px;
+  border-radius: 16px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
+}
+
+/* Copy rows: UPI ID, reference. */
+.copy-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  padding: 14px 16px;
+  margin-top: 12px;
+}
+
+.copy-field-main {
+  min-width: 0;
+}
+
+.copy-field-label {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.copy-field-value {
+  font-family: var(--font-outfit), var(--font-inter), sans-serif;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-primary);
+  word-break: break-all;
+  letter-spacing: 0.3px;
+}
+
+.copy-btn {
+  flex-shrink: 0;
+  padding: 9px 16px;
+  background: rgba(245, 166, 35, 0.12);
+  color: var(--gold);
+  border: 1px solid rgba(245, 166, 35, 0.35);
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.copy-btn:hover {
+  background: rgba(245, 166, 35, 0.2);
+  transform: translateY(-1px);
+}
+
+/* "After you've paid" divider. */
+.pay-divider {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 24px 0 16px;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.pay-divider::before,
+.pay-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border-color);
+}
+
+/* Branch has no UPI configured yet. */
+.pay-not-configured {
+  background: rgba(245, 166, 35, 0.06);
+  border: 1px solid rgba(245, 166, 35, 0.3);
+  border-radius: 16px;
+  padding: 24px;
+  margin-bottom: 20px;
+  text-align: center;
+}
+
+.pay-not-configured strong {
+  color: var(--gold);
+  font-size: 16px;
+  display: block;
+  margin-bottom: 8px;
+}
+
+.pay-not-configured p {
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.6;
+  margin-bottom: 16px;
+}
+
+.reference-badge {
+  display: inline-block;
+  font-family: var(--font-outfit), var(--font-inter), sans-serif;
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  color: var(--text-primary);
+  background: var(--bg-input);
+  border: 1px dashed rgba(245, 166, 35, 0.5);
+  border-radius: 12px;
+  padding: 12px 20px;
+}
+
+/* Ask-the-owner actions (call / WhatsApp). */
+.owner-actions {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.owner-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 14px;
+  border-radius: 14px;
+  font-size: 14px;
+  font-weight: 700;
+  text-decoration: none;
+  cursor: pointer;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  transition: all 0.2s;
+}
+
+.owner-btn:hover {
+  background: var(--bg-card-hover);
+  transform: translateY(-2px);
+}
+
+.owner-btn svg {
+  width: 18px;
+  height: 18px;
+}
+
+.owner-btn.whatsapp {
+  background: rgba(37, 211, 102, 0.12);
+  border-color: rgba(37, 211, 102, 0.4);
+  color: #25d366;
+}
+
+.owner-btn.whatsapp:hover {
+  background: rgba(37, 211, 102, 0.2);
+}
+
+/* Subtle "start over" text button. */
+.pay-startover {
+  display: block;
+  margin: 4px auto 0;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 13px;
+  text-decoration: underline;
+  cursor: pointer;
+  transition: color 0.2s;
+}
+
+.pay-startover:hover {
+  color: var(--text-secondary);
+}
+
+/* Acknowledgement card (step 5). */
+.ack-card {
+  background: var(--bg-card);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  border-radius: 20px;
+  padding: 36px 28px;
+  margin-bottom: 20px;
+  text-align: center;
+}
+
+.ack-icon {
+  width: 72px;
+  height: 72px;
+  margin: 0 auto 20px;
+  border-radius: 50%;
+  background: var(--success-glow);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--success);
+  animation: joinFadeIn 0.4s ease;
+}
+
+.ack-icon svg {
+  width: 36px;
+  height: 36px;
+}
+
+.ack-title {
+  font-family: var(--font-outfit), var(--font-inter), sans-serif;
+  font-size: 24px;
+  font-weight: 800;
+  color: var(--text-primary);
+  margin-bottom: 10px;
+}
+
+.ack-text {
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.7;
+  max-width: 440px;
+  margin: 0 auto 8px;
+}
+
+.ack-ref {
+  text-align: left;
+  max-width: 380px;
+  margin: 20px auto 8px;
+}
+
+.status-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 18px;
+  padding: 13px 24px;
+  background: linear-gradient(135deg, var(--gold), var(--gold-dark));
+  color: #000;
+  border-radius: 14px;
+  font-size: 15px;
+  font-weight: 700;
+  text-decoration: none;
+  transition: all 0.3s;
+}
+
+.status-link:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 30px var(--gold-glow);
+}
+
+.status-link svg {
+  width: 18px;
+  height: 18px;
+}
+
+@media (max-width: 768px) {
+  .owner-actions {
+    flex-direction: column;
+  }
+
+  .pay-upi-card {
+    padding: 20px;
+  }
+}
+
 /* Animations */
 @keyframes joinFadeIn {
   from { opacity: 0; }

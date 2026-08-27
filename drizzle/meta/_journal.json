@@ -57,6 +57,13 @@
       "when": 1786216361367,
       "tag": "0007_outgoing_vermin",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1787849311180,
+      "tag": "0008_manual_upi_join",
+      "breakpoints": true
     }
   ]
 }

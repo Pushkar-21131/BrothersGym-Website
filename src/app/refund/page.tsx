@@ -1,4 +1,5 @@
 import LegalLayout from "@/app/components/legal-layout";
+import Link from "next/link";
 import { XCircle, CheckCircle, AlertTriangle, IndianRupee, HelpCircle } from "lucide-react";
 
 export const metadata = {
@@ -28,7 +29,7 @@ export default async function RefundPolicyPage() {
             </p>
             <p className="text-zinc-300 text-sm leading-relaxed">
               This applies to all membership fees, personal training packages, and any
-              other services — whether paid online via Razorpay or offline at the gym
+              other services — whether paid online by UPI or offline at the gym
               reception. Please make sure you are committed before making any payment.
             </p>
           </div>
@@ -96,9 +97,9 @@ export default async function RefundPolicyPage() {
           </li>
           <li>
             After cancellation, your data will be retained per our{" "}
-            <a href="/privacy" className="text-yellow-500 underline">
+            <Link href="/privacy" className="text-yellow-500 underline">
               Privacy Policy
-            </a>
+            </Link>
             .
           </li>
         </ul>
@@ -116,9 +117,11 @@ export default async function RefundPolicyPage() {
             after verification.
           </li>
           <li>
-            <strong className="text-white">Payment Gateway Error:</strong> If your money
-            was deducted but membership was not activated due to a technical error, we
-            will investigate and refund within 7 working days.
+            <strong className="text-white">Payment Not Confirmed:</strong> If your UPI
+            payment left your account but your membership was not activated, contact us
+            with your UPI reference/UTR number — we will verify it against the gym&apos;s
+            records and either activate your membership or refund you within 7 working
+            days.
           </li>
           <li>
             <strong className="text-white">Serious Medical Emergency:</strong> In case
@@ -144,12 +147,12 @@ export default async function RefundPolicyPage() {
             days.
           </li>
           <li>
-            <strong>Method:</strong> Refunds will be issued to the original payment
-            method (UPI/Card/Bank Account).
+            <strong>Method:</strong> Refunds are sent back to the UPI ID or bank account
+            you paid from.
           </li>
           <li>
-            <strong>Deductions:</strong> Payment gateway fees (typically 2% + GST) will
-            be deducted from the refund amount.
+            <strong>No Gateway Deduction:</strong> UPI transfers carry no payment-gateway
+            fee, so an approved refund is returned in full.
           </li>
           <li>
             <strong>Documentation:</strong> You must provide transaction ID and reason
@@ -161,12 +164,12 @@ export default async function RefundPolicyPage() {
       <Section icon={<HelpCircle size={20} />} title="6. Chargebacks & Disputes">
         <ul>
           <li>
-            Filing a false chargeback with your bank/card company after receiving
+            Filing a false payment dispute or chargeback with your bank after receiving
             services is considered fraud and will result in:
             <ul className="mt-2">
               <li>Immediate termination of membership without refund</li>
               <li>Legal action under the Indian Contract Act</li>
-              <li>Reporting to the payment gateway blacklist</li>
+              <li>Reporting the dispute to your bank and UPI provider</li>
             </ul>
           </li>
           <li>

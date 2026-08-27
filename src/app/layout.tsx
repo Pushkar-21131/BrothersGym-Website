@@ -112,14 +112,21 @@ export const viewport = {
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
+  // Only the parked Razorpay flow talks to checkout.razorpay.com. In the default
+  // manual-UPI mode there's no external checkout, so we skip the hint entirely.
+  const razorpayMode = process.env.PAYMENT_MODE === "razorpay";
   return (
     <html lang="en" className={`${inter.variable} ${outfit.variable}`}>
       <head>
         {/* Fonts are self-hosted via next/font (see inter/outfit above), so
             there's no render-blocking request to Google's font CDN. */}
-        {/* Preconnect to external domains */}
-        <link rel="preconnect" href="https://checkout.razorpay.com" />
-        <link rel="dns-prefetch" href="https://checkout.razorpay.com" />
+        {razorpayMode && (
+          <>
+            {/* Preconnect to the Razorpay checkout host (gateway mode only) */}
+            <link rel="preconnect" href="https://checkout.razorpay.com" />
+            <link rel="dns-prefetch" href="https://checkout.razorpay.com" />
+          </>
+        )}
 
         {/* Favicon variants */}
         <link rel="icon" href="/images/brothers-gym-logo.svg" type="image/svg+xml" />

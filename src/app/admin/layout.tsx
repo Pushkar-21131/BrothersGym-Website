@@ -15,7 +15,11 @@ import {
   UserX,
   Tag,
   Building2,
+  Inbox,
 } from "lucide-react";
+import { db } from "@/db";
+import { onlineJoins } from "@/db/schema";
+import { and, count, eq, inArray } from "drizzle-orm";
 import { getAllBranches } from "@/lib/branch";
 import { hasPermission, getCurrentUser } from "@/lib/auth-check";
 import BranchSwitcher from "./branch-switcher";
@@ -68,6 +72,27 @@ export default async function AdminLayout({ children }: { children: ReactNode })
   const canSeeStaff = isOwner || (await hasPermission("staff", "canView"));
   const canSeeReviews = isOwner || (await hasPermission("reviews", "canView"));
 
+  // Badge on the owner's "Join Requests" nav: how many online joins are still
+  // awaiting action (paid-but-unconfirmed or not-yet-paid) in the current view.
+  // Wrapped so a DB hiccup can never take down the whole admin shell.
+  let pendingJoinCount = 0;
+  if (isOwner) {
+    try {
+      const statusFilter = inArray(onlineJoins.status, ["pending", "claimed"]);
+      const rows = await db
+        .select({ c: count() })
+        .from(onlineJoins)
+        .where(
+          currentBranchId === "all"
+            ? statusFilter
+            : and(statusFilter, eq(onlineJoins.branchId, currentBranchId))
+        );
+      pendingJoinCount = Number(rows[0]?.c ?? 0);
+    } catch {
+      pendingJoinCount = 0;
+    }
+  }
+
   const activeBranch =
     currentBranchId === "all"
       ? null
@@ -109,6 +134,15 @@ export default async function AdminLayout({ children }: { children: ReactNode })
         {isOwner && (
           <AdmNavLink href="/admin" icon={<LayoutDashboard size={17} />} exact>
             Dashboard
+          </AdmNavLink>
+        )}
+        {isOwner && (
+          <AdmNavLink
+            href="/admin/join-requests"
+            icon={<Inbox size={17} />}
+            count={pendingJoinCount}
+          >
+            Join Requests
           </AdmNavLink>
         )}
         {canSeeMembers && (

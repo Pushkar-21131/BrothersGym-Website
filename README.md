@@ -6,9 +6,12 @@ admin side gives the owner and staff a role-separated panel for members, plans,
 payments, renewals, equipment, staff, trainers and reviews — scoped per branch.
 
 **Status:** feature-complete and building clean; pre-launch. Not yet deployed to a
-production domain. Razorpay is wired up and running against test keys pending the
-client's KYC approval. A recent pass tightened performance (ISR, self-hosted fonts,
-image/video optimisation) and mobile ergonomics across the public site.
+production domain. Online joins use a **manual UPI + owner-confirmation** flow by
+default (no payment gateway, no KYC): the member pays by UPI and the owner confirms
+receipt in the admin panel to activate the membership. The Razorpay checkout is kept
+parked behind a `PAYMENT_MODE` flag and can be switched back on. A recent pass
+tightened performance (ISR, self-hosted fonts, image/video optimisation) and mobile
+ergonomics across the public site.
 
 ---
 
@@ -22,7 +25,7 @@ image/video optimisation) and mobile ergonomics across the public site.
 | ORM | Drizzle ORM 0.45 + drizzle-kit migrations |
 | Styling | Tailwind CSS v4 (CSS-first config, no `tailwind.config`) |
 | Auth | bcryptjs password hashing + `jose`-signed JWT session cookie |
-| Payments | Razorpay (UPI / cards / netbanking) |
+| Payments | Manual UPI + owner confirmation (default); Razorpay checkout parked behind `PAYMENT_MODE` |
 | Email | Resend (transactional OTP and alerts) |
 | SMS | MSG91 (wired, DLT-template based; off at launch — see Known gaps) |
 | Exports / import | ExcelJS (`.xlsx`) and jsPDF (`.pdf`); spreadsheet import |
@@ -35,16 +38,20 @@ image/video optimisation) and mobile ergonomics across the public site.
 - **Landing page (`/`)** — full-bleed hero, a BMI calculator, tabbed trainer and
   owner profiles per branch, member reviews with star ratings, a branch picker with
   Google Maps links, a floating WhatsApp button, and a cookie-consent banner.
-- **`/join` — online membership** — a three-step wizard (branch → plan → details):
-  pick a branch, pick a plan, fill in details, pay through Razorpay, and get a
-  membership created automatically on success. Plans come in two families —
+- **`/join` — online membership** — a guided wizard (branch → plan → details → pay):
+  pick a branch, pick a plan, fill in details, then pay by **UPI** — scan the QR or
+  tap "Open in UPI app" (amount pre-filled) and pay straight to the gym's UPI ID. The
+  member gets an instant on-screen acknowledgement with a reference code
+  (`BG-<branch>-<id>`) and a self-serve status page (`/join/status`); the owner
+  confirms the payment in the admin panel to activate the membership. Plans come in
+  two families —
   **with cardio** and **without ("Hardcore")** — each in 1 / 3 / 6 / 12-month
   durations, filterable. Handles both **new members** and **renewals**: a renewal
   first verifies an existing Gym ID against its registered phone number before any
   payment is allowed. Health-data consent is captured with a timestamp and IP.
 - **`/contact`** — branch-wise contact details.
-- **`/privacy`, `/terms`, `/refund`** — the policy pages Razorpay requires a
-  merchant to publish before going live.
+- **`/privacy`, `/terms`, `/refund`** — the policy pages a membership business
+  should publish before going live; they describe the manual-UPI payment reality.
 - **`/api/health`** — a database-ping health check (`{ ok: true }` or `503`) for
   uptime monitoring and post-deploy smoke tests.
 - **SEO** — generated `sitemap` and `robots`, OpenGraph and Twitter card images,
@@ -58,6 +65,7 @@ these fall back to `/login` (staff) and `/owner-login` (owner).
 | Route | Purpose |
 | --- | --- |
 | `/admin` | Owner dashboard — revenue, active / expiring members, salary outgo; per-branch or all-branches |
+| `/admin/join-requests` | Owner-only — online UPI join requests to confirm or reject; a nav badge counts the open ones, and confirming creates the membership and reveals a one-tap WhatsApp link to send the Gym ID |
 | `/admin/members` | Member CRUD, search, renewals, mark-left / won-back, column show/hide, per-branch Gym IDs, Excel/PDF export |
 | `/admin/inactive` | Expired, lapsed and left-gym members, filterable by how overdue, with one-tap win-back |
 | `/admin/plans` | Membership plans and pricing per branch (with/without cardio, 1–12 months); activate/deactivate a plan |
@@ -68,7 +76,7 @@ these fall back to `/login` (staff) and `/owner-login` (owner).
 | `/admin/reviews` | Member reviews shown on the public site (rating, visibility, ordering) |
 | `/admin/staff` | Employee records (trainer / worker / cleaner) and salary, with export |
 | `/admin/users` | Admin accounts and per-feature permissions |
-| `/admin/branch` | Branch details (address, phone, map link, owner) |
+| `/admin/branch` | Branch details (address, phone, map link, owner, UPI ID for online payments) |
 | `/admin/security` | Login-attempt log and session activity |
 
 ### Member lifecycle
@@ -103,7 +111,7 @@ Fourteen tables, all branch-scoped where it matters (Drizzle over PostgreSQL):
 | `members` | Member records — per-branch Gym ID, plan, expiry, health consent, left-gym / win-back state |
 | `payments` | Every payment — cash / UPI / Razorpay / other — linked to member and branch |
 | `membership_plans` | Per-branch plans (with/without cardio × 1 / 3 / 6 / 12 months) |
-| `online_joins` | The online sign-up order ledger — pending / paid / failed, with the Razorpay IDs |
+| `online_joins` | The online sign-up ledger — pending / claimed / paid / rejected / failed; holds the member's UPI reference (and Razorpay order IDs when the gateway is on) |
 | `trainers` | Public trainer and owner profiles |
 | `staff` | Employees (trainer / worker / cleaner) with salary |
 | `equipment_expenses` | Equipment inventory and cost |
@@ -123,23 +131,26 @@ The parts of this build that took the most thought.
 ### Payments are server-authoritative
 
 The browser never sends an amount. It sends a `planCode`; the server looks up that
-plan's price, creates the Razorpay order from the price it read itself, and stores
-the expected amount on the join row. On the way back, the payment is only accepted
-if:
+plan's price, records the expected amount on the join row, and builds the UPI QR and
+`upi://` string (payee, amount, reference) itself. The member pays that exact amount
+to the gym's UPI ID, and the **owner confirms receipt** against their own bank record
+before the membership is created — a tampered price in the browser cannot buy a
+membership, because the amount shown and confirmed is the server's, never the
+client's.
 
-1. the HMAC-SHA256 signature over `order_id|payment_id` verifies against the key
-   secret, compared with `crypto.timingSafeEqual` rather than `===`,
-2. Razorpay's own API confirms the payment status is `captured`, and
-3. the captured amount matches the amount the server recorded.
-
-A tampered price in the browser cannot buy a membership.
+When `PAYMENT_MODE=razorpay`, the parked gateway path adds automatic verification on
+top: the payment is accepted only if (1) the HMAC-SHA256 signature over
+`order_id|payment_id` verifies against the key secret, compared with
+`crypto.timingSafeEqual` rather than `===`, (2) Razorpay's own API confirms the
+status is `captured`, and (3) the captured amount matches the recorded amount.
 
 ### Double-submit safety
 
-Marking a pending join as paid is an atomic conditional update —
-`UPDATE ... WHERE status = 'pending' RETURNING` — used as a compare-and-swap. If
-the same payment is submitted twice, the second update matches zero rows and is
-rejected instead of creating a duplicate member.
+Marking an open join as paid is an atomic conditional update —
+`UPDATE ... WHERE status IN ('pending','claimed') RETURNING` — used as a
+compare-and-swap. If the owner double-clicks Confirm (or, in gateway mode, a Razorpay
+payment is submitted twice), the second update matches zero rows and is rejected
+instead of creating a duplicate member.
 
 ### Per-branch Gym IDs
 
@@ -147,23 +158,25 @@ Each branch numbers its members from 1 independently, allocated as `MAX(gym_id) 
 within the branch and backed by a `(branch_id, gym_id)` unique constraint, so the
 database rejects a collision even if two sign-ups race.
 
-### One fulfilment path, two callers
+### One fulfilment module, guarded callers
 
-The browser callback and the Razorpay webhook both grant memberships, so the write
-lives in a single module (`src/lib/fulfil-join.ts`) that both call. That module is
-deliberately **not** a `"use server"` file: in Next.js every export from one becomes
-a callable HTTP endpoint, and `fulfilPaidJoin` grants memberships. Keeping it in
-plain `lib/` means it can only be reached through code that has already verified a
-payment.
+Granting a membership always goes through one module (`src/lib/fulfil-join.ts`):
+`fulfilManualJoin` for the default UPI flow (reached only from the owner-only confirm
+action) and `fulfilPaidJoin` for the parked Razorpay flow (reached by the browser
+callback and the webhook). That module is deliberately **not** a `"use server"` file:
+in Next.js every export from one becomes a callable HTTP endpoint, and these
+functions grant memberships. Keeping it in plain `lib/` means it can only be reached
+through code that has already authorised the grant — an authenticated owner
+confirming, or a verified payment.
 
-Everything the membership needs is written to the join row when the order is
+Everything the membership needs is written to the join row when the request is
 created, where it has just been validated. Nothing round-trips through the browser
-and comes back — the webhook has no browser to ask.
+and comes back.
 
-The webhook signature is a **different** HMAC from the checkout one: it is computed
-over the raw request body using `RAZORPAY_WEBHOOK_SECRET`, not the API key secret.
-The body is read as text rather than JSON because parsing and re-stringifying
-changes the bytes and the signature no longer matches.
+In gateway mode the webhook signature is a **different** HMAC from the checkout one:
+it is computed over the raw request body using `RAZORPAY_WEBHOOK_SECRET`, not the API
+key secret. The body is read as text rather than JSON because parsing and
+re-stringifying changes the bytes and the signature no longer matches.
 
 ### Per-address email cap
 
@@ -195,11 +208,14 @@ The public pages are tuned for a first visit on a mid-range phone on mobile data
 
 ### Secrets
 
-The Razorpay **Key ID** is public by design — Razorpay's checkout script runs in the
-browser and needs it, and it only identifies which account receives the money. The
-**Key Secret** is read exclusively inside `"use server"` files, never prefixed
-`NEXT_PUBLIC_`, and never logged or returned to the client. All error messages pass
-through a sanitiser that strips stack traces and database details in production.
+In the default manual-UPI mode there is no payment secret at all — the member pays
+inside their own UPI app and the app never touches card or bank credentials. When the
+Razorpay gateway is switched on, its **Key ID** is public by design (the checkout
+script runs in the browser and it only identifies which account receives the money),
+while the **Key Secret** is read exclusively inside `"use server"` files, never
+prefixed `NEXT_PUBLIC_`, and never logged or returned to the client. All error
+messages pass through a sanitiser that strips stack traces and database details in
+production.
 
 The real admin login URLs live **only** in environment variables
 (`OWNER_LOGIN_PATH`, `STAFF_LOGIN_PATH`), never in the committed source. In
@@ -223,7 +239,8 @@ is below.
   does not grant a role
 - Cloudflare Turnstile on login and password reset
 - Failed-login email alerts to the owner
-- Content Security Policy scoped to allow Razorpay/Turnstile and nothing else
+- Content Security Policy scoped tight — Turnstile only in the default mode; the
+  Razorpay hosts are added to the policy solely when `PAYMENT_MODE=razorpay`
 - SQL injection handled by parameterised Drizzle queries
 
 ### Mobile
@@ -271,14 +288,16 @@ login is served directly at `/login` (staff) and `/owner-login` (owner).
 Being honest about what is not done, because it is on the roadmap rather than
 hidden:
 
-- **The Razorpay webhook is written but not yet proven against live traffic.**
-  `POST /api/webhooks/razorpay` handles `payment.captured` server-side, so a
-  membership is still created when the member closes the tab before the browser
-  callback fires. It cannot be exercised locally — Razorpay cannot reach
-  `localhost` — so it stays unverified until the app is deployed and the endpoint
-  is registered in the Razorpay dashboard. Until `RAZORPAY_WEBHOOK_SECRET` is set
-  the route answers `503` and verifies nothing, deliberately: refusing is safer
-  than accepting unsigned callbacks.
+- **Online joins depend on the owner confirming payment.** The default UPI flow has
+  no payment gateway, so there is no automatic activation — the owner marks a request
+  paid in Admin → Join Requests once the money lands in their UPI account. This is by
+  design (no KYC, no fees) and the flow is built around it: instant acknowledgement,
+  a reference code, a self-serve status page, and one-tap Call/WhatsApp to the owner.
+  The parked Razorpay path (`PAYMENT_MODE=razorpay`) still carries its webhook (`POST
+  /api/webhooks/razorpay`, `payment.captured`) for automatic activation, but it stays
+  unverified against live traffic until the app is deployed and the endpoint is
+  registered — and answers `503` until `RAZORPAY_WEBHOOK_SECRET` is set, deliberately:
+  refusing is safer than accepting unsigned callbacks.
 - **SMS reminders (MSG91) are wired but unconfigured;** WhatsApp links are used
   instead at launch. The send path and `sms_logs` table exist and are ready to
   switch on once the DLT templates are approved.

@@ -12,6 +12,7 @@ import {
   Mail,
   Edit,
   ExternalLink,
+  IndianRupee,
 } from "lucide-react";
 import { Sheet } from "../sheet";
 
@@ -24,6 +25,8 @@ type Branch = {
   ownerName: string | null;
   ownerEmail: string | null;
   mapUrl: string | null;
+  upiId: string | null;
+  upiName: string | null;
   isActive: boolean;
   createdAt: Date | null;
 };
@@ -83,6 +86,9 @@ export default function BranchesClient({
                   {!branch.mapUrl && (
                     <span className="adm-tag warn">No map link</span>
                   )}
+                  {!branch.upiId && (
+                    <span className="adm-tag warn">No UPI</span>
+                  )}
                 </div>
               </div>
             </div>
@@ -135,6 +141,21 @@ export default function BranchesClient({
                     <a href={`mailto:${branch.ownerEmail}`} className="adm-link">
                       <Mail size={11} /> {branch.ownerEmail}
                     </a>
+                  </div>
+                </div>
+              )}
+
+              {branch.upiId && (
+                <div style={{ gridColumn: "1 / -1" }}>
+                  <div className="adm-rec-k">
+                    <IndianRupee size={9} style={{ display: "inline", marginRight: 3 }} />
+                    UPI (online payments)
+                  </div>
+                  <div className="adm-rec-v" style={{ whiteSpace: "normal" }}>
+                    {branch.upiId}
+                    {branch.upiName ? (
+                      <span style={{ color: "var(--text3)" }}> · {branch.upiName}</span>
+                    ) : null}
                   </div>
                 </div>
               )}
@@ -262,6 +283,48 @@ export default function BranchesClient({
                   className="adm-input"
                 />
               </div>
+            </div>
+
+            {/* UPI details power the online-join pay screen: the QR and the
+                "Open in UPI app" button are built from these. Leave blank and
+                online joins simply show "payment not set up — contact us". */}
+            <div className="adm-field">
+              <label className="adm-label" htmlFor="br-upi-id">
+                UPI ID (for online payments)
+              </label>
+              <input
+                id="br-upi-id"
+                type="text"
+                name="upiId"
+                defaultValue={editing.upiId || ""}
+                placeholder="e.g. brothersgym@okhdfcbank"
+                className="adm-input"
+                autoComplete="off"
+                autoCapitalize="none"
+                spellCheck={false}
+              />
+              <p className="adm-hint">
+                Money from online joins is sent here. Double-check it — payments
+                go to whatever you type.
+              </p>
+            </div>
+
+            <div className="adm-field">
+              <label className="adm-label" htmlFor="br-upi-name">
+                UPI Display Name
+              </label>
+              <input
+                id="br-upi-name"
+                type="text"
+                name="upiName"
+                defaultValue={editing.upiName || ""}
+                placeholder="e.g. Brothers Gym"
+                className="adm-input"
+              />
+              <p className="adm-hint">
+                The name members see in their UPI app before they pay. Usually
+                your gym or account name.
+              </p>
             </div>
 
             <label className="adm-switch">

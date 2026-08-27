@@ -7,7 +7,7 @@ export default function robots(): MetadataRoute.Robots {
     rules: [
       {
         userAgent: "*",
-        allow: ["/", "/join", "/contact", "/privacy", "/terms", "/refund"],
+        allow: ["/", "/join", "/join/status", "/contact", "/privacy", "/terms", "/refund"],
         // The login paths are intentionally omitted: they live behind secret,
         // env-configured URLs, and naming a path here would publish it to the
         // very crawlers we're hiding it from. /admin/ still 404s to visitors.
@@ -21,7 +21,7 @@ export default function robots(): MetadataRoute.Robots {
       },
       {
         userAgent: ["GPTBot", "ChatGPT-User", "Google-Extended", "PerplexityBot", "ClaudeBot"],
-        allow: ["/", "/join", "/contact", "/privacy", "/terms", "/refund"],
+        allow: ["/", "/join", "/join/status", "/contact", "/privacy", "/terms", "/refund"],
         disallow: ["/admin/", "/api/"],
       },
     ],

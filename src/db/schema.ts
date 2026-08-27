@@ -21,6 +21,11 @@ export const branches = pgTable("branches", {
   ownerName: text("owner_name"),        // ✅ NEW
   ownerEmail: text("owner_email"),      // ✅ NEW
   mapUrl: text("map_url"),  // ✅ ADD THIS LINE
+  // Manual UPI payments: the branch's payee VPA and the verified name the UPI
+  // app shows the payer before they confirm. Nullable — a branch with no upiId
+  // set simply can't accept online payments and the join screen says so.
+  upiId: text("upi_id"),
+  upiName: text("upi_name"),
   isActive: boolean("is_active").default(true).notNull(),
   createdAt: timestamp("created_at").defaultNow(),
 });
@@ -220,11 +225,21 @@ export const onlineJoins = pgTable("online_joins", {
   parentName: text("parent_name"),
   emergencyContact: text("emergency_contact"),
   status: text("status")
-    .$type<"pending" | "paid" | "failed">()
+    // "pending"  — request created, member is on the pay screen / hasn't paid.
+    // "claimed"  — member tapped "I've paid" (manual UPI); awaiting owner confirm.
+    // "paid"     — fulfilled: owner confirmed (UPI) or Razorpay captured. Member exists.
+    // "rejected" — owner rejected the request.
+    // "failed"   — reserved (Razorpay-era); never written by the manual flow.
+    .$type<"pending" | "claimed" | "paid" | "rejected" | "failed">()
     .default("pending")
     .notNull(),
   razorpayOrderId: text("razorpay_order_id"),
   razorpayPaymentId: text("razorpay_payment_id"),
+  // Manual UPI flow: the member's optional UTR / reference number, when the
+  // owner confirmed the payment, and when the member tapped "I've paid".
+  upiReference: text("upi_reference"),
+  claimedAt: timestamp("claimed_at"),
+  confirmedAt: timestamp("confirmed_at"),
   memberId: integer("member_id").references(() => members.id),
   createdAt: timestamp("created_at").defaultNow(),
 });

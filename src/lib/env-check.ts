@@ -13,8 +13,12 @@ const requiredInProduction = [
 
 const recommendedInProduction = [
   "RESEND_API_KEY",
-  "RAZORPAY_KEY_ID",
-  "RAZORPAY_KEY_SECRET",
+  // Razorpay keys only matter when the online-join flow is set to the gateway.
+  // In the default manual-UPI mode they are unused, so warning about them in
+  // production would just be noise.
+  ...(process.env.PAYMENT_MODE === "razorpay"
+    ? ["RAZORPAY_KEY_ID", "RAZORPAY_KEY_SECRET"]
+    : []),
 ];
 
 function validateEnv() {

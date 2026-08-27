@@ -23,7 +23,7 @@
 
 import { db } from "@/db";
 import { members, payments, onlineJoins, membershipPlans } from "@/db/schema";
-import { and, eq, desc, sql } from "drizzle-orm";
+import { and, eq, desc, sql, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 
 type MemberInsert = typeof members.$inferInsert;
@@ -314,6 +314,209 @@ export async function fulfilPaidJoin(params: {
 
   revalidatePath("/admin/members");
   revalidatePath("/admin");
+
+  return {
+    ok: true,
+    memberId: outcome.memberId,
+    gymId: outcome.gymId,
+    expiry: outcome.newExpiryStr,
+    amount: join.amount,
+    memberName: join.name,
+    planName: plan?.name,
+    contactNumber: join.contactNumber,
+  };
+}
+
+/**
+ * Turn a manually-paid (UPI) join row into a membership, on the owner's say-so.
+ *
+ * The manual sibling of `fulfilPaidJoin`. There is no gateway and no signature:
+ * the "proof" is the owner looking at their own UPI/bank record and clicking
+ * Confirm. So the CALLER must already have proved this request is the owner's to
+ * act on (owner auth + branch scope) before calling this.
+ *
+ * Deliberately kept separate from `fulfilPaidJoin` rather than refactored into a
+ * shared core: that function is the still-restorable Razorpay path, and touching
+ * its internals to serve the manual flow would put a dormant-but-working path at
+ * risk. The member create/renew block is duplicated on purpose.
+ *
+ * Safe to call twice: the claim is a compare-and-swap over ("pending","claimed")
+ * and the loser gets `code: "claimed"` without writing anything.
+ */
+export async function fulfilManualJoin(params: {
+  join: OnlineJoin;
+  /** UTR the owner optionally typed at confirm time; falls back to what the member submitted. */
+  upiReference?: string | null;
+  /** Recorded against a new member's consent. Null — the owner confirms server-side. */
+  consentIp: string | null;
+}): Promise<FulfilResult> {
+  const { join } = params;
+
+  // isActive is deliberately NOT filtered: the plan was active when the request
+  // was created, so a plan retired since must still be honoured.
+  const planRows = await db
+    .select()
+    .from(membershipPlans)
+    .where(
+      and(
+        eq(membershipPlans.branchId, join.branchId),
+        eq(membershipPlans.code, join.planCode as any)
+      )
+    )
+    .limit(1);
+
+  const plan = planRows[0];
+  if (!plan) {
+    console.error(
+      `[Payments] plan ${join.planCode} missing for branch ${join.branchId} on manual join ${join.id} — defaulting to 30 days`
+    );
+  }
+
+  const durationDays = plan?.durationDays || 30;
+  const today = new Date();
+  const todayStr = today.toISOString().split("T")[0];
+  const planType = (
+    join.planCode.includes("no_cardio") ? "no_cardio" : "full"
+  ) as any;
+
+  const upiReference = params.upiReference?.trim() || join.upiReference || null;
+
+  let outcome: { memberId: number; gymId: number; newExpiryStr: string };
+
+  // ===== ONE TRANSACTION FOR ALL FOUR WRITES ===== (see fulfilPaidJoin for why)
+  try {
+    outcome = await db.transaction(async (tx) => {
+      let memberId: number;
+      let gymId: number;
+      let newExpiryStr: string;
+
+      // Claim inside the transaction. Accept both pre-states: "claimed" (the
+      // member tapped "I've paid") and "pending" (the owner saw the money land
+      // before the member clicked anything). Whichever confirm arrives second
+      // matches zero rows here.
+      const claimed = await tx
+        .update(onlineJoins)
+        .set({ status: "paid", confirmedAt: new Date(), upiReference })
+        .where(
+          and(
+            eq(onlineJoins.id, join.id),
+            inArray(onlineJoins.status, ["pending", "claimed"])
+          )
+        )
+        .returning({ id: onlineJoins.id });
+
+      if (claimed.length === 0) {
+        throw new JoinAlreadyClaimedError();
+      }
+
+      // ===== EXISTING MEMBER (renewal) =====
+      if (join.memberId) {
+        const existing = await tx
+          .select()
+          .from(members)
+          .where(
+            and(
+              eq(members.id, join.memberId),
+              eq(members.branchId, join.branchId)
+            )
+          )
+          .limit(1);
+        if (!existing.length) throw new Error("Existing member not found");
+        const m = existing[0];
+
+        const currentExpiry = new Date(m.membershipExpiry);
+        const base = currentExpiry > today ? currentExpiry : today;
+        base.setDate(base.getDate() + durationDays);
+        newExpiryStr = base.toISOString().split("T")[0];
+
+        await tx
+          .update(members)
+          .set({
+            membershipExpiry: newExpiryStr,
+            feeAmount: join.amount,
+            planType,
+            leftGym: false,
+            wonBackAt: m.leftGym ? new Date() : m.wonBackAt,
+          })
+          .where(eq(members.id, m.id));
+
+        memberId = m.id;
+        gymId = m.gymId;
+      }
+      // ===== NEW MEMBER =====
+      else {
+        const parentName = join.parentName?.trim() || null;
+        const emergencyContact =
+          join.emergencyContact?.trim() || join.contactNumber;
+
+        if (!parentName) {
+          console.error(
+            `[Payments] manual join ${join.id} completed without a parent name — fill it in from the admin panel`
+          );
+        }
+
+        const expiry = new Date(today);
+        expiry.setDate(expiry.getDate() + durationDays);
+        newExpiryStr = expiry.toISOString().split("T")[0];
+
+        const inserted = await insertMemberWithNextGymId(tx, {
+          branchId: join.branchId,
+          name: join.name,
+          email: join.email,
+          contactNumber: join.contactNumber,
+          address: join.address,
+          parentName,
+          emergencyContact,
+          feeAmount: join.amount,
+          joiningDate: todayStr,
+          membershipExpiry: newExpiryStr,
+          planType,
+          consentToHealthData: true,
+          consentDate: new Date(),
+          consentIpAddress: params.consentIp,
+        });
+
+        memberId = inserted.id;
+        gymId = inserted.gymId;
+      }
+
+      // ===== RECORD PAYMENT ===== (UPI, no gateway ids)
+      await tx.insert(payments).values({
+        branchId: join.branchId,
+        memberId,
+        amount: join.amount,
+        date: todayStr,
+        method: "upi",
+      });
+
+      // ===== LINK THE JOIN TO THE MEMBER =====
+      await tx
+        .update(onlineJoins)
+        .set({ memberId })
+        .where(eq(onlineJoins.id, join.id));
+
+      return { memberId, gymId, newExpiryStr };
+    });
+  } catch (e) {
+    if (e instanceof JoinAlreadyClaimedError) {
+      return {
+        ok: false,
+        code: "claimed",
+        error: "This request has already been confirmed.",
+      };
+    }
+    console.error(`[Payments] manual join ${join.id} failed on confirm:`, e);
+    return {
+      ok: false,
+      code: "failed",
+      error:
+        "Couldn't activate the membership. Nothing was charged again — try Confirm once more, or check the member manually.",
+    };
+  }
+
+  revalidatePath("/admin/members");
+  revalidatePath("/admin");
+  revalidatePath("/admin/join-requests");
 
   return {
     ok: true,

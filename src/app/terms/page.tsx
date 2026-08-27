@@ -1,5 +1,6 @@
 import LegalLayout from "@/app/components/legal-layout";
-import { FileText, CreditCard, Users, Shield, XCircle, AlertTriangle } from "lucide-react";
+import Link from "next/link";
+import { FileText, IndianRupee, Users, Shield, XCircle, AlertTriangle } from "lucide-react";
 
 export const metadata = {
   title: "Terms & Conditions",
@@ -22,9 +23,9 @@ export default async function TermsPage() {
             these Terms & Conditions. If you do not agree, please do not use our
             services. Membership fees are{" "}
             <strong className="text-red-400">non-refundable</strong> — see our{" "}
-            <a href="/refund" className="text-yellow-500 underline">
+            <Link href="/refund" className="text-yellow-500 underline">
               Refund Policy
-            </a>{" "}
+            </Link>{" "}
             for details.
           </p>
         </div>
@@ -60,14 +61,19 @@ export default async function TermsPage() {
         </ul>
       </Section>
 
-      <Section icon={<CreditCard size={20} />} title="2. Payments">
+      <Section icon={<IndianRupee size={20} />} title="2. Payments">
         <ul>
           <li>
-            All online payments are processed securely via <strong>Razorpay</strong>{" "}
-            (RBI-authorized payment gateway).
+            Online joins are paid by <strong>UPI</strong> — scan the QR code or tap
+            &ldquo;Open in UPI app&rdquo; on the join page and pay directly to the
+            gym&apos;s UPI account from any UPI app (Google Pay, PhonePe, Paytm, or your
+            bank).
           </li>
           <li>
-            We accept UPI, Debit Cards, Credit Cards, Net Banking, and Wallets.
+            Your membership is <strong>activated once the gym confirms your payment</strong>.
+            This is a manual step and is usually quick during working hours — you can
+            track it on the membership status page or contact the owner if you don&apos;t
+            hear back.
           </li>
           <li>
             Offline payments (cash) are accepted at the gym reception with a receipt.
@@ -84,11 +90,12 @@ export default async function TermsPage() {
             memberships are honored at their original price until expiry.
           </li>
           <li>
-            Payment receipts are sent via WhatsApp/Email upon successful payment.
+            Your Gym ID and payment confirmation are sent via WhatsApp and/or email
+            once the gym confirms your payment.
           </li>
           <li>
-            In case of payment failure, no membership will be activated. Try again
-            or contact the owner.
+            If a payment is not received or cannot be confirmed, no membership will be
+            activated. Try again or contact the owner.
           </li>
         </ul>
       </Section>

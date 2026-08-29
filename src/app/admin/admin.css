@@ -927,6 +927,12 @@
 }
 .adm-rec-foot {
   display: flex;
+  /* A card can carry three actions at once — Join Requests shows "Confirm
+     payment" + "Reject" and then reveals "Send Gym ID on WhatsApp" the moment a
+     confirm succeeds. Three fixed-height buttons on one phone row squeezed the
+     labels until they wrapped out of the 38px box, so let the row wrap instead
+     and the odd button takes a full-width line of its own. */
+  flex-wrap: wrap;
   gap: 7px;
   margin-top: 12px;
   padding-top: 11px;
@@ -934,6 +940,9 @@
 }
 .adm-act {
   flex: 1;
+  /* Wide enough that a worded button keeps its label; combined with the wrap
+     above this is what pushes a third button onto its own row. */
+  min-width: 116px;
   height: 38px;
   display: inline-flex;
   align-items: center;
@@ -946,6 +955,13 @@
   font-size: 12px;
   font-weight: 600;
   transition: background 0.15s;
+}
+/* Last resort on a very narrow phone: ellipsis rather than a wrapped label
+   spilling out of the fixed-height button. */
+.adm-act-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .adm-act:active {
   background: var(--surface4);
@@ -967,12 +983,14 @@
 }
 .adm-act.icon {
   flex: 0 0 38px;
+  min-width: 0;
   width: 38px;
 }
 /* Inside a table row there is no room for wording, and the column header
    already says "Actions" — so the same buttons collapse to icons. */
 .adm-table .adm-act {
   flex: 0 0 34px;
+  min-width: 0;
   width: 34px;
   height: 34px;
 }

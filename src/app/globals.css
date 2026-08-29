@@ -687,19 +687,29 @@
   font-weight: 700;
 }
 
-/* Plans Grid */
+/* Plans list
+   ----------
+   Each plan is a full-width ROW rather than a tall card: name, price and
+   description on the left, the "Popular"/"Best Value" tag and the select radio on
+   the right. With 8 durations to compare this reads far better than a grid — the
+   prices line up in one column the eye can scan straight down, and the tag no
+   longer has to fight the price for the same corner. */
 .plans-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 16px;
+  gap: 12px;
   margin-bottom: 40px;
 }
 
 .plan-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
   background: var(--bg-card);
   border: 2px solid var(--border-color);
-  border-radius: 18px;
-  padding: 24px;
+  border-radius: 16px;
+  padding: 16px 18px;
   cursor: pointer;
   transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
   position: relative;
@@ -709,6 +719,20 @@
   color: var(--text-primary);
   font-family: var(--font-inter), sans-serif;
   width: 100%;
+}
+
+/* min-width: 0 is what lets a long plan name wrap inside the row instead of
+   forcing the row wider and squeezing the radio off the edge. */
+.plan-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.plan-aside {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
 }
 
 .plan-card:hover {
@@ -724,9 +748,6 @@
 }
 
 .plan-badge {
-  position: absolute;
-  top: 12px;
-  right: 12px;
   background: linear-gradient(135deg, var(--gold), var(--gold-dark));
   color: #000;
   font-size: 10px;
@@ -735,14 +756,14 @@
   border-radius: 6px;
   letter-spacing: 0.5px;
   text-transform: uppercase;
-  z-index: 2;
+  white-space: nowrap;
 }
 
 .plan-name {
   font-family: var(--font-outfit), var(--font-inter), sans-serif;
   font-size: 16px;
   font-weight: 700;
-  margin-bottom: 12px;
+  margin-bottom: 6px;
   color: var(--text-primary);
 }
 
@@ -750,18 +771,18 @@
   display: flex;
   align-items: baseline;
   gap: 4px;
-  margin-bottom: 8px;
+  margin-bottom: 4px;
 }
 
 .plan-price .currency {
-  font-size: 20px;
+  font-size: 18px;
   font-weight: 700;
   color: var(--gold);
 }
 
 .plan-price .amount {
   font-family: var(--font-outfit), var(--font-inter), sans-serif;
-  font-size: 36px;
+  font-size: 30px;
   font-weight: 800;
   color: var(--gold);
   line-height: 1;
@@ -778,34 +799,43 @@
   color: var(--text-secondary);
 }
 
+/* The radio stays visible as an empty ring so a row reads as a choice before you
+   tap it; selecting fills it gold and fades the tick in. It used to be a check mark
+   that was fully transparent until selected, which left no affordance at all. */
 .plan-check {
-  position: absolute;
-  top: 14px;
-  right: 14px;
-  width: 24px;
-  height: 24px;
+  width: 22px;
+  height: 22px;
   border-radius: 50%;
-  background: linear-gradient(135deg, var(--gold), var(--gold-dark));
+  border: 2px solid var(--border-color);
+  background: transparent;
   display: flex;
   align-items: center;
   justify-content: center;
-  opacity: 0;
-  transform: scale(0);
+  flex-shrink: 0;
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  z-index: 3;
+}
+
+.plan-card:hover .plan-check {
+  border-color: rgba(245, 166, 35, 0.5);
 }
 
 .plan-card.selected .plan-check {
-  opacity: 1;
-  transform: scale(1);
+  border-color: var(--gold);
+  background: linear-gradient(135deg, var(--gold), var(--gold-dark));
 }
 
-.plan-card.selected .plan-badge { display: none; }
-
 .plan-check svg {
-  width: 14px;
-  height: 14px;
+  width: 13px;
+  height: 13px;
   color: #000;
+  opacity: 0;
+  transform: scale(0.6);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.plan-card.selected .plan-check svg {
+  opacity: 1;
+  transform: scale(1);
 }
 
 /* Form Card */
@@ -928,6 +958,9 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
+  /* Without a gap the label and value touch once the row gets narrow, which on a
+     phone reads as one run-together string. */
+  gap: 16px;
   padding: 12px 0;
   border-bottom: 1px solid var(--border-color);
   font-size: 14px;
@@ -944,6 +977,7 @@
 .order-row .value {
   font-weight: 600;
   color: var(--text-primary);
+  text-align: right;
 }
 
 .order-row.total {
@@ -1147,9 +1181,12 @@ a.submit-btn {
   margin: 20px 0 4px;
 }
 
+/* aspect-ratio (not a fixed height) so that when max-width shrinks the QR on a
+   narrow phone it stays square — a stretched QR is measurably harder to scan. */
 .pay-qr img {
   width: 240px;
-  height: 240px;
+  height: auto;
+  aspect-ratio: 1 / 1;
   max-width: 100%;
   background: #fff;
   padding: 12px;
@@ -1185,7 +1222,9 @@ a.submit-btn {
   font-size: 16px;
   font-weight: 700;
   color: var(--text-primary);
-  word-break: break-all;
+  /* "anywhere" rather than break-all: a UPI ID that fits stays on one line, and
+     only one that genuinely cannot fit is broken mid-string. */
+  overflow-wrap: anywhere;
   letter-spacing: 0.3px;
 }
 
@@ -1400,16 +1439,6 @@ a.submit-btn {
   height: 18px;
 }
 
-@media (max-width: 768px) {
-  .owner-actions {
-    flex-direction: column;
-  }
-
-  .pay-upi-card {
-    padding: 20px;
-  }
-}
-
 /* Animations */
 @keyframes joinFadeIn {
   from { opacity: 0; }
@@ -1443,14 +1472,14 @@ a.submit-btn {
   to { transform: rotate(360deg); }
 }
 
-/* Responsive */
+/* Responsive — structural only. All mobile SPACING and type sizing for the join
+   flow lives in the density block at the end of this file, so there is one place
+   to look; keeping padding values here too meant two rules disagreeing about the
+   same element, with the winner decided by source order. */
 @media (max-width: 768px) {
-  .join-container {
-    padding: 24px 16px 60px;
-  }
-
-  .branch-grid,
-  .plans-grid,
+  /* Only the input grids collapse. The branch and plan grids deliberately stay
+     two-up on a phone: with 16 plans, one column meant ~1200px of scrolling for
+     a single step. See the density block at the end of this file. */
   .form-grid,
   .verify-fields {
     grid-template-columns: 1fr;
@@ -1468,24 +1497,6 @@ a.submit-btn {
     width: 40px;
   }
 
-  .selected-branch-banner {
-    flex-direction: column;
-    gap: 12px;
-    align-items: flex-start;
-  }
-
-  .join-header h1 {
-    font-size: 28px;
-  }
-
-  .form-card {
-    padding: 24px;
-  }
-
-  .verify-card {
-    padding: 24px;
-  }
-
   /* iOS Safari zooms the whole viewport when you focus an input whose text is
      under 16px — which jerked the page sideways on every field tap in the
      Verify and Details steps. 16px on mobile stops the zoom; desktop keeps 14px. */
@@ -1493,28 +1504,7 @@ a.submit-btn {
     font-size: 16px;
   }
 
-  /* Reclaim vertical space: the 50px + 48px header/progress margins pushed the
-     first real content far down a short phone screen. */
-  .join-header {
-    margin-bottom: 32px;
-  }
-
-  .header-badge {
-    margin-bottom: 18px;
-  }
-
-  .progress-bar {
-    margin-bottom: 32px;
-  }
-
-  /* Tighter card padding gives the content more of the ~343px a phone offers. */
-  .branch-card,
-  .plan-card,
-  .order-summary {
-    padding: 20px;
-  }
-
-  /* Let the "Secured by Razorpay" line wrap instead of overflowing a narrow phone. */
+  /* Let the "pay securely by UPI" line wrap instead of overflowing a narrow phone. */
   .secure-note {
     flex-wrap: wrap;
   }
@@ -1764,5 +1754,515 @@ a.submit-btn {
     transform-origin: top left;
     width: 122%;
     margin-bottom: -12px;
+  }
+}
+
+/* ============================================
+   MOBILE DENSITY PASS — JOIN FLOW
+   ============================================
+   The join pages were laid out correctly on a phone but very tall. Measured at
+   390px wide, the chrome above the first real content — badge, h1, subtitle,
+   payment icons, progress bar — came to ~360px, more than half a phone viewport
+   spent before the member could see a single branch or plan, and it repeated on
+   every step. Step 2 was worse: 16 plan cards in one column ran to ~1200px.
+
+   This block trims that. It is deliberately the LAST thing in the file. The base
+   rules for .trust-strip, .plan-filter-tabs and .verified-info are declared
+   further down than the earlier @media blocks, and a later base rule beats an
+   earlier media-query rule at equal specificity — so these overrides only hold
+   from here. Do not move this block up.
+
+   Nothing is removed except .payment-icons, which repeats what the trust strip
+   already says lower on the same screen. */
+@media (max-width: 768px) {
+  /* ---- Page chrome: the biggest single win, and it applies to every step ---- */
+  .join-container {
+    padding: 16px 14px 32px;
+  }
+
+  .join-header {
+    margin-bottom: 18px;
+  }
+
+  .header-badge {
+    padding: 6px 14px;
+    margin-bottom: 10px;
+    font-size: 12px;
+  }
+
+  .join-header h1 {
+    font-size: 24px;
+    margin-bottom: 8px;
+  }
+
+  .join-header p {
+    font-size: 13.5px;
+    line-height: 1.5;
+  }
+
+  .payment-icons {
+    display: none;
+  }
+
+  .progress-bar {
+    margin-bottom: 18px;
+  }
+
+  .step-circle {
+    width: 34px;
+    height: 34px;
+    font-size: 13px;
+  }
+
+  .join-container .section-title {
+    font-size: 18px;
+    gap: 10px;
+    margin-bottom: 4px;
+  }
+
+  .join-container .section-title .step-num {
+    width: 26px;
+    height: 26px;
+    font-size: 13px;
+    border-radius: 8px;
+  }
+
+  /* The 44px indent aligned the subtitle under the step number but cost a whole
+     wrap line on a narrow screen. */
+  .join-container .section-subtitle {
+    margin-bottom: 12px;
+    padding-left: 0;
+    font-size: 13px;
+  }
+
+  /* Stacking this banner made it ~130px tall, and it sits on steps 2, 3 and 4.
+     Two short items fit on one row once the icon and padding come down. */
+  .selected-branch-banner {
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+    padding: 11px 13px;
+    margin-bottom: 14px;
+  }
+
+  .selected-branch-info {
+    gap: 10px;
+    min-width: 0;
+  }
+
+  .selected-branch-info .branch-icon {
+    width: 34px;
+    height: 34px;
+    border-radius: 10px;
+  }
+
+  .selected-branch-name {
+    font-size: 14.5px;
+  }
+
+  .selected-branch-name span {
+    font-size: 12px;
+  }
+
+  /* Never squashed — if a branch name is long the name wraps instead. */
+  .change-branch-btn {
+    flex-shrink: 0;
+    padding: 8px 12px;
+    font-size: 12.5px;
+  }
+
+  /* Long labels are trimmed on a phone: "Call the gym" becomes "Call", "Change
+     branch" becomes "Change", "Existing Member Renewal" becomes "Renewal". The
+     dropped words live in a .btn-more span in the markup, so the laptop view keeps
+     the full wording. Without this, "WhatsApp the gym" wrapped onto a second line
+     as soon as the two owner buttons shared a row instead of stacking. */
+  .btn-more {
+    display: none;
+  }
+
+  /* The switch was the tallest thing on the page that wasn't real content: 14px of
+     vertical padding around a 14px label, and "Existing Member Renewal" needs ~165px
+     of text in a ~176px half, so it wrapped to two lines — about 80px for a
+     two-option control. The padding now hugs the text, and the long label drops to
+     just "Renewal" on a phone (the same word the order summary already uses for this
+     choice), so both sides stay on one line even at 360px.
+
+     The container's own 5px padding is deliberately left alone: .toggle-slider
+     positions the sliding pill with hardcoded top/left 5px and height
+     calc(100% - 10px), so changing the padding here would knock the pill out of
+     alignment with the buttons. Only the radii come down, to stay concentric. */
+  .toggle-container {
+    margin-bottom: 14px;
+    border-radius: 14px;
+  }
+
+  .toggle-slider {
+    border-radius: 10px;
+  }
+
+  .toggle-btn {
+    padding: 9px 10px;
+    font-size: 13px;
+    border-radius: 10px;
+  }
+
+  /* ---- Step 1: branches ---- */
+  .branch-grid {
+    gap: 12px;
+    margin-bottom: 14px;
+  }
+
+  .branch-card {
+    padding: 16px;
+    border-radius: 16px;
+  }
+
+  .branch-header {
+    gap: 11px;
+    margin-bottom: 11px;
+  }
+
+  .branch-icon {
+    width: 40px;
+    height: 40px;
+    border-radius: 12px;
+  }
+
+  .branch-name {
+    font-size: 17px;
+  }
+
+  .branch-detail {
+    gap: 8px;
+    margin-bottom: 7px;
+    font-size: 12.5px;
+    line-height: 1.45;
+  }
+
+  .branch-select-btn {
+    margin-top: 11px;
+    padding-top: 10px;
+    font-size: 13px;
+  }
+
+  /* ---- Step 2: plans, one full-width row each ----
+     A row is short enough (~74px) that a single column no longer costs what a
+     column of tall cards did, and full width is what lets the price, the tag and
+     the radio share one line without any of them shrinking to fit. Note there is
+     no flex-wrap on .plan-price here — the row has the width to keep
+     "/ 365 days" inline beside the amount. */
+  .plans-grid {
+    grid-template-columns: 1fr;
+    gap: 8px;
+    margin-bottom: 18px;
+  }
+
+  .plan-card {
+    gap: 12px;
+    padding: 13px 14px;
+    border-radius: 14px;
+  }
+
+  .plan-name {
+    font-size: 13.5px;
+    margin-bottom: 4px;
+    line-height: 1.3;
+  }
+
+  .plan-price {
+    margin-bottom: 3px;
+  }
+
+  .plan-price .currency {
+    font-size: 15px;
+  }
+
+  .plan-price .amount {
+    font-size: 24px;
+  }
+
+  .plan-price .period {
+    font-size: 11.5px;
+  }
+
+  .plan-desc {
+    font-size: 11.5px;
+    line-height: 1.35;
+  }
+
+  .plan-badge {
+    font-size: 9px;
+    padding: 3px 7px;
+  }
+
+  .plan-aside {
+    gap: 8px;
+  }
+
+  .plan-check {
+    width: 20px;
+    height: 20px;
+  }
+
+  .plan-check svg {
+    width: 12px;
+    height: 12px;
+  }
+
+  .plan-filter-tabs {
+    gap: 6px;
+    margin-bottom: 14px;
+    padding: 4px;
+    border-radius: 13px;
+  }
+
+  .plan-filter-tab {
+    padding: 10px 12px;
+    font-size: 13.5px;
+    border-radius: 10px;
+  }
+
+  /* ---- Step 3: summary, form, consent, trust ---- */
+  .order-summary,
+  .form-card {
+    margin-bottom: 14px;
+  }
+
+  .order-summary {
+    padding: 16px;
+    border-radius: 16px;
+  }
+
+  .order-title {
+    font-size: 16px;
+    margin-bottom: 10px;
+  }
+
+  .order-row {
+    padding: 9px 0;
+    font-size: 13.5px;
+  }
+
+  .order-row.total {
+    margin-top: 4px;
+    padding-top: 12px;
+  }
+
+  .order-row.total .value {
+    font-size: 22px;
+  }
+
+  .form-card,
+  .verify-card {
+    padding: 18px 16px;
+    border-radius: 16px;
+  }
+
+  .form-title {
+    font-size: 17px;
+    margin-bottom: 14px;
+  }
+
+  .form-grid {
+    gap: 13px;
+  }
+
+  .form-group {
+    gap: 5px;
+  }
+
+  .form-label {
+    font-size: 12.5px;
+  }
+
+  /* The font-size stays 16px — that is the iOS focus-zoom threshold and is set
+     in the block above. Only the padding comes down, so the field is still a
+     comfortable ~43px tall. */
+  .form-input {
+    padding: 12px 14px;
+    border-radius: 10px;
+  }
+
+  .consent-box {
+    padding: 14px;
+    margin-bottom: 14px;
+    border-radius: 13px;
+  }
+
+  .consent-box label {
+    gap: 11px;
+  }
+
+  .consent-title {
+    margin-bottom: 4px;
+  }
+
+  .consent-text {
+    font-size: 12.5px;
+    line-height: 1.5;
+  }
+
+  .trust-strip {
+    gap: 6px;
+    margin-bottom: 14px;
+    padding: 10px;
+    border-radius: 12px;
+  }
+
+  .trust-item {
+    gap: 8px;
+    padding: 4px;
+  }
+
+  .submit-btn {
+    padding: 15px;
+    border-radius: 14px;
+  }
+
+  .secure-note {
+    margin-top: 10px;
+    padding: 0 8px;
+  }
+
+  /* ---- Step 4: pay by UPI ---- */
+  .pay-upi-card {
+    padding: 18px 16px;
+    margin-bottom: 14px;
+    border-radius: 16px;
+  }
+
+  .pay-upi-card .submit-btn {
+    margin-top: 10px;
+  }
+
+  /* The tallest single element on the pay screen. 200px still scans instantly —
+     a UPI QR carries very little data — and gives back ~50px. */
+  .pay-qr {
+    margin: 12px 0 2px;
+  }
+
+  .pay-qr img {
+    width: 200px;
+    padding: 10px;
+    border-radius: 14px;
+  }
+
+  .copy-field {
+    padding: 10px 12px;
+    margin-top: 8px;
+    border-radius: 12px;
+  }
+
+  /* Compact enough that the UPI ID beside it keeps most of the row. Stacking the
+     button under the value (the previous fix for a long UPI ID) read fine but
+     cost ~30px per row, across three rows in the flow — the ID is allowed to
+     wrap to a second line instead. */
+  .copy-btn {
+    padding: 8px 12px;
+    font-size: 12px;
+  }
+
+  .pay-divider {
+    margin: 14px 0 10px;
+  }
+
+  /* Two buttons, kept side by side: stacking them cost ~54px on both the pay and
+     the acknowledgement screen, and they fit a 360px row comfortably. */
+  .owner-actions {
+    flex-direction: row;
+    gap: 8px;
+    margin-bottom: 14px;
+  }
+
+  .owner-btn {
+    padding: 12px 8px;
+    font-size: 13px;
+    border-radius: 12px;
+  }
+
+  .pay-not-configured {
+    padding: 18px 16px;
+  }
+
+  /* ---- Step 5: acknowledgement ---- */
+  .ack-card {
+    padding: 22px 16px;
+    margin-bottom: 14px;
+    border-radius: 16px;
+  }
+
+  .ack-icon {
+    width: 56px;
+    height: 56px;
+    margin: 0 auto 12px;
+  }
+
+  .ack-icon svg {
+    width: 28px;
+    height: 28px;
+  }
+
+  .ack-title {
+    font-size: 20px;
+    margin-bottom: 6px;
+  }
+
+  .ack-text {
+    font-size: 13.5px;
+    line-height: 1.55;
+  }
+
+  .ack-ref {
+    margin: 14px auto 6px;
+  }
+
+  .status-link {
+    margin-top: 12px;
+    padding: 11px 20px;
+    font-size: 14px;
+  }
+
+  /* ---- Renewal verify card ---- */
+  .verify-required {
+    margin-top: 6px;
+    font-size: 12.5px;
+  }
+
+  .verified-info {
+    margin-top: 14px;
+    padding: 12px 14px;
+    font-size: 12.5px;
+  }
+}
+
+/* Small-phone refinements. The plan rows are already one column by here; the amount
+   steps down once more so a five-figure price still clears the tag and radio beside
+   it at 360px. The branch cards carry a wrapping address, so they go to one column
+   rather than being squeezed — there are only two of them either way. */
+@media (max-width: 480px) {
+  .branch-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .plan-card {
+    padding: 13px 12px;
+  }
+
+  .plan-price .amount {
+    font-size: 22px;
+  }
+
+  .copy-field-value {
+    font-size: 14.5px;
+  }
+
+  .order-row.total .value {
+    font-size: 20px;
+  }
+
+  .reference-badge {
+    font-size: 16px;
+    letter-spacing: 0.5px;
+    padding: 12px 14px;
   }
 }

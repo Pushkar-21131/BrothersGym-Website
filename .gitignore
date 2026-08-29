@@ -44,3 +44,9 @@ next-env.d.ts
 # records which migrations have run; without it `drizzle-kit` cannot tell
 # applied migrations from pending ones and a fresh deploy re-runs everything.
 # It was previously ignored here — that was a bug.
+
+# Claude Code local state (worktrees, session scratch) — machine-local, never shared
+.claude/
+
+# Local reference screenshots used while fixing layouts — not part of the app
+fix/

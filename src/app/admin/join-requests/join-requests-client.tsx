@@ -276,7 +276,10 @@ export default function JoinRequestsClient({
                   {r.email && (
                     <div style={{ gridColumn: "1 / -1" }}>
                       <div className="adm-rec-k">Email</div>
-                      <div className="adm-rec-v">
+                      <div
+                        className="adm-rec-v"
+                        style={{ whiteSpace: "normal", overflowWrap: "anywhere" }}
+                      >
                         <a href={`mailto:${r.email}`} className="adm-link">
                           <Mail size={11} /> {r.email}
                         </a>

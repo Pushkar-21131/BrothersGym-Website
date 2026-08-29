@@ -74,7 +74,7 @@ export default function TrainersTabs({ branches, trainers, owners }: Props) {
               The Owners
             </h3>
           </div>
-          <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-6">
             {owners.map((owner) => (
               <TrainerCard key={owner.id} trainer={owner} isOwner />
             ))}
@@ -129,7 +129,7 @@ export default function TrainersTabs({ branches, trainers, owners }: Props) {
             <p className="text-xs text-zinc-600 mt-1">Check back soon!</p>
           </div>
         ) : (
-          <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-6">
             {filteredTrainers.map((trainer) => (
               <TrainerCard key={trainer.id} trainer={trainer} />
             ))}
@@ -154,8 +154,10 @@ export default function TrainersTabs({ branches, trainers, owners }: Props) {
 function TrainerCard({ trainer, isOwner = false }: { trainer: Trainer; isOwner?: boolean }) {
   return (
     <div className="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden group hover:border-yellow-500/50 transition-all duration-300 hover:-translate-y-1">
-      {/* Image */}
-      <div className="aspect-7/8 bg-zinc-800 relative overflow-hidden">
+      {/* Image — 7/8 is portrait, which is right for a narrow grid cell but ~410px
+          tall once the card goes full-width on a phone. 4/3 keeps the photo
+          prominent without turning one trainer into a whole screen of scrolling. */}
+      <div className="aspect-4/3 sm:aspect-7/8 bg-zinc-800 relative overflow-hidden">
         {trainer.photoUrl ? (
           <img
             src={trainer.photoUrl}
@@ -173,17 +175,19 @@ function TrainerCard({ trainer, isOwner = false }: { trainer: Trainer; isOwner?:
         {/* Gradient overlay */}
         <div className="absolute inset-0 bg-linear-to-t from-zinc-950 via-zinc-950/60 to-transparent"></div>
 
-        {/* Branch badge */}
+        {/* Branch badge — the NR/SP tag and the OWNER tag opposite it were sized for
+            a wide card and nearly met in the middle of a ~155px grid cell, so both
+            step down a notch on phones. */}
         {trainer.branchCode && (
-          <div className="absolute top-3 left-3 bg-yellow-500 text-black text-[10px] font-black uppercase tracking-widest px-2.5 py-1 rounded-full flex items-center gap-1 shadow-lg">
-            <Building2 size={11} strokeWidth={2.5} />
+          <div className="absolute top-2 left-2 sm:top-3 sm:left-3 bg-yellow-500 text-black text-[9px] sm:text-[10px] font-black uppercase tracking-wider sm:tracking-widest px-2 py-0.5 sm:px-2.5 sm:py-1 rounded-full flex items-center gap-1 shadow-lg whitespace-nowrap">
+            <Building2 strokeWidth={2.5} className="w-2.5 h-2.5 sm:w-[11px] sm:h-[11px]" />
             {trainer.branchCode}
           </div>
         )}
 
         {/* Owner badge */}
         {isOwner && (
-          <div className="absolute top-3 right-3 bg-black/60 backdrop-blur-md border border-yellow-500/50 text-yellow-500 text-[10px] font-black uppercase tracking-widest px-2.5 py-1 rounded-full">
+          <div className="absolute top-2 right-2 sm:top-3 sm:right-3 bg-black/60 backdrop-blur-md border border-yellow-500/50 text-yellow-500 text-[9px] sm:text-[10px] font-black uppercase tracking-wider sm:tracking-widest px-2 py-0.5 sm:px-2.5 sm:py-1 rounded-full whitespace-nowrap">
             ⭐ Owner
           </div>
         )}
@@ -191,7 +195,11 @@ function TrainerCard({ trainer, isOwner = false }: { trainer: Trainer; isOwner?:
         {/* Name + Instagram at bottom */}
         <div className="absolute bottom-0 left-0 right-0 p-3 md:p-4 flex justify-between items-end">
           <div className="flex-1 min-w-0">
-            <h4 className="text-base md:text-2xl font-black uppercase tracking-wide text-white leading-tight break-words md:truncate drop-shadow-lg">
+            {/* No break-words: that is what split "SHUBHRANT" into "SHUBHRA"/"NT"
+                and "BHARDWAJ" into "BHARDW"/"AJ" once the name outgrew a narrow
+                cell. Without it a long name wraps between words instead, and at
+                full width on a phone it fits one line. */}
+            <h4 className="text-xl sm:text-2xl font-black uppercase tracking-wide text-white leading-tight md:truncate drop-shadow-lg">
               {trainer.name}
             </h4>
             <p className="text-[10px] font-black uppercase tracking-widest text-yellow-500 mt-0.5">
@@ -223,11 +231,11 @@ function TrainerCard({ trainer, isOwner = false }: { trainer: Trainer; isOwner?:
           {trainer.experience}
         </p>
 
-        <div className="flex items-center justify-between pt-3 border-t border-zinc-800">
-          <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">
+        <div className="flex items-center justify-between gap-2 pt-3 border-t border-zinc-800">
+          <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest whitespace-nowrap">
             PT / month
           </span>
-          <span className="text-lg font-black text-yellow-500">
+          <span className="text-lg font-black text-yellow-500 whitespace-nowrap">
             {formatINR(trainer.ptFee)}
           </span>
         </div>

@@ -601,7 +601,7 @@ export default function JoinPlansClient({
                 </div>
               </div>
               <button type="button" className="change-branch-btn" onClick={backToBranch}>
-                Change branch
+                Change<span className="btn-more"> branch</span>
               </button>
             </div>
 
@@ -620,7 +620,7 @@ export default function JoinPlansClient({
                 className={`toggle-btn ${memberType === "renewal" ? "active" : ""}`}
                 onClick={switchToRenewal}
               >
-                Existing Member Renewal
+                <span className="btn-more">Existing Member </span>Renewal
               </button>
             </div>
 
@@ -809,21 +809,27 @@ export default function JoinPlansClient({
                         style={{ animationDelay: `${idx * 0.05}s` }}
                         disabled={renewalBlocked}
                       >
-                        <div className="plan-check">
-                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
-                            <polyline points="20 6 9 17 4 12" />
-                          </svg>
+                        <div className="plan-main">
+                          <div className="plan-name">{p.name}</div>
+                          <div className="plan-price">
+                            <span className="currency">₹</span>
+                            <span className="amount">{p.price.toLocaleString("en-IN")}</span>
+                            <span className="period">/ {p.durationDays} days</span>
+                          </div>
+                          <div className="plan-desc">
+                            {p.description ||
+                              (p.includesCardio ? "Includes cardio & treadmill" : "Weights & strength only")}
+                          </div>
                         </div>
-                        {badge && !isSelected && <div className="plan-badge">{badge}</div>}
-                        <div className="plan-name">{p.name}</div>
-                        <div className="plan-price">
-                          <span className="currency">₹</span>
-                          <span className="amount">{p.price.toLocaleString("en-IN")}</span>
-                          <span className="period">/ {p.durationDays} days</span>
-                        </div>
-                        <div className="plan-desc">
-                          {p.description ||
-                            (p.includesCardio ? "Includes cardio & treadmill" : "Weights & strength only")}
+                        {/* The tag sits beside the radio now, so it no longer has to
+                            hide when the row is selected to stay out of its way. */}
+                        <div className="plan-aside">
+                          {badge && <div className="plan-badge">{badge}</div>}
+                          <div className="plan-check">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+                              <polyline points="20 6 9 17 4 12" />
+                            </svg>
+                          </div>
                         </div>
                       </button>
                     );
@@ -1302,7 +1308,9 @@ export default function JoinPlansClient({
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                     <path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72 12.84 12.84 0 00.7 2.81 2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45 12.84 12.84 0 002.81.7A2 2 0 0122 16.92z" />
                   </svg>
-                  Call the gym
+                  <span className="owner-btn-label">
+                    Call<span className="btn-more"> the gym</span>
+                  </span>
                 </a>
                 <a
                   className="owner-btn whatsapp"
@@ -1313,7 +1321,9 @@ export default function JoinPlansClient({
                   <svg viewBox="0 0 24 24" fill="currentColor" stroke="none">
                     <path d="M12.04 2C6.58 2 2.13 6.45 2.13 11.91c0 1.75.46 3.45 1.32 4.95L2 22l5.25-1.38c1.45.79 3.08 1.21 4.79 1.21 5.46 0 9.91-4.45 9.91-9.91C21.95 6.45 17.5 2 12.04 2zm5.8 14.02c-.24.68-1.4 1.3-1.94 1.35-.5.05-1.13.24-3.66-.77-3.08-1.24-5.06-4.4-5.21-4.6-.15-.2-1.24-1.65-1.24-3.15s.79-2.24 1.07-2.54c.28-.3.61-.38.81-.38.2 0 .4 0 .58.01.19.01.44-.07.68.52.24.6.83 2.06.9 2.21.07.15.12.32.02.52-.1.2-.15.32-.3.5-.15.17-.31.38-.44.51-.15.15-.3.31-.13.6.17.3.76 1.25 1.63 2.02 1.12 1 2.06 1.31 2.36 1.46.3.15.47.13.64-.08.17-.2.74-.86.94-1.16.2-.3.4-.25.67-.15.27.1 1.71.81 2 .96.3.15.5.22.57.35.07.12.07.72-.17 1.4z" />
                   </svg>
-                  WhatsApp the gym
+                  <span className="owner-btn-label">
+                    WhatsApp<span className="btn-more"> the gym</span>
+                  </span>
                 </a>
               </div>
             )}
@@ -1381,7 +1391,9 @@ export default function JoinPlansClient({
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                     <path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72 12.84 12.84 0 00.7 2.81 2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45 12.84 12.84 0 002.81.7A2 2 0 0122 16.92z" />
                   </svg>
-                  Call the gym
+                  <span className="owner-btn-label">
+                    Call<span className="btn-more"> the gym</span>
+                  </span>
                 </a>
                 <a
                   className="owner-btn whatsapp"
@@ -1392,7 +1404,9 @@ export default function JoinPlansClient({
                   <svg viewBox="0 0 24 24" fill="currentColor" stroke="none">
                     <path d="M12.04 2C6.58 2 2.13 6.45 2.13 11.91c0 1.75.46 3.45 1.32 4.95L2 22l5.25-1.38c1.45.79 3.08 1.21 4.79 1.21 5.46 0 9.91-4.45 9.91-9.91C21.95 6.45 17.5 2 12.04 2zm5.8 14.02c-.24.68-1.4 1.3-1.94 1.35-.5.05-1.13.24-3.66-.77-3.08-1.24-5.06-4.4-5.21-4.6-.15-.2-1.24-1.65-1.24-3.15s.79-2.24 1.07-2.54c.28-.3.61-.38.81-.38.2 0 .4 0 .58.01.19.01.44-.07.68.52.24.6.83 2.06.9 2.21.07.15.12.32.02.52-.1.2-.15.32-.3.5-.15.17-.31.38-.44.51-.15.15-.3.31-.13.6.17.3.76 1.25 1.63 2.02 1.12 1 2.06 1.31 2.36 1.46.3.15.47.13.64-.08.17-.2.74-.86.94-1.16.2-.3.4-.25.67-.15.27.1 1.71.81 2 .96.3.15.5.22.57.35.07.12.07.72-.17 1.4z" />
                   </svg>
-                  WhatsApp the gym
+                  <span className="owner-btn-label">
+                    WhatsApp<span className="btn-more"> the gym</span>
+                  </span>
                 </a>
               </div>
             )}

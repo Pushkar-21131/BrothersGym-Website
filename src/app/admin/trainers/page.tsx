@@ -28,6 +28,9 @@ export default async function TrainersPage() {
       branchId: trainers.branchId,
       name: trainers.name,
       photoUrl: trainers.photoUrl,
+      // photoMime, not photoImage — see the schema comment. This list only needs
+      // to know a photo exists so it can build the /api/trainer-photo/[id] src.
+      photoMime: trainers.photoMime,
       experience: trainers.experience,
       ptFee: trainers.ptFee,
       isOwner: trainers.isOwner,
@@ -57,7 +60,7 @@ export default async function TrainersPage() {
         </p>
       </div>
       <TrainerList
-        initialTrainers={rows as any}
+        initialTrainers={rows}
         showBranchColumn={showBranchColumn}
         branches={allBranches.map((b) => ({ id: b.id, code: b.code, name: b.name }))}
         currentBranchId={scope.type === "single" ? scope.branchId : null}

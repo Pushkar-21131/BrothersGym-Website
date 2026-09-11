@@ -2,9 +2,6 @@
 
 import { useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
-import ExcelJS from "exceljs";
-import jsPDF from "jspdf";
-import autoTable from "jspdf-autotable";
 import toast from "react-hot-toast";
 import {
   Plus,
@@ -123,6 +120,7 @@ export default function EquipmentList({
   }
 
   async function exportExcel() {
+    const { default: ExcelJS } = await import("exceljs");
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet("Equipment");
 
@@ -154,7 +152,9 @@ export default function EquipmentList({
     toast.success("Excel downloaded!");
   }
 
-  function exportPDF() {
+  async function exportPDF() {
+    const { default: jsPDF } = await import("jspdf");
+    const { default: autoTable } = await import("jspdf-autotable");
     const doc = new jsPDF();
     doc.text("Brothers Gym - Equipment", 14, 15);
     autoTable(doc, {

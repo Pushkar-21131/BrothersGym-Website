@@ -120,7 +120,37 @@ export const trainers = pgTable("trainers", {
     .references(() => branches.id)
     .notNull(),
   name: text("name").notNull(),
+  // An externally hosted photo, e.g. a Cloudinary or Google Drive link.
+  //
+  // Kept alongside the uploaded photo below rather than replaced by it, for two
+  // reasons: the rows already in this table use it, and a link costs no database
+  // space, so an owner who does have proper image hosting should still be able to
+  // point at it. photoImage wins when both are set — see resolveTrainerPhoto.
+  //
+  // The catch, and why uploading is now the primary path: nothing here can keep a
+  // third-party URL alive. Every one of the original four trainer photos was a
+  // link into a free "cloudinary tools" uploader, and all four returned 404 once
+  // that service dropped them, leaving the homepage showing broken images with no
+  // copy of the originals anywhere.
   photoUrl: text("photo_url"),
+  // A photo uploaded through the admin panel, base64, served by
+  // /api/trainer-photo/[id]. Same storage tradeoff as the payment proof in
+  // online_joins: no object store on a free tier, so the bytes live in Postgres.
+  //
+  // Cheaper here than it looks. Trainers are a handful of rows that change once a
+  // year, the admin client downscales to 800px before upload (~40–80KB, capped at
+  // 200KB by lib/trainer-photo.ts), so a four-trainer gym spends well under 0.5MB
+  // — unlike join proofs, which arrive with every new member and needed a
+  // retention sweep to stay bounded.
+  //
+  // NOT selected by the public trainer queries: that would put base64 into the
+  // homepage HTML for every trainer. Those read photoMime instead, which is only
+  // ever set together with this column, and let the browser fetch the bytes.
+  photoImage: text("photo_image"),
+  // Sniffed from the uploaded bytes, never taken from the browser. Doubles as the
+  // "is there an uploaded photo?" flag, so a query can answer that without
+  // selecting the image itself.
+  photoMime: text("photo_mime"),
   experience: text("experience").notNull(),
   ptFee: integer("pt_fee").notNull(),
   isOwner: boolean("is_owner").default(false).notNull(),
@@ -235,11 +265,52 @@ export const onlineJoins = pgTable("online_joins", {
     .notNull(),
   razorpayOrderId: text("razorpay_order_id"),
   razorpayPaymentId: text("razorpay_payment_id"),
-  // Manual UPI flow: the member's optional UTR / reference number, when the
-  // owner confirmed the payment, and when the member tapped "I've paid".
+  // LEGACY. The join flow briefly asked members to type their UTR / UPI
+  // reference by hand. Almost nobody knows what a UTR is, so the field was
+  // replaced by the screenshot below — which shows the same number, and the
+  // amount and payee besides, without anyone having to find it. Kept, not
+  // dropped: rows created while the field existed still carry a real value, and
+  // fulfilManualJoin preserves it on confirm. Nothing writes it any more.
   upiReference: text("upi_reference"),
   claimedAt: timestamp("claimed_at"),
   confirmedAt: timestamp("confirmed_at"),
+  // When the owner rejected the request. Drives the 10-day retention window on
+  // the payment screenshot below — deliberately not proofUploadedAt, because a
+  // request the owner leaves sitting for two weeks would otherwise have its
+  // evidence swept the same day it was rejected, which is exactly when the
+  // member is most likely to argue about it.
+  rejectedAt: timestamp("rejected_at"),
+  // ===== PAYMENT PROOF (manual UPI flow) =====
+  // The screenshot of the member's UPI success screen, base64-encoded, stored in
+  // the row rather than an object store: there is no bucket on the free tier and
+  // adding a vendor for ~60KB per join is not worth the dependency. Compressed
+  // client-side before upload (see compressToJpeg in join-plans-client), so a
+  // typical proof is 40–90KB of base64 — a few thousand fit inside a 0.5GB
+  // Postgres allowance.
+  //
+  // It is never sent to the browser inline. /api/admin/join-proof/[id] streams it
+  // to the owner on demand, so a 200-row admin page stays a normal-sized page.
+  //
+  // A screenshot carries the UTR, amount, timestamp and payee visibly, which is
+  // why the flow no longer asks the member to type a UTR — nobody knows what one
+  // is, and the image already contains it.
+  //
+  // RETENTION. base64 stores at 4/3 of the image, so a proof occupies ~53–120KB
+  // of the 0.5GB Neon allowance — about 6,400 of them, shared with every other
+  // table. Nothing reclaims that on its own, so two rules bound it:
+  //   • rejected  → swept 10 days after rejectedAt (sweepExpiredJoinProofs,
+  //                 called on each admin join-requests load; no cron needed).
+  //   • confirmed → kept indefinitely. The owner clears it by hand when they
+  //                 want to (deleteJoinProof), after downloading it if they
+  //                 want their own copy.
+  // Clearing sets proofImage AND proofMime to null but never touches
+  // proofUploadedAt: that timestamp is the audit trail that a screenshot was
+  // submitted, and it has to outlive the bytes. Which is why "is there an image
+  // to show?" is derived from proofMime — deriving it from proofUploadedAt would
+  // keep rendering a thumbnail for a row whose image is long gone.
+  proofImage: text("proof_image"),
+  proofMime: text("proof_mime"),
+  proofUploadedAt: timestamp("proof_uploaded_at"),
   memberId: integer("member_id").references(() => members.id),
   createdAt: timestamp("created_at").defaultNow(),
 });

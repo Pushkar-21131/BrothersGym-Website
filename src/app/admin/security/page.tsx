@@ -4,7 +4,8 @@ import { redirect } from "next/navigation";
 import Link from "next/link";
 import { and, desc, gte, ilike, lt, lte, or, sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
-import { getVerifiedRole, hasPermission } from "@/lib/auth-check";
+import { getVerifiedRole } from "@/lib/auth-check";
+import { isSuperAdmin } from "@/lib/branch";
 
 import {
   Shield,
@@ -192,14 +193,22 @@ export default async function SecurityPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  // 🔒 PERMISSION CHECK
-  // Owner always allowed; staff only if their permissions include security.canView
-  const role = await getVerifiedRole();
-  if (!role) redirect("/login");
-
-  if (role !== "owner") {
-    const canView = await hasPermission("security", "canView");
-    if (!canView) redirect("/admin/members");
+  // 🔒 PERMISSION CHECK — main owner account only.
+  //
+  // The login log is deliberately NOT reachable by a branch-scoped owner or by
+  // staff. `login_attempts` has no branch_id and cannot get one: an attempt is
+  // recorded before anyone is authenticated, so at write time there is no branch
+  // to attribute it to. That makes the table impossible to scope, and every row
+  // carries an email, an IP and a city — so a branch owner opening this page
+  // would be reading the OTHER owner's login activity.
+  //
+  // Undo: this follows BRANCH_SCOPED_OWNERS like everything else. With scoped
+  // owners off, isSuperAdmin() is true for every owner and this page returns to
+  // being owner-wide.
+  if (!(await isSuperAdmin())) {
+    const role = await getVerifiedRole();
+    if (!role) redirect("/login");
+    redirect("/admin/members");
   }
 
   // ---- Archive search (searches ALL history, including past 30 days) ----

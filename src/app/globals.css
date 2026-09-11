@@ -1152,49 +1152,18 @@
 }
 
 /* ============================================
-   MANUAL UPI PAY (STEP 4) + ACKNOWLEDGEMENT (STEP 5)
-   ============================================ */
+   CONTACT FALLBACK (STEP 4) + ACKNOWLEDGEMENT (STEP 5)
+   ============================================
+   Step 4 used to be a UPI QR plus a screenshot upload. It isn't any more: either
+   Razorpay's own modal takes the payment (its UI is the gateway's, so there is no
+   CSS for it here) or, when a branch has no gateway configured, the member gets
+   the contact-the-owner screen — .pay-not-configured below. The QR plate, the
+   "Open in UPI app" button style, the divider and the whole proof-upload block
+   have been deleted along with the markup that used them. */
 
-/* The submit-btn style is reused for anchors (Open in UPI app); strip the
-   default link underline/colour so it reads as the same gold button. */
-a.submit-btn {
-  text-decoration: none;
-  color: #000;
-}
-
-.pay-upi-card {
-  background: var(--bg-card);
-  border: 1px solid var(--border-color);
-  border-radius: 20px;
-  padding: 28px;
-  margin-bottom: 20px;
-}
-
-.pay-upi-card .submit-btn {
-  margin-top: 14px;
-}
-
-/* QR sits on its own white plate so it scans cleanly against the dark UI. */
-.pay-qr {
-  display: flex;
-  justify-content: center;
-  margin: 20px 0 4px;
-}
-
-/* aspect-ratio (not a fixed height) so that when max-width shrinks the QR on a
-   narrow phone it stays square — a stretched QR is measurably harder to scan. */
-.pay-qr img {
-  width: 240px;
-  height: auto;
-  aspect-ratio: 1 / 1;
-  max-width: 100%;
-  background: #fff;
-  padding: 12px;
-  border-radius: 16px;
-  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
-}
-
-/* Copy rows: UPI ID, reference. */
+/* Copy rows: the join reference, and the Gym ID on a completed join. Both are
+   things the member will need to quote later, which is why each gets a tap-to-
+   copy button rather than being plain text. */
 .copy-field {
   display: flex;
   align-items: center;
@@ -1222,8 +1191,8 @@ a.submit-btn {
   font-size: 16px;
   font-weight: 700;
   color: var(--text-primary);
-  /* "anywhere" rather than break-all: a UPI ID that fits stays on one line, and
-     only one that genuinely cannot fit is broken mid-string. */
+  /* "anywhere" rather than break-all: a reference or Gym ID that fits stays on
+     one line, and only one that genuinely cannot fit is broken mid-string. */
   overflow-wrap: anywhere;
   letter-spacing: 0.3px;
 }
@@ -1246,26 +1215,10 @@ a.submit-btn {
   transform: translateY(-1px);
 }
 
-/* "After you've paid" divider. */
-.pay-divider {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  margin: 24px 0 16px;
-  color: var(--text-muted);
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.pay-divider::before,
-.pay-divider::after {
-  content: '';
-  flex: 1;
-  height: 1px;
-  background: var(--border-color);
-}
-
-/* Branch has no UPI configured yet. */
+/* Shown INSTEAD of the gateway when a branch has no Razorpay account configured
+   yet: the member gets the owner's phone and WhatsApp rather than a payment
+   screen. Amber, not red — nothing has gone wrong for them and they can still
+   join, so it has to read as "do this instead", not "error". */
 .pay-not-configured {
   background: rgba(245, 166, 35, 0.06);
   border: 1px solid rgba(245, 166, 35, 0.3);
@@ -1437,6 +1390,171 @@ a.submit-btn {
 .status-link svg {
   width: 18px;
   height: 18px;
+}
+
+/* The "TELL THE GYM" nudge (.ack-nudge / .ack-nudge-text / .whatsapp-cta) used to
+   sit here. It existed because under the screenshot flow the member tapping a
+   WhatsApp button was how the owner learned a payment was waiting. Nothing needs
+   telling now — a gateway payment activates the membership by itself, and a member
+   who didn't pay online appears in the owner's follow-up queue for him to call. */
+
+/* ===== VERIFICATION STEPPER (status page) =====
+   Three rows, left-aligned inside the centred status card, so the eye can follow
+   the connector line down. Compact on purpose — this sits above the details and
+   the contact buttons, and on a phone all three have to be visible at once for
+   the progression to read as progression. */
+.verify-steps {
+  list-style: none;
+  text-align: left;
+  max-width: 380px;
+  margin: 20px auto 4px;
+  padding: 0;
+}
+
+.verify-step {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding-bottom: 16px;
+}
+
+.verify-step:last-child {
+  padding-bottom: 0;
+}
+
+/* The connector, drawn from each dot down to the next one. */
+.verify-step:not(:last-child)::before {
+  content: '';
+  position: absolute;
+  left: 10px;
+  top: 22px;
+  bottom: 2px;
+  width: 2px;
+  background: var(--border-color);
+}
+
+.verify-step.is-done:not(:last-child)::before {
+  background: rgba(37, 211, 102, 0.5);
+}
+
+.verify-dot {
+  position: relative;
+  z-index: 1;
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid var(--border-color);
+  background: var(--bg-card);
+  color: #04220f;
+}
+
+.verify-dot svg {
+  width: 12px;
+  height: 12px;
+}
+
+.verify-step.is-done .verify-dot {
+  background: #25d366;
+  border-color: #25d366;
+}
+
+.verify-step.is-active .verify-dot {
+  border-color: var(--gold);
+  background: var(--gold);
+  /* A quiet pulse: this is the step being worked on by a person right now. */
+  animation: verifyPulse 1.8s ease-in-out infinite;
+}
+
+@keyframes verifyPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(245, 166, 35, 0.45); }
+  50% { box-shadow: 0 0 0 6px rgba(245, 166, 35, 0); }
+}
+
+.verify-step-body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding-top: 1px;
+}
+
+.verify-step-label {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--text-muted);
+  line-height: 1.3;
+}
+
+.verify-step.is-done .verify-step-label,
+.verify-step.is-active .verify-step-label {
+  color: var(--text-primary);
+}
+
+.verify-step-sub {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.verify-step.is-todo .verify-step-sub {
+  opacity: 0.6;
+}
+
+/* "Updating automatically" — the reassurance that the page is watching for them,
+   so they don't sit there hammering refresh. */
+.live-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 16px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: rgba(37, 211, 102, 0.1);
+  border: 1px solid rgba(37, 211, 102, 0.28);
+  color: #25d366;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.live-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #25d366;
+  animation: liveBlink 1.6s ease-in-out infinite;
+}
+
+@keyframes liveBlink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+
+.live-refresh {
+  margin-top: 16px;
+  padding: 10px 18px;
+  border-radius: 999px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.live-refresh:hover {
+  background: var(--bg-card-hover);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .verify-step.is-active .verify-dot,
+  .live-dot {
+    animation: none;
+  }
 }
 
 /* Animations */
@@ -2124,46 +2242,19 @@ a.submit-btn {
     padding: 0 8px;
   }
 
-  /* ---- Step 4: pay by UPI ---- */
-  .pay-upi-card {
-    padding: 18px 16px;
-    margin-bottom: 14px;
-    border-radius: 16px;
-  }
-
-  .pay-upi-card .submit-btn {
-    margin-top: 10px;
-  }
-
-  /* The tallest single element on the pay screen. 200px still scans instantly —
-     a UPI QR carries very little data — and gives back ~50px. */
-  .pay-qr {
-    margin: 12px 0 2px;
-  }
-
-  .pay-qr img {
-    width: 200px;
-    padding: 10px;
-    border-radius: 14px;
-  }
-
+  /* ---- Step 4: contact fallback + acknowledgement ---- */
   .copy-field {
     padding: 10px 12px;
     margin-top: 8px;
     border-radius: 12px;
   }
 
-  /* Compact enough that the UPI ID beside it keeps most of the row. Stacking the
-     button under the value (the previous fix for a long UPI ID) read fine but
-     cost ~30px per row, across three rows in the flow — the ID is allowed to
-     wrap to a second line instead. */
+  /* Compact enough that the value beside it keeps most of the row. Stacking the
+     button under the value read fine but cost ~30px per row — the value is
+     allowed to wrap to a second line instead. */
   .copy-btn {
     padding: 8px 12px;
     font-size: 12px;
-  }
-
-  .pay-divider {
-    margin: 14px 0 10px;
   }
 
   /* Two buttons, kept side by side: stacking them cost ~54px on both the pay and

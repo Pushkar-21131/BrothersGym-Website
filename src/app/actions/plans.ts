@@ -5,8 +5,46 @@ import { membershipPlans } from "@/db/schema";
 import { eq, and, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { assertOwner } from "@/lib/auth-check";
-import { getBranchScope } from "@/lib/branch";
+import { getBranchScope, isBranchInScope } from "@/lib/branch";
 import { sanitizeError } from "@/lib/errors";
+
+/**
+ * Spelled out rather than inferred. Both mutating actions mix a named
+ * `{ error: string }` from assertPlanInScope with fresh object literals, and
+ * what TypeScript infers from that mixture is not stable enough for the client
+ * to narrow — the toast call ends up seeing `string | undefined`. Declaring it
+ * makes `if (r.error)` mean what it reads like at the call site.
+ */
+export type PlanActionResult =
+  | { error: string; success?: undefined }
+  | { success: true; error?: undefined };
+
+/**
+ * Confirm a plan exists AND belongs to a branch the caller may touch.
+ *
+ * `assertOwner()` alone is not enough here: prices and plan names are per
+ * branch (membershipPlans.branchId), and with a separate owner per gym "is an
+ * owner" and "owns THIS plan" are different questions. Without this an NR owner
+ * could re-price an SP plan by guessing its id.
+ *
+ * Returns the same message for "no such plan" as for "another branch's plan" so
+ * the other gym's plan ids cannot be enumerated by probing.
+ */
+async function assertPlanInScope(id: number): Promise<{ error: string } | null> {
+  if (!Number.isInteger(id) || id <= 0) return { error: "Plan not found." };
+
+  const rows = await db
+    .select({ branchId: membershipPlans.branchId })
+    .from(membershipPlans)
+    .where(eq(membershipPlans.id, id))
+    .limit(1);
+
+  if (rows.length === 0) return { error: "Plan not found." };
+  if (!(await isBranchInScope(rows[0].branchId))) {
+    return { error: "Plan not found." };
+  }
+  return null;
+}
 
 // ===== LIST PLANS (branch-scoped) =====
 export async function listPlansAction() {
@@ -29,7 +67,10 @@ export async function listPlansAction() {
 }
 
 // ===== UPDATE PLAN =====
-export async function updatePlanAction(id: number, formData: FormData) {
+export async function updatePlanAction(
+  id: number,
+  formData: FormData
+): Promise<PlanActionResult> {
   try {
     await assertOwner();
   } catch {
@@ -49,6 +90,9 @@ export async function updatePlanAction(id: number, formData: FormData) {
   }
 
   try {
+    const outOfScope = await assertPlanInScope(id);
+    if (outOfScope) return outOfScope;
+
     await db
       .update(membershipPlans)
       .set({
@@ -71,7 +115,10 @@ export async function updatePlanAction(id: number, formData: FormData) {
 }
 
 // ===== TOGGLE PLAN ACTIVE STATUS =====
-export async function togglePlanActiveAction(id: number, isActive: boolean) {
+export async function togglePlanActiveAction(
+  id: number,
+  isActive: boolean
+): Promise<PlanActionResult> {
   try {
     await assertOwner();
   } catch {
@@ -79,6 +126,9 @@ export async function togglePlanActiveAction(id: number, isActive: boolean) {
   }
 
   try {
+    const outOfScope = await assertPlanInScope(id);
+    if (outOfScope) return outOfScope;
+
     await db
       .update(membershipPlans)
       .set({ isActive })

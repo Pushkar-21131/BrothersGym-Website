@@ -190,5 +190,13 @@ export const config = {
   // analyzed at build time). Middleware runs on every request EXCEPT API
   // routes, Next internals, the static asset folders, and any path ending in a
   // file extension — so the webhook and static files are untouched.
-  matcher: ["/((?!api/|_next/|favicon.ico|images/|videos/|.*\\.[^/]+$).*)"],
+  //
+  // `monitoring` is Sentry's tunnel endpoint (tunnelRoute in next.config.ts).
+  // Error reports are unauthenticated POSTs that carry no session, so running
+  // them through session verification would be pure overhead — and an error
+  // report must never depend on auth working, since broken auth is exactly the
+  // kind of failure it needs to deliver.
+  matcher: [
+    "/((?!api/|monitoring|_next/|favicon.ico|images/|videos/|.*\\.[^/]+$).*)",
+  ],
 };

@@ -8,10 +8,10 @@ import {
   verifyOnlinePayment,
   lookupMemberSecure,
   getPublicPlansForBranch,
-  createManualJoinRequest,
-  submitManualPaymentClaim,
+  createJoinLead,
 } from "@/app/actions/payments";
 import { buildWhatsAppLink } from "@/lib/whatsapp";
+import { CHECKOUT_LOGO_DATA_URI } from "@/lib/checkout-logo";
 
 declare global {
   interface Window {
@@ -47,9 +47,12 @@ type VerifiedMember = {
   lastPlan: string | null;
 };
 
-// Everything the pay-by-UPI + acknowledgement screens need, returned by
-// createManualJoinRequest.
-type PayInfo = {
+// Everything the fallback contact screen needs, returned by createJoinLead.
+//
+// No UPI fields, no QR, no payable amount to transfer anywhere: on this path the
+// member pays the owner directly, off the website entirely. What they get is a
+// reference to quote and two ways to reach the gym.
+type LeadInfo = {
   joinId: number;
   reference: string;
   amount: number;
@@ -57,25 +60,51 @@ type PayInfo = {
   planDurationDays: number;
   branchName: string;
   branchPhone: string | null;
-  upiConfigured: boolean;
-  upiId: string | null;
-  payeeName: string;
-  upiString: string | null;
-  qrDataUrl: string | null;
+  branchAddress: string;
   email: string | null;
   isRenewal: boolean;
+  phone: string;
+  /** Their own name — the owner needs to know who they're calling. */
+  memberName: string;
+  /**
+   * Why they landed here, which is the only thing that changes on the screen:
+   *   off        online payment is switched off for the whole site
+   *   failed     the gateway couldn't start, or wouldn't open
+   *   dismissed  they closed the checkout without paying
+   *
+   * "dismissed" is the one case where the member chose this, so it must not read
+   * like an apology for a broken website.
+   */
+  reason: "off" | "failed" | "dismissed";
+};
+
+/** What the gateway hands back once a payment is captured and verified. */
+type PaidInfo = {
+  gymId: number;
+  expiry: string;
+  amount: number;
+  memberName: string;
+  planName?: string;
+  branchName: string;
+  isRenewal: boolean;
+  /** The address the confirmation went to, or null when none was sent. */
+  emailedTo: string | null;
 };
 
 export default function JoinPlansClient({
   initialBranches,
-  paymentMode = "manual",
+  paymentMode = "razorpay",
 }: {
   initialBranches: Branch[];
-  paymentMode?: "manual" | "razorpay";
+  paymentMode?: "razorpay" | "contact";
 }) {
-  // Steps 1–3 are the funnel (branch → plan → details). 4 = pay by UPI,
-  // 5 = acknowledgement. Steps 4/5 only ever show in manual mode; the Razorpay
-  // path opens the gateway overlay from step 3 and never advances the step.
+  // Steps 1–3 are the funnel (branch → plan → details). 4 = contact the gym
+  // (online payment didn't happen), 5 = paid and confirmed.
+  //
+  // Only ONE of 4 and 5 is ever reachable for a given attempt, and which one is
+  // decided by whether money moved: the gateway's success handler jumps to 5,
+  // every way of not paying lands on 4. Step 4 no longer takes any payment, so
+  // there is no path from 4 to 5.
   const [step, setStep] = useState<1 | 2 | 3 | 4 | 5>(1);
   const [selectedBranch, setSelectedBranch] = useState<Branch | null>(null);
   const [memberType, setMemberType] = useState<"new" | "renewal">("new");
@@ -93,11 +122,10 @@ export default function JoinPlansClient({
   const [formError, setFormError] = useState<string>("");
   const [consentChecked, setConsentChecked] = useState(false);
 
-  // Manual UPI flow state.
-  const [payInfo, setPayInfo] = useState<PayInfo | null>(null);
-  const [utr, setUtr] = useState("");
-  const [claimLoading, setClaimLoading] = useState(false);
-  const [alreadyConfirmed, setAlreadyConfirmed] = useState(false);
+  // Fallback (contact-the-owner) flow state.
+  const [leadInfo, setLeadInfo] = useState<LeadInfo | null>(null);
+  // Set when the gateway captured the payment — this is what step 5 renders.
+  const [paidInfo, setPaidInfo] = useState<PaidInfo | null>(null);
 
   // Guard against a stale response overwriting plans after the user switches
   // branch (or navigates away) mid-fetch. The initial reset is an intentional
@@ -185,8 +213,8 @@ export default function JoinPlansClient({
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
-  // Full reset back to the start — used by "start a new request" on the pay and
-  // acknowledgement screens.
+  // Full reset back to the start — used by "start again" on the contact and
+  // success screens.
   function resetAll() {
     setSelectedBranch(null);
     setSelectedPlan(null);
@@ -195,9 +223,8 @@ export default function JoinPlansClient({
     setMemberType("new");
     setSearchGymId("");
     setSearchPhone("");
-    setPayInfo(null);
-    setUtr("");
-    setAlreadyConfirmed(false);
+    setLeadInfo(null);
+    setPaidInfo(null);
     setConsentChecked(false);
     setFormError("");
     setStep(1);
@@ -250,15 +277,92 @@ export default function JoinPlansClient({
     }
   }
 
-  // Pre-filled WhatsApp message the member sends the owner to nudge a
-  // confirmation. Only rendered when the branch has a phone number.
-  function ownerWhatsAppLink(info: PayInfo): string {
+  // Pre-filled WhatsApp message the member sends the gym.
+  //
+  // The direction matters: the MEMBER sends it, from their own WhatsApp, by
+  // tapping a wa.me link. Sending WhatsApp *from* the gym automatically would
+  // mean a business API, a dedicated number the owner can't use in the normal
+  // app, and a monthly bill — none of which fits a gym on a free tier. Inverting
+  // it costs nothing, needs no setup from the owner, and lands in the one app he
+  // actually watches.
+  //
+  // It no longer claims a payment. The old wording — "I've paid ₹X via UPI and
+  // uploaded my payment screenshot" — described a flow that no longer exists,
+  // and on this path the member has paid nothing at all. Saying otherwise would
+  // put the owner in exactly the argument this rewrite exists to prevent.
+  function ownerWhatsAppLink(info: LeadInfo): string {
     const msg =
-      `Hi Brothers Gym! I've just paid ₹${info.amount} for the ${info.planName} plan` +
-      `${info.branchName ? ` at ${info.branchName}` : ""} via UPI.\n\n` +
-      `Reference: ${info.reference}\n\n` +
-      `Please confirm my membership when you get a moment. Thank you! 🙏`;
+      `Hi Brothers Gym! I've filled the ${info.planName} ` +
+      `${info.isRenewal ? "renewal" : "membership"} form on your website` +
+      `${info.branchName ? ` for ${info.branchName}` : ""}, but I couldn't pay ` +
+      `online.\n\n` +
+      `Reference: ${info.reference}\n` +
+      `Name: ${info.memberName}\n` +
+      `Phone: ${info.phone}\n` +
+      `Amount: ₹${info.amount.toLocaleString("en-IN")}\n\n` +
+      `Please let me know how to pay. Thank you! 🙏`;
     return buildWhatsAppLink(info.branchPhone || "", msg);
+  }
+
+  /**
+   * Show the contact-the-owner screen for a join row that ALREADY exists.
+   *
+   * This is the case where the gateway got far enough to create the row and then
+   * stopped — checkout wouldn't open, or the member closed the modal without
+   * paying. It deliberately does not call createJoinLead: that would insert a
+   * second row and leave the owner two entries to chase for one person.
+   *
+   * No owner email fires here either, for the same reason — the alert already
+   * belongs to whichever write created the row. An abandoned checkout still
+   * shows up in the owner's Join Requests queue as `pending`.
+   */
+  function showContactScreen(info: LeadInfo) {
+    setLeadInfo(info);
+    goToStep(4);
+  }
+
+  /**
+   * Save the member's details as a lead, then show the contact screen.
+   *
+   * For the case where NO join row exists yet. Safe to call straight after a
+   * failed createOnlineJoinOrder: that action creates the Razorpay order before
+   * it inserts the join row (see src/app/actions/payments.ts), so an order
+   * failure leaves nothing behind and this writes the one and only row.
+   *
+   * createJoinLead is what emails the owner, so this is also the point at which
+   * they learn someone is waiting for a call.
+   */
+  async function fallbackToContact(
+    formData: FormData,
+    reason: LeadInfo["reason"],
+    who: { phone: string; memberName: string }
+  ) {
+    const res = await createJoinLead(formData);
+
+    if ("error" in res) {
+      const msg =
+        res.error ||
+        "Couldn't save your details. Please call the gym and they'll sign you up.";
+      toast.error(msg);
+      setFormError(msg);
+      return;
+    }
+
+    showContactScreen({
+      joinId: res.joinId,
+      reference: res.reference,
+      amount: res.amount,
+      planName: res.planName,
+      planDurationDays: res.planDurationDays,
+      branchName: res.branchName,
+      branchPhone: res.branchPhone,
+      branchAddress: res.branchAddress,
+      email: res.email,
+      isRenewal: res.isRenewal,
+      phone: who.phone,
+      memberName: who.memberName,
+      reason,
+    });
   }
 
   async function handleContinue(e: React.FormEvent<HTMLFormElement>) {
@@ -291,139 +395,170 @@ export default function JoinPlansClient({
       formData.set("existingMemberId", String(verified.id));
     }
 
-    // ===== MANUAL UPI FLOW (default) =====
-    // Create the pending request, then move to the pay-by-UPI screen. No
-    // external gateway, no script — the member pays out of band and the owner
-    // confirms.
-    if (paymentMode === "manual") {
+    // The two fields the contact screen and its WhatsApp message need, read here
+    // because the server's reply carries neither back (the phone number is
+    // masked everywhere it is returned, and it is the number the owner has to
+    // dial).
+    const who = {
+      phone: String(formData.get("contactNumber") || "").trim(),
+      memberName: String(formData.get("name") || "").trim(),
+    };
+
+    // ===== NO GATEWAY AT ALL (PAYMENT_MODE=contact) =====
+    // The site-wide kill switch. checkout.js was never loaded and the CSP does
+    // not allow Razorpay's hosts, so there is nothing to attempt — straight to
+    // the lead queue. This is the mode to deploy on while KYC is pending.
+    if (paymentMode === "contact") {
       setLoading(true);
-      const res = await createManualJoinRequest(formData);
+      await fallbackToContact(formData, "off", who);
       setLoading(false);
-
-      if ("error" in res) {
-        const msg = res.error || "Could not start the payment step.";
-        toast.error(msg);
-        setFormError(msg);
-        return;
-      }
-
-      setPayInfo({
-        joinId: res.joinId,
-        reference: res.reference,
-        amount: res.amount,
-        planName: res.planName,
-        planDurationDays: res.planDurationDays,
-        branchName: res.branchName,
-        branchPhone: res.branchPhone,
-        upiConfigured: res.upiConfigured,
-        upiId: res.upiId,
-        payeeName: res.payeeName,
-        upiString: res.upiString,
-        qrDataUrl: res.qrDataUrl,
-        email: res.email,
-        isRenewal: res.isRenewal,
-      });
-      setUtr("");
-      setAlreadyConfirmed(false);
-      goToStep(4);
       return;
     }
 
-    // ===== RAZORPAY FLOW (parked; PAYMENT_MODE=razorpay) =====
+    // ===== THE GATEWAY, WITH A LANDING PAD =====
+    // Razorpay is the payment method. Three things can still stop a member
+    // paying, and none of them may end in a dead end that throws away a filled
+    // form:
+    //
+    //   1. checkout.js never loaded        — blocked, offline, ad-blocker
+    //   2. the order call failed           — keys unset, Razorpay down
+    //   3. the member closed the modal     — changed their mind, card declined
+    //
+    // (1) and (2) happen before any join row exists, so they save one via
+    // createJoinLead. (3) happens after, so it reuses the row the order already
+    // created. That split is the whole reason showContactScreen and
+    // fallbackToContact are separate functions.
+    if (typeof window.Razorpay !== "function") {
+      setLoading(true);
+      await fallbackToContact(formData, "failed", who);
+      setLoading(false);
+      return;
+    }
+
     setLoading(true);
     const order = await createOnlineJoinOrder(formData);
-    setLoading(false);
 
     if (order.error || !order.orderId) {
-      toast.error(order.error || "Could not start payment");
-      setFormError(order.error || "Could not start payment");
+      await fallbackToContact(formData, "failed", who);
+      setLoading(false);
       return;
     }
+    setLoading(false);
 
-    const rzp = new window.Razorpay({
-      key: order.key,
-      amount: order.amount,
-      currency: order.currency,
-      name: `Brothers Gym - ${order.branchName}`,
-      description: order.planName,
-      order_id: order.orderId,
-      prefill: {
-        name: order.customer?.name,
-        email: order.customer?.email,
-        contact: order.customer?.contact,
-      },
-      theme: { color: "#F5A623" },
-      handler: async function (response: any) {
-        const result = await verifyOnlinePayment({
-          joinId: order.joinId!,
-          razorpay_order_id: response.razorpay_order_id,
-          razorpay_payment_id: response.razorpay_payment_id,
-          razorpay_signature: response.razorpay_signature,
-        });
+    // The landing pad for cases (3) and (4-in-practice: Razorpay's own script
+    // throwing on open). Built from the order response so it describes the row
+    // that already exists rather than creating another.
+    const existingRow: LeadInfo = {
+      joinId: order.joinId!,
+      reference: order.reference!,
+      amount: order.planPrice!,
+      planName: order.planName || selectedPlan.name,
+      planDurationDays: order.planDurationDays ?? selectedPlan.durationDays,
+      branchName: order.branchName || selectedBranch.name,
+      branchPhone: order.branchPhone ?? selectedBranch.phone,
+      branchAddress: order.branchAddress || selectedBranch.address,
+      email: order.customer?.email || null,
+      isRenewal: Boolean(order.isRenewal),
+      phone: who.phone,
+      memberName: who.memberName,
+      reason: "dismissed",
+    };
 
-        if (result.error) {
-          toast.error(result.error);
-          return;
-        }
+    try {
+      const rzp = new window.Razorpay({
+        key: order.key,
+        amount: order.amount,
+        currency: order.currency,
+        name: `Brothers Gym - ${order.branchName}`,
+        description: order.planName,
+        // Razorpay draws a placeholder tile with the first letter of `name` in
+        // it — a bare "B" — whenever it cannot load this image. Checkout runs in
+        // an iframe on Razorpay's own HTTPS origin and fetches the image from
+        // there, so a URL has to be publicly reachable over HTTPS: on localhost
+        // it never is, and an SVG is ignored regardless because the tile is
+        // rasterised. An inline base64 PNG sidesteps the network entirely and
+        // behaves the same locally, on deploy previews and in production.
+        image: CHECKOUT_LOGO_DATA_URI,
+        order_id: order.orderId,
+        prefill: {
+          name: order.customer?.name,
+          email: order.customer?.email,
+          contact: order.customer?.contact,
+        },
+        theme: { color: "#F5A623" },
+        // Razorpay calls this when the member dismisses the checkout overlay
+        // without completing payment. Without it the member is dropped back onto
+        // the form they just filled with no idea what happened to it, and the
+        // owner has a pending row nobody explains. Note it also fires *after* a
+        // successful payment on some flows, so it must not clobber step 5 —
+        // hence the paidInfo guard.
+        modal: {
+          ondismiss: function () {
+            setPaidInfo((paid) => {
+              if (!paid) showContactScreen(existingRow);
+              return paid;
+            });
+          },
+        },
+        handler: async function (response: any) {
+          const result = await verifyOnlinePayment({
+            joinId: order.joinId!,
+            razorpay_order_id: response.razorpay_order_id,
+            razorpay_payment_id: response.razorpay_payment_id,
+            razorpay_signature: response.razorpay_signature,
+          });
 
-        const message = encodeURIComponent(
-          `🏋️ *Brothers Gym - Membership Confirmed* 🏋️\n\n` +
-            `Hi ${result.memberName},\n\n` +
-            `Your payment was successful!\n\n` +
-            `📍 *Branch:* ${selectedBranch.name}\n` +
-            `📌 *Gym ID:* #${result.gymId}\n` +
-            `📌 *Plan:* ${result.planName}\n` +
-            `📌 *Amount Paid:* ₹${result.amount}\n` +
-            `📌 *Valid Till:* ${result.expiry}\n\n` +
-            `Thank you for choosing Brothers Gym!\n` +
-            `See you at the gym! 💪`
-        );
-        const waNumber = result.contactNumber?.replace(/\D/g, "") || "";
-        const waLink = `https://wa.me/91${waNumber}?text=${message}`;
+          if (result.success !== true) {
+            // The money may well have left their account — the webhook is the
+            // safety net that grants the membership regardless of what happened
+            // in this browser, so the one thing not to tell them is "pay again".
+            toast.error(result.error);
+            setFormError(result.error);
+            return;
+          }
 
-        toast.success(`Payment successful! Gym ID #${result.gymId}`);
+          // ===== ON-SCREEN SUCCESS, NOT A window.confirm =====
+          // This used to fire a native confirm() and then window.open() a wa.me
+          // link — built from result.contactNumber, which is the MEMBER's own
+          // number, so it opened a chat with themselves. It was also inside an
+          // async callback, which is precisely what popup blockers eat, and it
+          // left no copy of the Gym ID anywhere on the page. Now the Gym ID is
+          // rendered on step 5, and the email (when they gave an address) is
+          // sent server-side by verifyOnlinePayment.
+          setPaidInfo({
+            gymId: result.gymId,
+            expiry: result.expiry,
+            amount: result.amount,
+            memberName: result.memberName,
+            planName: result.planName,
+            branchName: order.branchName || selectedBranch.name,
+            isRenewal: memberType === "renewal",
+            emailedTo: result.emailedTo ?? null,
+          });
+          toast.success(`Payment successful! Gym ID #${result.gymId}`);
+          goToStep(5);
+        },
+      });
 
-        const openWhatsApp = window.confirm(
-          `✅ Welcome to Brothers Gym!\n\n` +
-            `Branch: ${selectedBranch.name}\n` +
-            `Gym ID: #${result.gymId}\n` +
-            `Plan: ${result.planName}\n` +
-            `Valid till: ${result.expiry}\n` +
-            `Amount: ₹${result.amount}\n\n` +
-            `Click OK to open WhatsApp for your receipt.`
-        );
-        if (openWhatsApp) window.open(waLink, "_blank");
-      },
-    });
-
-    rzp.open();
-  }
-
-  async function handleClaim() {
-    if (!payInfo) return;
-    setClaimLoading(true);
-    const res = await submitManualPaymentClaim({
-      joinId: payInfo.joinId,
-      upiReference: utr.trim() || undefined,
-    });
-    setClaimLoading(false);
-
-    if ("error" in res) {
-      toast.error(res.error || "Could not record your payment. Please try again.");
-      return;
+      rzp.open();
+    } catch (err) {
+      // The script loaded but would not run — a broken build served from their
+      // ISP's cache, an extension monkey-patching it, an old WebView. The row is
+      // already there, so send them to the contact screen rather than nowhere.
+      console.error("[Razorpay] checkout failed to open:", err);
+      showContactScreen({ ...existingRow, reason: "failed" });
     }
-
-    setAlreadyConfirmed("alreadyConfirmed" in res && res.alreadyConfirmed === true);
-    goToStep(5);
   }
 
   const renewalBlocked = memberType === "renewal" && !verified;
 
   return (
     <>
-      {/* The gateway script and its external connection are only needed for the
-          parked Razorpay path; manual mode ships no third-party JS. */}
-      {paymentMode === "razorpay" && (
+      {/* Razorpay's checkout script. Skipped entirely under PAYMENT_MODE=contact,
+          which is the only mode that ships no third-party JS — and the only one
+          where next.config.ts leaves Razorpay's hosts out of the CSP, so loading
+          it there would be blocked anyway. */}
+      {paymentMode !== "contact" && (
         <Script src="https://checkout.razorpay.com/v1/checkout.js" />
       )}
 
@@ -448,36 +583,38 @@ export default function JoinPlansClient({
             Join <span className="highlight">Brothers Gym</span> Online
           </h1>
           <p>
-            {paymentMode === "razorpay"
-              ? "Pick your preferred branch and plan. Pay securely via UPI, Cards or Netbanking."
-              : "Pick your preferred branch and plan. Pay by UPI — your membership is confirmed once the gym receives it."}
+            {paymentMode === "contact"
+              ? "Pick your preferred branch and plan, fill in your details, and the gym will call you to take the payment."
+              : "Pick your preferred branch and plan. Pay securely via UPI, Cards or Netbanking."}
           </p>
-          <div className="payment-icons">
-            <div className="payment-icon">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <rect x="1" y="4" width="22" height="16" rx="2" />
-                <line x1="1" y1="10" x2="23" y2="10" />
-              </svg>
-              UPI
+          {/* Advertising payment methods the site cannot actually take is how you
+              get an argument at the counter, so the whole row goes when the
+              gateway is off — including the UPI badge, which used to stay up and
+              promise a UPI flow that no longer exists. */}
+          {paymentMode !== "contact" && (
+            <div className="payment-icons">
+              <div className="payment-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <rect x="1" y="4" width="22" height="16" rx="2" />
+                  <line x1="1" y1="10" x2="23" y2="10" />
+                </svg>
+                UPI
+              </div>
+              <div className="payment-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <rect x="1" y="4" width="22" height="16" rx="2" />
+                  <line x1="1" y1="10" x2="23" y2="10" />
+                </svg>
+                Cards
+              </div>
+              <div className="payment-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M3 21h18M3 10h18M5 6l7-3 7 3M4 10v11M20 10v11M8 14v3M12 14v3M16 14v3" />
+                </svg>
+                Netbanking
+              </div>
             </div>
-            {paymentMode === "razorpay" && (
-              <>
-                <div className="payment-icon">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <rect x="1" y="4" width="22" height="16" rx="2" />
-                    <line x1="1" y1="10" x2="23" y2="10" />
-                  </svg>
-                  Cards
-                </div>
-                <div className="payment-icon">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M3 21h18M3 10h18M5 6l7-3 7 3M4 10v11M20 10v11M8 14v3M12 14v3M16 14v3" />
-                  </svg>
-                  Netbanking
-                </div>
-              </>
-            )}
-          </div>
+          )}
         </div>
 
         {/* PROGRESS BAR — only for the funnel (steps 1–3) */}
@@ -1018,7 +1155,7 @@ export default function JoinPlansClient({
                     <p className="trust-sub">256-bit HTTPS</p>
                   </div>
                 </div>
-                {paymentMode === "razorpay" ? (
+                {paymentMode !== "contact" ? (
                   <>
                     <div className="trust-item">
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
@@ -1049,8 +1186,8 @@ export default function JoinPlansClient({
                         <line x1="1" y1="10" x2="23" y2="10" />
                       </svg>
                       <div>
-                        <p className="trust-title">Pay by UPI</p>
-                        <p className="trust-sub">Any UPI app</p>
+                        <p className="trust-title">Pay at the gym</p>
+                        <p className="trust-sub">Cash or UPI, in person</p>
                       </div>
                     </div>
                     <div className="trust-item">
@@ -1059,8 +1196,8 @@ export default function JoinPlansClient({
                         <polyline points="9 12 11 14 15 10" />
                       </svg>
                       <div>
-                        <p className="trust-title">Owner Confirmed</p>
-                        <p className="trust-sub">Real human check</p>
+                        <p className="trust-title">Nothing charged</p>
+                        <p className="trust-sub">Not a rupee online</p>
                       </div>
                     </div>
                   </>
@@ -1092,7 +1229,7 @@ export default function JoinPlansClient({
                     >
                       <path d="M21 12a9 9 0 11-6.219-8.56" />
                     </svg>
-                    {paymentMode === "razorpay" ? "Processing Payment..." : "Setting up payment..."}
+                    {paymentMode === "contact" ? "Saving your details..." : "Opening payment..."}
                   </>
                 ) : (
                   <>
@@ -1100,7 +1237,7 @@ export default function JoinPlansClient({
                       <rect x="1" y="4" width="22" height="16" rx="2" />
                       <line x1="1" y1="10" x2="23" y2="10" />
                     </svg>
-                    {paymentMode === "razorpay" ? "Pay & Join Now" : "Continue to Payment"}
+                    {paymentMode === "contact" ? "Send My Details" : "Pay & Join Now"}
                   </>
                 )}
               </button>
@@ -1110,201 +1247,87 @@ export default function JoinPlansClient({
                   <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
                   <path d="M7 11V7a5 5 0 0110 0v4" />
                 </svg>
-                {paymentMode === "razorpay"
-                  ? "Your payment is processed by Razorpay. We never see or store card/UPI details."
-                  : "You pay the gym's UPI directly from your own app. We never see or store your UPI PIN or bank details."}
+                {paymentMode === "contact"
+                  ? "No payment is taken on this page. Your details go to the gym and you pay them directly."
+                  : "Your payment is processed by Razorpay. We never see or store card/UPI details."}
               </div>
             </form>
           </div>
         )}
 
-        {/* STEP 4: PAY BY UPI (manual mode) */}
-        {step === 4 && payInfo && (
+        {/* ==================================================================
+            STEP 4 — CONTACT THE GYM
+
+            The only screen a member sees when money did NOT move online. There
+            is deliberately nothing here to pay with: no UPI ID, no QR code, no
+            "transfer ₹X to this account", and no way to tell us you've paid.
+            That whole apparatus is what created the argument this rewrite
+            removes — a member insisting they'd transferred the money and an
+            owner with no way to check.
+
+            What it does give them: the reference, the branch's phone and
+            WhatsApp, and where to walk in. The owner already has an email about
+            them (createJoinLead sends it) and their row in Join Requests.
+            ================================================================== */}
+        {step === 4 && leadInfo && (
           <div>
             <div className="selected-branch-banner">
               <div className="selected-branch-info">
                 <div className="branch-icon">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <rect x="1" y="4" width="22" height="16" rx="2" />
-                    <line x1="1" y1="10" x2="23" y2="10" />
+                    <path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72 12.84 12.84 0 00.7 2.81 2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45 12.84 12.84 0 002.81.7A2 2 0 0122 16.92z" />
                   </svg>
                 </div>
                 <div>
-                  <div className="selected-branch-label">Almost done — pay to confirm</div>
+                  <div className="selected-branch-label">
+                    {leadInfo.reason === "dismissed"
+                      ? "Payment not completed"
+                      : "Details saved — one call to finish"}
+                  </div>
                   <div className="selected-branch-name">
-                    {payInfo.branchName || "Brothers Gym"}
+                    {leadInfo.branchName || "Brothers Gym"}
                   </div>
                 </div>
               </div>
             </div>
 
-            {/* Payment summary */}
-            <div className="order-summary">
-              <div className="order-title">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z" />
-                  <line x1="3" y1="6" x2="21" y2="6" />
-                  <path d="M16 10a4 4 0 01-8 0" />
-                </svg>
-                Payment Summary
-              </div>
-              <div className="order-row">
-                <span className="label">Plan</span>
-                <span className="value">{payInfo.planName}</span>
-              </div>
-              <div className="order-row">
-                <span className="label">Duration</span>
-                <span className="value">{payInfo.planDurationDays} days</span>
-              </div>
-              <div className="order-row">
-                <span className="label">{payInfo.isRenewal ? "Renewal" : "New member"}</span>
-                <span className="value">{payInfo.reference}</span>
-              </div>
-              <div className="order-row total">
-                <span className="label">Amount to Pay</span>
-                <span className="value">₹{payInfo.amount.toLocaleString("en-IN")}</span>
-              </div>
+            {/* What happens next, and the one thing that must be unmissable:
+                nothing was charged. A member who thinks they've paid stops
+                expecting the call, then turns up believing they're a member. */}
+            <div className="pay-not-configured">
+              <strong>
+                {leadInfo.reason === "dismissed"
+                  ? "No payment was taken"
+                  : "Online payment isn't available"}
+              </strong>
+              <p>
+                {leadInfo.reason === "off"
+                  ? "Card and UPI payments aren't switched on for this website yet, so "
+                  : leadInfo.reason === "dismissed"
+                    ? "You closed the payment window before it finished, so "
+                    : "Something went wrong with the payment gateway, so "}
+                <strong style={{ display: "inline", fontSize: "inherit" }}>
+                  nothing has been charged
+                </strong>
+                {" — not a rupee. Your details are saved, so you don't have to fill "}
+                the form again. Call or WhatsApp the gym, pay them directly, and
+                they&apos;ll activate your membership straight away.
+              </p>
+              {leadInfo.branchAddress && (
+                <p style={{ marginBottom: 0 }}>
+                  Or just walk in: <strong style={{ display: "inline", fontSize: "inherit" }}>
+                    {leadInfo.branchAddress}
+                  </strong>
+                </p>
+              )}
             </div>
 
-            {payInfo.upiConfigured ? (
-              <div className="pay-upi-card">
-                <div className="order-title" style={{ justifyContent: "center" }}>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <rect x="3" y="3" width="7" height="7" />
-                    <rect x="14" y="3" width="7" height="7" />
-                    <rect x="3" y="14" width="7" height="7" />
-                    <line x1="14" y1="14" x2="14" y2="21" />
-                    <line x1="18" y1="14" x2="21" y2="14" />
-                    <line x1="18" y1="18" x2="21" y2="18" />
-                    <line x1="18" y1="21" x2="21" y2="21" />
-                  </svg>
-                  Pay ₹{payInfo.amount.toLocaleString("en-IN")} by UPI
-                </div>
-                <p className="section-subtitle" style={{ textAlign: "center" }}>
-                  On your phone, tap the button below to open your UPI app. On a
-                  computer, scan the QR with any UPI app (GPay, PhonePe, Paytm…).
-                  The amount is already filled in.
-                </p>
-
-                {payInfo.qrDataUrl && (
-                  <div className="pay-qr">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={payInfo.qrDataUrl}
-                      alt={`UPI QR to pay ₹${payInfo.amount} to ${payInfo.payeeName}`}
-                      width={240}
-                      height={240}
-                    />
-                  </div>
-                )}
-
-                {payInfo.upiString && (
-                  <a className="submit-btn" href={payInfo.upiString}>
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <rect x="5" y="2" width="14" height="20" rx="2" ry="2" />
-                      <line x1="12" y1="18" x2="12" y2="18" />
-                    </svg>
-                    Open in UPI app
-                  </a>
-                )}
-
-                {payInfo.upiId && (
-                  <div className="copy-field">
-                    <div className="copy-field-main">
-                      <div className="copy-field-label">
-                        UPI ID{payInfo.payeeName ? ` — ${payInfo.payeeName}` : ""}
-                      </div>
-                      <div className="copy-field-value">{payInfo.upiId}</div>
-                    </div>
-                    <button
-                      type="button"
-                      className="copy-btn"
-                      onClick={() => copyText(payInfo.upiId!, "UPI ID")}
-                    >
-                      Copy
-                    </button>
-                  </div>
-                )}
-
-                <div className="copy-field">
-                  <div className="copy-field-main">
-                    <div className="copy-field-label">Your reference — keep this</div>
-                    <div className="copy-field-value">{payInfo.reference}</div>
-                  </div>
-                  <button
-                    type="button"
-                    className="copy-btn"
-                    onClick={() => copyText(payInfo.reference, "Reference")}
-                  >
-                    Copy
-                  </button>
-                </div>
-
-                <div className="pay-divider">
-                  <span>After you&apos;ve paid</span>
-                </div>
-
-                <div className="form-group">
-                  <label className="form-label" htmlFor="utr-input">
-                    UPI Reference / UTR number <span className="optional">(optional)</span>
-                  </label>
-                  <input
-                    id="utr-input"
-                    type="text"
-                    className="form-input"
-                    placeholder="12-digit number shown in your UPI app"
-                    value={utr}
-                    onChange={(e) => setUtr(e.target.value)}
-                    inputMode="numeric"
-                    maxLength={32}
-                  />
-                </div>
-
-                <button
-                  type="button"
-                  className="submit-btn"
-                  onClick={handleClaim}
-                  disabled={claimLoading}
-                >
-                  {claimLoading ? (
-                    <>
-                      <svg
-                        width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
-                        style={{ animation: "spin 1s linear infinite" }}
-                      >
-                        <path d="M21 12a9 9 0 11-6.219-8.56" />
-                      </svg>
-                      Saving…
-                    </>
-                  ) : (
-                    <>
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
-                        <polyline points="20 6 9 17 4 12" />
-                      </svg>
-                      I&apos;ve paid
-                    </>
-                  )}
-                </button>
-                <p className="secure-note" style={{ marginTop: 12 }}>
-                  The UTR is optional — you can skip it. The gym confirms from
-                  their own UPI record.
-                </p>
-              </div>
-            ) : (
-              <div className="pay-not-configured">
-                <strong>Online payment isn&apos;t set up for this branch yet.</strong>
-                <p>
-                  Please call or WhatsApp the gym to pay and activate your
-                  membership. Keep this reference handy:
-                </p>
-                <div className="reference-badge">{payInfo.reference}</div>
-              </div>
-            )}
-
-            {/* Ask the owner */}
-            {payInfo.branchPhone && (
+            {/* Two ways to reach the gym. The WhatsApp message is pre-filled with
+                the reference, their name and the amount, so the owner can act on
+                it without asking three follow-up questions. */}
+            {(leadInfo.branchPhone || "").trim() ? (
               <div className="owner-actions">
-                <a className="owner-btn" href={`tel:${payInfo.branchPhone}`}>
+                <a className="owner-btn" href={`tel:${leadInfo.branchPhone}`}>
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                     <path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72 12.84 12.84 0 00.7 2.81 2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45 12.84 12.84 0 002.81.7A2 2 0 0122 16.92z" />
                   </svg>
@@ -1314,7 +1337,7 @@ export default function JoinPlansClient({
                 </a>
                 <a
                   className="owner-btn whatsapp"
-                  href={ownerWhatsAppLink(payInfo)}
+                  href={ownerWhatsAppLink(leadInfo)}
                   target="_blank"
                   rel="noopener noreferrer"
                 >
@@ -1326,7 +1349,97 @@ export default function JoinPlansClient({
                   </span>
                 </a>
               </div>
+            ) : (
+              // No number on the branch record. Saying "call the gym" with
+              // nothing to call would be worse than admitting we can't help.
+              <div className="pay-not-configured">
+                <p style={{ marginBottom: 0 }}>
+                  We don&apos;t have a phone number on file for this branch. Please
+                  visit in person and quote your reference below — the gym already
+                  has your details.
+                </p>
+              </div>
             )}
+
+            {/* What they were signing up for, and what it will cost at the
+                counter. "at the gym" on the total is load-bearing: it is the
+                difference between a price and an instruction to transfer money. */}
+            <div className="order-summary">
+              <div className="order-title">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z" />
+                  <line x1="3" y1="6" x2="21" y2="6" />
+                  <path d="M16 10a4 4 0 01-8 0" />
+                </svg>
+                Your Request
+              </div>
+              <div className="order-row">
+                <span className="label">Name</span>
+                <span className="value">{leadInfo.memberName}</span>
+              </div>
+              <div className="order-row">
+                <span className="label">Plan</span>
+                <span className="value">{leadInfo.planName}</span>
+              </div>
+              <div className="order-row">
+                <span className="label">Duration</span>
+                <span className="value">{leadInfo.planDurationDays} days</span>
+              </div>
+              <div className="order-row">
+                <span className="label">
+                  {leadInfo.isRenewal ? "Renewal" : "New member"}
+                </span>
+                <span className="value">{leadInfo.reference}</span>
+              </div>
+              <div className="order-row total">
+                <span className="label">Pay at the gym</span>
+                <span className="value">
+                  ₹{leadInfo.amount.toLocaleString("en-IN")}
+                </span>
+              </div>
+            </div>
+
+            {/* The reference is how the owner finds this exact request in a queue
+                of them, so it gets its own badge rather than being buried in the
+                summary above. */}
+            <div className="ack-card">
+              <p className="ack-text" style={{ marginBottom: 14 }}>
+                Quote this when you speak to the gym
+              </p>
+              <div className="reference-badge">{leadInfo.reference}</div>
+              <div className="ack-ref">
+                <div className="copy-field">
+                  <div className="copy-field-main">
+                    <div className="copy-field-label">Your reference</div>
+                    <div className="copy-field-value">{leadInfo.reference}</div>
+                  </div>
+                  <button
+                    type="button"
+                    className="copy-btn"
+                    onClick={() => copyText(leadInfo.reference, "Reference")}
+                  >
+                    Copy
+                  </button>
+                </div>
+              </div>
+
+              {leadInfo.email && (
+                <p className="ack-text" style={{ marginTop: 14 }}>
+                  We&apos;ve sent a copy to <strong>{leadInfo.email}</strong>.
+                </p>
+              )}
+
+              <a
+                className="status-link"
+                href={`/join/status?ref=${encodeURIComponent(leadInfo.reference)}`}
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <circle cx="12" cy="12" r="10" />
+                  <polyline points="12 6 12 12 16 14" />
+                </svg>
+                Check my status
+              </a>
+            </div>
 
             <button type="button" className="pay-startover" onClick={resetAll}>
               Start a new request
@@ -1334,8 +1447,18 @@ export default function JoinPlansClient({
           </div>
         )}
 
-        {/* STEP 5: ACKNOWLEDGEMENT (manual mode) */}
-        {step === 5 && payInfo && (
+        {/* ==================================================================
+            STEP 5 — PAID AND ACTIVE
+
+            Only reachable from the gateway's success handler, i.e. money has
+            actually been captured and verified server-side. The Gym ID is the
+            one thing on this screen that matters: it is what they need to renew,
+            to sign in at the counter, and to prove who they are — so it is
+            rendered here, copyable, rather than living only in an email that may
+            never arrive (the sending domain isn't verified yet, and the address
+            is optional in the first place).
+            ================================================================== */}
+        {step === 5 && paidInfo && (
           <div>
             <div className="ack-card">
               <div className="ack-icon">
@@ -1344,72 +1467,96 @@ export default function JoinPlansClient({
                 </svg>
               </div>
               <div className="ack-title">
-                {alreadyConfirmed ? "You're all set! 🎉" : "Thanks — we've got it! 💪"}
+                {paidInfo.isRenewal ? "Renewed — you're all set! 💪" : "You're in! 💪"}
               </div>
               <p className="ack-text">
-                {alreadyConfirmed
-                  ? "Your membership is already confirmed. Check your status below for your Gym ID and validity."
-                  : "We've recorded your payment and notified the gym. Your Gym ID activates as soon as the owner confirms your payment — usually within a few hours."}
+                Payment received{paidInfo.amount ? ` — ₹${paidInfo.amount.toLocaleString("en-IN")}` : ""}
+                {paidInfo.branchName ? ` at ${paidInfo.branchName}` : ""}. Your
+                membership is active right now, nothing else to do.
               </p>
 
-              <div className="copy-field ack-ref">
-                <div className="copy-field-main">
-                  <div className="copy-field-label">Your reference</div>
-                  <div className="copy-field-value">{payInfo.reference}</div>
-                </div>
-                <button
-                  type="button"
-                  className="copy-btn"
-                  onClick={() => copyText(payInfo.reference, "Reference")}
-                >
-                  Copy
-                </button>
-              </div>
-
-              {payInfo.email && !alreadyConfirmed && (
-                <p className="ack-text" style={{ fontSize: 13 }}>
-                  We&apos;ll email your confirmation to <strong>{payInfo.email}</strong>{" "}
-                  once it&apos;s done.
+              {/* gymId can be 0 on the idempotent replay path (a double-submitted
+                  callback for a join whose member row we can't re-read). Showing
+                  "#0" would be worse than saying so. */}
+              {paidInfo.gymId > 0 ? (
+                <>
+                  <p className="ack-text" style={{ marginBottom: 14, marginTop: 18 }}>
+                    <strong>Save your Gym ID.</strong> You&apos;ll need it every time
+                    you renew.
+                  </p>
+                  <div className="reference-badge">#{paidInfo.gymId}</div>
+                  <div className="ack-ref">
+                    <div className="copy-field">
+                      <div className="copy-field-main">
+                        <div className="copy-field-label">Your Gym ID</div>
+                        <div className="copy-field-value">#{paidInfo.gymId}</div>
+                      </div>
+                      <button
+                        type="button"
+                        className="copy-btn"
+                        onClick={() => copyText(String(paidInfo.gymId), "Gym ID")}
+                      >
+                        Copy
+                      </button>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <p className="ack-text" style={{ marginTop: 18 }}>
+                  This payment was already processed. Ask the gym for your Gym ID
+                  when you next visit — your membership is active either way.
                 </p>
               )}
 
-              <a
-                className="status-link"
-                href={`/join/status?ref=${encodeURIComponent(payInfo.reference)}`}
-              >
-                Check my status
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <line x1="5" y1="12" x2="19" y2="12" />
-                  <polyline points="12 5 19 12 12 19" />
-                </svg>
-              </a>
+              {/* Whether they have it in writing, or whether this screen is the
+                  only copy. Two different instructions, so say which one applies
+                  rather than a hopeful "check your email". */}
+              <p className="ack-text" style={{ marginTop: 14 }}>
+                {paidInfo.emailedTo ? (
+                  <>
+                    A receipt with your Gym ID is on its way to{" "}
+                    <strong>{paidInfo.emailedTo}</strong>.
+                  </>
+                ) : (
+                  <>
+                    <strong>This screen is your only copy</strong> — take a
+                    screenshot before you close it. The gym has your details and
+                    can look your Gym ID up any time.
+                  </>
+                )}
+              </p>
             </div>
 
-            {payInfo.branchPhone && (
-              <div className="owner-actions">
-                <a className="owner-btn" href={`tel:${payInfo.branchPhone}`}>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72 12.84 12.84 0 00.7 2.81 2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45 12.84 12.84 0 002.81.7A2 2 0 0122 16.92z" />
-                  </svg>
-                  <span className="owner-btn-label">
-                    Call<span className="btn-more"> the gym</span>
-                  </span>
-                </a>
-                <a
-                  className="owner-btn whatsapp"
-                  href={ownerWhatsAppLink(payInfo)}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  <svg viewBox="0 0 24 24" fill="currentColor" stroke="none">
-                    <path d="M12.04 2C6.58 2 2.13 6.45 2.13 11.91c0 1.75.46 3.45 1.32 4.95L2 22l5.25-1.38c1.45.79 3.08 1.21 4.79 1.21 5.46 0 9.91-4.45 9.91-9.91C21.95 6.45 17.5 2 12.04 2zm5.8 14.02c-.24.68-1.4 1.3-1.94 1.35-.5.05-1.13.24-3.66-.77-3.08-1.24-5.06-4.4-5.21-4.6-.15-.2-1.24-1.65-1.24-3.15s.79-2.24 1.07-2.54c.28-.3.61-.38.81-.38.2 0 .4 0 .58.01.19.01.44-.07.68.52.24.6.83 2.06.9 2.21.07.15.12.32.02.52-.1.2-.15.32-.3.5-.15.17-.31.38-.44.51-.15.15-.3.31-.13.6.17.3.76 1.25 1.63 2.02 1.12 1 2.06 1.31 2.36 1.46.3.15.47.13.64-.08.17-.2.74-.86.94-1.16.2-.3.4-.25.67-.15.27.1 1.71.81 2 .96.3.15.5.22.57.35.07.12.07.72-.17 1.4z" />
-                  </svg>
-                  <span className="owner-btn-label">
-                    WhatsApp<span className="btn-more"> the gym</span>
-                  </span>
-                </a>
+            <div className="order-summary">
+              <div className="order-title">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <polyline points="20 6 9 17 4 12" />
+                </svg>
+                Membership
               </div>
-            )}
+              <div className="order-row">
+                <span className="label">Name</span>
+                <span className="value">{paidInfo.memberName}</span>
+              </div>
+              {paidInfo.planName && (
+                <div className="order-row">
+                  <span className="label">Plan</span>
+                  <span className="value">{paidInfo.planName}</span>
+                </div>
+              )}
+              {paidInfo.expiry && (
+                <div className="order-row">
+                  <span className="label">Valid till</span>
+                  <span className="value">{paidInfo.expiry}</span>
+                </div>
+              )}
+              <div className="order-row total">
+                <span className="label">Paid</span>
+                <span className="value">
+                  ₹{paidInfo.amount.toLocaleString("en-IN")}
+                </span>
+              </div>
+            </div>
 
             <button type="button" className="pay-startover" onClick={resetAll}>
               Join another membership

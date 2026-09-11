@@ -141,7 +141,7 @@ export default function PermissionsModal({
     setLoading(true);
     const r = await updatePermissionsAction(userId, perms);
     setLoading(false);
-    if (r.error) toast.error(r.error);
+    if ("error" in r) toast.error(r.error);
     else {
       toast.success(`Permissions saved for ${userName}`);
       onClose();

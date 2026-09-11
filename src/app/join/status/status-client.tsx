@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import toast from "react-hot-toast";
-import { getJoinStatus } from "@/app/actions/payments";
+import { getJoinStatus, pollJoinStatus } from "@/app/actions/payments";
 import { buildWhatsAppLink } from "@/lib/whatsapp";
 import { formatDayIST } from "@/lib/manual-join";
 
@@ -16,7 +16,30 @@ type StatusResult = {
   gymId: number | null;
   expiry: string | null;
   claimedAt: string | null;
+  hasProof: boolean;
 };
+
+/**
+ * How often the page re-checks a request that's waiting on the owner, and how
+ * long it keeps doing so.
+ *
+ * 8 seconds is fast enough that a confirmation appears while the member is still
+ * looking at the page, and slow enough to stay far inside the poll endpoint's
+ * budget (240 per 15 minutes per request — see pollJoinStatus). The 30-minute
+ * ceiling is there so a tab left open overnight doesn't poll until the token
+ * expires; past that the member gets an explicit refresh button.
+ *
+ * `pending` gets a slower interval, because what it is waiting for is different
+ * in kind. A `claimed` row was waiting on the owner to glance at a screenshot he
+ * already had — minutes away, and worth watching at 8s. A pending row is waiting
+ * on a phone call that may not happen until tomorrow, so a fast poll spends 225
+ * function invocations on an event that will almost certainly land long after the
+ * tab is closed. 20s cuts that by ~60% and costs the member nothing they'd
+ * notice.
+ */
+const POLL_INTERVAL_MS = 8000;
+const POLL_INTERVAL_PENDING_MS = 20000;
+const POLL_MAX_MS = 30 * 60 * 1000;
 
 // Per-status presentation: heading, one-line explanation, and a colour accent.
 const STATUS_COPY: Record<
@@ -24,13 +47,20 @@ const STATUS_COPY: Record<
   { title: string; text: string; tone: "wait" | "good" | "bad" }
 > = {
   pending: {
-    title: "Waiting for your payment",
-    text: "We haven't recorded a payment for this request yet. If you've already paid, tap “I've paid” on the join page or message the gym below.",
+    // This used to say "we haven't received a payment screenshot yet" and tell
+    // them to go back and attach one. There is nothing to attach any more, and
+    // nothing was charged — so the copy's job is to remove the fear that money
+    // has gone somewhere and to say what actually happens next.
+    title: "We have your details",
+    text: "Nothing has been charged. Your details are with the gym and they'll call you to take the payment — or you can walk in and pay at the counter. Your Gym ID is issued the moment they do.",
     tone: "wait",
   },
   claimed: {
-    title: "Payment received — confirming",
-    text: "Thanks! We've noted your payment and the gym is confirming it. Your Gym ID activates as soon as the owner verifies it — usually within a few hours.",
+    // LEGACY. Only reachable by rows created under the old screenshot flow;
+    // nothing sets this status now. Left accurate for those rows rather than
+    // rewritten, because for them it is still exactly what is happening.
+    title: "Under verification",
+    text: "Your payment screenshot is with the gym. The owner checks it against their own UPI record and your Gym ID is issued the moment he confirms — usually within a few hours. You can leave this page open; it updates by itself.",
     tone: "wait",
   },
   paid: {
@@ -50,6 +80,17 @@ const STATUS_COPY: Record<
   },
 };
 
+/**
+ * Statuses that can still change on their own, and are therefore worth polling.
+ *
+ * `pending` is in here now and wasn't before. Under the old flow a pending row
+ * was waiting on the *member* to attach a screenshot, so polling it was pointless
+ * — nothing would move until they acted. Now a pending row is waiting on the
+ * OWNER to take the money and press confirm, which is exactly the kind of change
+ * the member wants to watch arrive.
+ */
+const LIVE_STATUSES = new Set(["pending", "claimed"]);
+
 export default function StatusClient({
   initialRef = "",
 }: {
@@ -59,6 +100,10 @@ export default function StatusClient({
   const [phone, setPhone] = useState("");
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<StatusResult | null>(null);
+  // Signed, short-lived, and specific to this one request. Exchanged for the
+  // reference+phone match below so the polling loop never re-sends either.
+  const [pollToken, setPollToken] = useState("");
+  const [pollStopped, setPollStopped] = useState(false);
 
   async function handleCheck(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -76,6 +121,7 @@ export default function StatusClient({
     if ("error" in res) {
       toast.error(res.error || "Could not look up that reference.");
       setResult(null);
+      setPollToken("");
       return;
     }
 
@@ -89,10 +135,111 @@ export default function StatusClient({
       gymId: res.gymId,
       expiry: res.expiry,
       claimedAt: res.claimedAt,
+      hasProof: res.hasProof,
     });
+    setPollToken(res.pollToken);
+    setPollStopped(false);
   }
 
+  const status = result?.status ?? null;
+
+  /**
+   * Re-check the request without the member touching anything.
+   *
+   * Kept in a callback so both the interval and the "check now" button run the
+   * exact same path. It merges rather than replaces, because the poll response
+   * deliberately carries only what can change — the member's name, amount and
+   * branch are already on screen and there's no reason to send them again.
+   */
+  const refresh = useCallback(async (): Promise<void> => {
+    if (!pollToken) return;
+    const res = await pollJoinStatus({ token: pollToken });
+
+    if ("error" in res) {
+      // A throttle or a blip resolves itself on the next tick; an expired token
+      // never will, so stop and let the member re-look-up.
+      if (res.error === "expired") {
+        setPollToken("");
+        setPollStopped(true);
+      }
+      return;
+    }
+
+    if (res.status === "paid" && res.gymId) {
+      toast.success(`Confirmed! Your Gym ID is #${res.gymId} 🎉`);
+    }
+
+    setResult((prev) => {
+      if (!prev) return prev;
+      // Returning the same object lets React skip the re-render entirely, which
+      // matters when this fires every 8 seconds and usually nothing has changed.
+      if (
+        prev.status === res.status &&
+        prev.gymId === res.gymId &&
+        prev.hasProof === res.hasProof
+      ) {
+        return prev;
+      }
+      return {
+        ...prev,
+        status: res.status,
+        gymId: res.gymId ?? prev.gymId,
+        expiry: res.expiry ?? prev.expiry,
+        hasProof: res.hasProof,
+      };
+    });
+  }, [pollToken]);
+
+  /**
+   * Live polling while — and only while — the request is actually waiting on the
+   * owner.
+   *
+   * This is the whole point of the status page. Watching it flip to "confirmed"
+   * by itself is what turns "did my money vanish?" into "the gym is on it", and
+   * it costs nothing on a free tier. Terminal statuses stop the loop, so a
+   * confirmed or cancelled request polls zero times.
+   */
+  useEffect(() => {
+    if (!pollToken || !status || !LIVE_STATUSES.has(status) || pollStopped)
+      return;
+
+    const startedAt = Date.now();
+    let stop = false;
+
+    const tick = () => {
+      if (stop) return;
+      // A backgrounded tab is nobody's anxiety. Don't spend polls on it — the
+      // visibility handler below catches up the moment it returns.
+      if (document.hidden) return;
+      if (Date.now() - startedAt > POLL_MAX_MS) {
+        setPollStopped(true);
+        return;
+      }
+      void refresh();
+    };
+
+    const id = setInterval(
+      tick,
+      status === "pending" ? POLL_INTERVAL_PENDING_MS : POLL_INTERVAL_MS
+    );
+    const onVisible = () => {
+      if (!document.hidden) tick();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+
+    return () => {
+      stop = true;
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [pollToken, status, pollStopped, refresh]);
+
   const copy = result ? STATUS_COPY[result.status] ?? STATUS_COPY.pending : null;
+  const isLive =
+    Boolean(pollToken) &&
+    Boolean(status) &&
+    LIVE_STATUSES.has(status as string) &&
+    !pollStopped;
 
   function ownerWhatsAppLink(r: StatusResult): string {
     const msg =
@@ -244,6 +391,87 @@ export default function StatusClient({
             </div>
             <div className="ack-title">{copy.title}</div>
             <p className="ack-text">{copy.text}</p>
+
+            {/* Where the request actually is, in three steps.
+                A single status line leaves people guessing whether anything has
+                happened at all; seeing the first step already ticked is what
+                makes the wait feel like progress rather than silence. Hidden for
+                cancelled/failed requests, where a progress bar would be a lie.
+
+                Step 1 used to be "Payment sent · Screenshot attached", which is
+                now false on every new row: nothing is sent and nothing is
+                attached. What is true, and worth confirming, is that their form
+                arrived — so that is what it says. */}
+            {copy.tone !== "bad" && (
+              <ol className="verify-steps">
+                {[
+                  {
+                    label: "Details received",
+                    sub: "Your form is with the gym",
+                    state: "done",
+                  },
+                  {
+                    label:
+                      status === "claimed" ? "Under verification" : "Payment",
+                    sub:
+                      status === "paid"
+                        ? "Received by the gym"
+                        : status === "claimed"
+                          ? result.hasProof
+                            ? "Screenshot with the gym"
+                            : "The gym is checking its record"
+                          : "Pay at the gym — cash or UPI",
+                    state: status === "paid" ? "done" : "active",
+                  },
+                  {
+                    label: "Gym ID issued",
+                    sub: result.gymId ? `#${result.gymId}` : "Membership activated",
+                    state: status === "paid" ? "done" : "todo",
+                  },
+                ].map((s) => (
+                  <li key={s.label} className={`verify-step is-${s.state}`}>
+                    <span className="verify-dot">
+                      {s.state === "done" ? (
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5">
+                          <polyline points="20 6 9 17 4 12" />
+                        </svg>
+                      ) : null}
+                    </span>
+                    <span className="verify-step-body">
+                      <span className="verify-step-label">{s.label}</span>
+                      <span className="verify-step-sub">{s.sub}</span>
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            )}
+
+            {/* Live-update affordances, for any status that can still move on its
+                own — which now includes `pending`, because the owner confirming a
+                counter payment is exactly the change worth watching for. */}
+            {status && LIVE_STATUSES.has(status) &&
+              (isLive ? (
+                <div className="live-badge" aria-live="polite">
+                  <span className="live-dot" aria-hidden="true" />
+                  Updating automatically — no need to refresh
+                </div>
+              ) : pollToken ? (
+                <button
+                  type="button"
+                  className="live-refresh"
+                  onClick={() => {
+                    setPollStopped(false);
+                    void refresh();
+                  }}
+                >
+                  Check again now
+                </button>
+              ) : (
+                <p className="ack-text" style={{ fontSize: 12.5, marginTop: 12 }}>
+                  Live updates have paused. Press <strong>Check status</strong>{" "}
+                  above to resume.
+                </p>
+              ))}
 
             {result.status === "paid" && result.gymId ? (
               <div className="order-summary" style={{ textAlign: "left", marginTop: 16 }}>

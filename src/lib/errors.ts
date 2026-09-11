@@ -2,6 +2,7 @@
  * Sanitizes error messages so we don't leak sensitive info
  * (database schema, file paths, stack traces) to users in production.
  */
+import { captureError } from "@/lib/report";
 
 /**
  * Pulls a human-readable message out of whatever was thrown.
@@ -47,6 +48,11 @@ function extractMessage(error: unknown): string {
 export function sanitizeError(error: unknown, fallback = "Something went wrong"): string {
   // Log full error server-side (safe — logs go to server, not user)
   console.error("[Error]", error);
+
+  // Also report it to Sentry. console.error alone goes into a rolling log
+  // buffer nobody watches, so every caller of this function was a place where a
+  // real bug became invisible. captureError is a no-op when the DSN is unset.
+  captureError(error, { fallback });
 
   const message = extractMessage(error);
 

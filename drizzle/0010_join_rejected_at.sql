@@ -1,0 +1,1 @@
+ALTER TABLE "online_joins" ADD COLUMN "rejected_at" timestamp;

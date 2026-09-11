@@ -6,6 +6,7 @@ import type { StaffPermissions } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { assertOwner } from "@/lib/auth-check";
+import { assertCanAdministerUser } from "@/lib/user-admin";
 import { sanitizeError } from "@/lib/errors";
 
 export async function updatePermissionsAction(
@@ -21,6 +22,11 @@ export async function updatePermissionsAction(
   if (!userId || typeof userId !== "number") {
     return { error: "Invalid user" };
   }
+
+  // Role alone is not enough — a branch owner must not be able to widen the
+  // other gym's staff permissions, or their own.
+  const denied = await assertCanAdministerUser(userId);
+  if (denied) return denied;
 
   try {
     await db

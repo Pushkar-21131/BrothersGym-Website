@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import ExcelJS from "exceljs";
+import type ExcelJS from "exceljs";
 import toast from "react-hot-toast";
 import { importMembersAction, ImportMemberRow } from "@/app/actions/import-members";
 import { Upload, FileCheck, AlertCircle, Building2, Info } from "lucide-react";
@@ -145,7 +145,10 @@ export default function ImportMembersClient({
         grid = parsed.map((r) => ["", ...r]);
       } else {
         const buffer = await file.arrayBuffer();
-        const workbook = new ExcelJS.Workbook();
+        // Runtime-only load: the type import above is erased at compile time, so
+        // exceljs stays out of the bundle until a file is actually picked.
+        const { default: ExcelJSRuntime } = await import("exceljs");
+        const workbook = new ExcelJSRuntime.Workbook();
         await workbook.xlsx.load(buffer);
 
         const worksheet = workbook.worksheets[0];

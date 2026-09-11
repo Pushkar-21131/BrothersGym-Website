@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { desc } from "drizzle-orm";
 import ReviewsListClient from "./reviews-list-client";
 import { getVerifiedRole, hasPermission } from "@/lib/auth-check";
+import { canManageBrandContent, isBrandContentBranch } from "@/lib/branch";
 
 export const dynamic = "force-dynamic";
 
@@ -11,12 +12,19 @@ export default async function AdminReviewsPage() {
   const role = await getVerifiedRole();
   if (!role) redirect("/login");
 
-  if (role !== "owner") {
-    const canView = await hasPermission("reviews", "canView");
-    if (!canView) redirect("/admin/members");
-  }
-
-  const canEdit = role === "owner" || (await hasPermission("reviews", "canEdit"));
+  // Homepage testimonials are one shared pool for one shared public website, so
+  // they are curated by a single account rather than by both owners — otherwise
+  // either owner could delete a review praising the other's gym. The same gate
+  // guards the write actions in actions/reviews.ts.
+  //
+  // Staff keep both of their existing grants (canView = read-only, canEdit =
+  // full) but only inside the curating branch.
+  const canEdit = await canManageBrandContent();
+  const canView =
+    canEdit ||
+    ((await isBrandContentBranch()) &&
+      (await hasPermission("reviews", "canView")));
+  if (!canView) redirect("/admin/members");
 
   const allReviews = await db
     .select()

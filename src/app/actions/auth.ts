@@ -13,6 +13,12 @@ import {
   getClientInfo,
 } from "@/lib/security";
 import { assertOwner } from "@/lib/auth-check";
+import { isSuperAdmin } from "@/lib/branch";
+import {
+  assertCanAdministerUser,
+  assertCanAssignRoleAndBranch,
+  forcedBranchIdForCaller,
+} from "@/lib/user-admin";
 import { sanitizeError } from "@/lib/errors";
 import { sendSecurityAlert } from "@/app/actions/security-alerts";
 import { verifyTurnstile } from "@/lib/turnstile";
@@ -57,13 +63,16 @@ async function setAuthCookies(
   cookieStore.set(SESSION_COOKIE, token, opts);
   cookieStore.set("last_activity", Date.now().toString(), opts);
 
-  if (role === "owner") {
-    cookieStore.set("admin_branch", "all", { ...opts, maxAge: 60 * 60 * 24 * 30 });
-  } else if (branchId) {
+  // An owner WITH a branch is scoped to it, so seed the cookie with that branch
+  // rather than "all". getBranchScope() ignores this cookie for them either way;
+  // keeping it honest just avoids a stale value surviving a role change.
+  if (branchId) {
     cookieStore.set("admin_branch", String(branchId), {
       ...opts,
       maxAge: 60 * 60 * 24 * 30,
     });
+  } else if (role === "owner") {
+    cookieStore.set("admin_branch", "all", { ...opts, maxAge: 60 * 60 * 24 * 30 });
   }
 }
 
@@ -261,10 +270,12 @@ export async function logoutAction() {
 
 // ===== SWITCH BRANCH =====
 export async function switchBranchAction(branchIdOrAll: string) {
-  try {
-    await assertOwner();
-  } catch {
-    return { error: "Only the owner can switch branches." };
+  // Main owner account only. getBranchScope() already ignores admin_branch for
+  // anyone locked to a branch, so a forged cookie cannot widen a scope — but
+  // refusing here too means the switcher never appears to work while silently
+  // doing nothing.
+  if (!(await isSuperAdmin())) {
+    return { error: "Your account is set up for one gym, so there is nothing to switch." };
   }
 
   const cookieStore = await cookies();
@@ -329,6 +340,13 @@ export async function createStaffUserAction(formData: FormData) {
   if (!["owner", "staff"].includes(role)) return { error: "Invalid role" };
   if (role === "staff" && !branchId) return { error: "Staff must be assigned to a branch" };
 
+  // A branch owner may only add staff to their own gym. Left ungated, they could
+  // create an owner login with no branch — a super-admin — and log into it.
+  const forced = await forcedBranchIdForCaller();
+  const effectiveBranchId = forced ?? branchId;
+  const denied = await assertCanAssignRoleAndBranch(role, effectiveBranchId);
+  if (denied) return denied;
+
   try {
     const passwordHash = await bcrypt.hash(password, 10);
     await db.insert(appUsers).values({
@@ -336,7 +354,10 @@ export async function createStaffUserAction(formData: FormData) {
       email,
       passwordHash,
       role,
-      branchId: role === "staff" ? branchId : null,
+      // An OWNER may now carry a branch: that is what scopes their dashboard to
+      // one gym. NULL means all-branches (super-admin), which is also the undo —
+      // clear the branch here and they are global again with no code change.
+      branchId: effectiveBranchId,
       isActive: true,
     });
     return { success: true };
@@ -362,6 +383,14 @@ export async function updateStaffUserAction(id: number, formData: FormData) {
 
   if (!name || !email) return { error: "Name and email are required" };
 
+  const denied = await assertCanAdministerUser(id);
+  if (denied) return denied;
+
+  // A branch owner cannot move a login into the other gym, and cannot clear a
+  // branch (which would promote that account to super-admin).
+  const forced = await forcedBranchIdForCaller();
+  const effectiveBranchId = forced ?? branchId;
+
   try {
     const updateData: {
       name: string;
@@ -369,7 +398,7 @@ export async function updateStaffUserAction(id: number, formData: FormData) {
       isActive: boolean;
       branchId: number | null;
       passwordHash?: string;
-    } = { name, email, isActive, branchId };
+    } = { name, email, isActive, branchId: effectiveBranchId };
 
     if (password && password.trim().length > 0) {
       const passwordCheck = validatePassword(password);
@@ -395,6 +424,9 @@ export async function deleteStaffUserAction(id: number) {
   }
 
   try {
+    const denied = await assertCanAdministerUser(id);
+    if (denied) return denied;
+
     await db.delete(appUsers).where(eq(appUsers.id, id));
     return { success: true };
   } catch (error) {
@@ -414,6 +446,9 @@ export async function updateStaffPermissionsAction(
   }
 
   try {
+    const denied = await assertCanAdministerUser(userId);
+    if (denied) return denied;
+
     await db
       .update(appUsers)
       .set({ permissions: permissions as any })

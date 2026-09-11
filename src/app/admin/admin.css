@@ -1127,6 +1127,102 @@
   margin-top: 5px;
 }
 
+/* Trainer photo picker.
+   Preview beside the control rather than above it: the whole row then costs about
+   as much vertical space as the text input it replaced, which matters because this
+   form is a bottom sheet on a phone and every row pushes Save further off. */
+.adm-photo-pick {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+}
+.adm-photo-prev {
+  width: 58px;
+  height: 58px;
+  flex: 0 0 58px;
+  border-radius: var(--radius-xs);
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  background: var(--surface2);
+  border: 1px solid var(--border2);
+  color: var(--text3);
+}
+.adm-photo-prev img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.adm-photo-ctl {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+/* The native control, restyled only as far as it can be: the button half is
+   painted by the browser, so this sets the surrounding box and lets ::file-selector-button
+   handle the rest. */
+.adm-photo-file {
+  width: 100%;
+  font-size: 12px;
+  color: var(--text2);
+}
+.adm-photo-file::file-selector-button {
+  margin-right: 9px;
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: var(--radius-xs);
+  background: var(--surface3);
+  border: 1px solid var(--border2);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.adm-photo-file::file-selector-button:hover {
+  background: var(--surface4);
+}
+.adm-photo-file:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.adm-photo-note {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text3);
+}
+.adm-photo-note.ok {
+  color: var(--gold);
+  font-weight: 600;
+}
+.adm-photo-note.err {
+  color: var(--red, #ff5f56);
+  font-weight: 600;
+}
+/* Text-weight, not a button-weight control: removing a photo is the destructive
+   option in this row and should not compete with Save for attention. */
+.adm-photo-rm {
+  align-self: flex-start;
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text2);
+  cursor: pointer;
+}
+.adm-photo-rm:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+.adm-photo-rm:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 /* Checkbox rendered as a switch.
    The input stays in the DOM so form submission and keyboard focus work
    normally; it is visually hidden and the sibling track is painted instead. */
@@ -1407,6 +1503,203 @@
   color: var(--green2);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+/* ===== PAYMENT PROOF (join requests) =====
+   A thumbnail, not the image. The owner scans a list of requests; a full-size
+   screenshot per card would turn six requests into six screens of scrolling. */
+.adm-proof {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  margin-top: 5px;
+  padding: 7px;
+  text-align: left;
+  background: var(--surface2);
+  border: 1px solid var(--border2);
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.adm-proof:active,
+.adm-proof:hover {
+  background: var(--surface3);
+}
+.adm-proof img {
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  object-fit: cover;
+  border-radius: 7px;
+  border: 1px solid var(--border2);
+  background: var(--surface4);
+}
+.adm-proof-meta {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.adm-proof-cta {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--gold2);
+}
+.adm-proof-time {
+  font-size: 10.5px;
+  color: var(--text3);
+  margin-top: 1px;
+}
+
+/* .adm-proof-none used to warn "No screenshot attached — verify in your UPI app"
+   here. Deleted with its markup: nothing uploads screenshots any more, so on a
+   modern row it would appear on every card and tell the owner to go looking in a
+   bank app for money nobody had sent him. */
+
+/* Screenshot housekeeping: keep a copy, or drop the image from the database.
+   Deliberately under the thumbnail rather than in .adm-rec-foot — these act on
+   the screenshot, not on the request, and sitting them next to "Confirm payment"
+   would put a delete one misclick away from the button that creates a
+   membership. Smaller than .adm-act for the same reason: secondary work. */
+.adm-proof-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+.adm-proof-act {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: var(--radius-xs);
+  background: var(--surface2);
+  border: 1px solid var(--border2);
+  color: var(--text2);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.adm-proof-act:active,
+.adm-proof-act:hover {
+  background: var(--surface3);
+}
+.adm-proof-act:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.adm-proof-act.red {
+  background: var(--red-soft);
+  border-color: rgba(239, 68, 68, 0.18);
+  color: var(--red2);
+}
+.adm-proof-act svg {
+  flex-shrink: 0;
+}
+
+/* Retention countdown on a rejected request. Quiet on purpose — the owner needs
+   to know the clock exists and roughly where it is, nothing more. */
+.adm-proof-ttl {
+  margin-top: 5px;
+  font-size: 10.5px;
+  color: var(--text3);
+}
+
+/* A screenshot that was submitted and has since been cleared. Neutral grey, not
+   amber: this is the retention policy working, not a problem to flag. */
+.adm-proof-gone {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 5px;
+  padding: 8px 10px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text3);
+  background: var(--surface2);
+  border: 1px solid var(--border2);
+  border-radius: var(--radius-xs);
+}
+.adm-proof-gone svg {
+  flex-shrink: 0;
+}
+
+/* ===== FULL-SIZE SCREENSHOT VIEWER ===== */
+.adm-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.82);
+  backdrop-filter: blur(4px);
+}
+.adm-lightbox-inner {
+  display: flex;
+  flex-direction: column;
+  /* The screenshot is portrait and tall; capping the whole panel at the viewport
+     is what keeps the header — which carries the expected amount — on screen. */
+  max-height: 100%;
+  max-width: 440px;
+  width: 100%;
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  border-radius: var(--radius-sm);
+}
+.adm-lightbox-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  padding: 11px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.adm-lightbox-name {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.adm-lightbox-sub {
+  font-size: 11px;
+  color: var(--text2);
+  margin-top: 1px;
+}
+.adm-lightbox-sub strong {
+  color: var(--green2);
+  font-variant-numeric: tabular-nums;
+}
+.adm-lightbox-btn {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9px;
+  background: var(--surface2);
+  border: 1px solid var(--border2);
+  color: var(--text2);
+  cursor: pointer;
+}
+.adm-lightbox-btn:first-of-type {
+  margin-left: auto;
+}
+.adm-lightbox-btn:active {
+  background: var(--surface4);
+}
+.adm-lightbox-inner > img {
+  min-height: 0;
+  width: 100%;
+  object-fit: contain;
+  background: #000;
 }
 
 /* On a plan card the price is the headline, not a detail — it is the number the

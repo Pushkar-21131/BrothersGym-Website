@@ -8,9 +8,6 @@ import {
   deleteMemberAction,
   renewMemberAction,
 } from "@/app/actions/members";
-import ExcelJS from "exceljs";
-import jsPDF from "jspdf";
-import autoTable from "jspdf-autotable";
 import {
   Plus,
   Download,
@@ -97,8 +94,11 @@ export default function MemberList({
   const needsBranchPick = currentBranchId === null;
 
   // ===== EXPORT TO EXCEL (Owner's format) =====
+  // exceljs is ~1MB parsed, and it is only ever needed once the owner actually
+  // clicks Export. Loading it on demand keeps it out of the admin page bundle.
   const exportToExcel = async () => {
     try {
+      const { default: ExcelJS } = await import("exceljs");
       const workbook = new ExcelJS.Workbook();
       const sheet = workbook.addWorksheet("Members");
 
@@ -158,7 +158,9 @@ export default function MemberList({
     }
   };
 
-  const exportToPDF = () => {
+  const exportToPDF = async () => {
+    const { default: jsPDF } = await import("jspdf");
+    const { default: autoTable } = await import("jspdf-autotable");
     const doc = new jsPDF();
     doc.text("Brothers Gym - Members List", 14, 15);
 

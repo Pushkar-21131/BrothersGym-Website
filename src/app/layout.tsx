@@ -112,9 +112,11 @@ export const viewport = {
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
-  // Only the parked Razorpay flow talks to checkout.razorpay.com. In the default
-  // manual-UPI mode there's no external checkout, so we skip the hint entirely.
-  const razorpayMode = process.env.PAYMENT_MODE === "razorpay";
+  // Skipped only under PAYMENT_MODE=contact, where nothing on the site ever
+  // talks to checkout.razorpay.com and the CSP doesn't allow it either. Matches
+  // next.config.ts — both must agree, or we'd preconnect to a host the policy
+  // then blocks.
+  const razorpayMode = process.env.PAYMENT_MODE !== "contact";
   return (
     <html lang="en" className={`${inter.variable} ${outfit.variable}`}>
       <head>
@@ -122,7 +124,8 @@ export default function RootLayout({ children }: { children: ReactNode }) {
             there's no render-blocking request to Google's font CDN. */}
         {razorpayMode && (
           <>
-            {/* Preconnect to the Razorpay checkout host (gateway mode only) */}
+            {/* Warm the TLS handshake to Razorpay's checkout host so the modal
+                opens without a cold connection on the member's slowest tap. */}
             <link rel="preconnect" href="https://checkout.razorpay.com" />
             <link rel="dns-prefetch" href="https://checkout.razorpay.com" />
           </>

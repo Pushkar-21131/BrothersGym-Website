@@ -51,6 +51,11 @@ async function getHomeData() {
           branchId: trainers.branchId,
           name: trainers.name,
           photoUrl: trainers.photoUrl,
+          // photoMime, never photoImage: this is the homepage, and selecting the
+          // base64 would put ~60KB per trainer into its HTML. The mime is enough
+          // to know an uploaded photo exists; the browser fetches it from
+          // /api/trainer-photo/[id]. See resolveTrainerPhoto.
+          photoMime: trainers.photoMime,
           experience: trainers.experience,
           ptFee: trainers.ptFee,
           isOwner: trainers.isOwner,
@@ -99,7 +104,7 @@ export default async function Home() {
       <section className="relative min-h-svh md:min-h-screen flex items-end pt-20 px-4 md:px-6 border-b border-zinc-800 overflow-hidden">
         <HeroBackground />
         {/* Stronger left fade so text stays readable; logo side stays open */}
-        <div className="absolute inset-0 bg-gradient-to-r from-black/70 via-black/45 to-black/20"></div>
+        <div className="absolute inset-0 bg-linear-to-r from-black/70 via-black/45 to-black/20"></div>
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_left,var(--tw-gradient-stops))] from-yellow-900/15 via-transparent to-transparent"></div>
 
         <div className="relative max-w-7xl mx-auto w-full pt-10 md:pt-12 pb-6 md:pb-8 z-10">
@@ -173,7 +178,7 @@ export default async function Home() {
                 big circle only pushed the hero content down on a small screen.
                 Shows from md up, where there's room beside the headline. */}
             <div className="md:col-span-5 lg:col-span-5 w-full hidden md:flex justify-center md:justify-end">
-              <div className="w-full max-w-[240px] sm:max-w-[280px] md:max-w-[300px] lg:max-w-[340px] relative">
+              <div className="w-full max-w-60 sm:max-w-[280px] md:max-w-[300px] lg:max-w-[340px] relative">
                 <div className="aspect-square rounded-full border-4 border-zinc-800 overflow-hidden bg-zinc-900/50 shadow-2xl relative">
                   <div className="absolute inset-0 bg-yellow-500/10 rounded-full blur-3xl -z-10"></div>
                   <img
@@ -254,8 +259,8 @@ export default async function Home() {
               name: b.name,
               address: b.address,
             }))}
-            trainers={gymTrainers as any}
-            owners={owners as any}
+            trainers={gymTrainers}
+            owners={owners}
           />
 
           {allTrainers.length === 0 && (

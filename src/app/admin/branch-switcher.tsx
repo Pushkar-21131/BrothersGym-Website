@@ -15,23 +15,28 @@ type Branch = {
 type Props = {
   branches: Branch[];
   currentBranchId: number | "all";
-  isOwner: boolean;
+  /**
+   * False for anyone locked to one branch — staff, and an owner who has a branch
+   * assigned. Not the same as "is an owner": with the two gyms separated, a
+   * branch owner is a full owner who simply has nothing to switch to.
+   */
+  canSwitch: boolean;
 };
 
 /**
  * Branch picker for the drawer.
  *
- * Rendered as a list of tappable rows rather than a <select>. The owner
- * switches branches constantly, and a native select on Android takes two taps
- * and hides the current value behind a modal; rows show the whole picture at
- * once and each is a 44px target.
+ * Rendered as a list of tappable rows rather than a <select>. The main owner
+ * account switches branches constantly, and a native select on Android takes two
+ * taps and hides the current value behind a modal; rows show the whole picture
+ * at once and each is a 44px target.
  *
- * Staff cannot switch — they see their branch as a static row.
+ * Anyone locked to one branch sees it as a static row instead.
  */
 export default function BranchSwitcher({
   branches,
   currentBranchId,
-  isOwner,
+  canSwitch,
 }: Props) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
@@ -49,7 +54,7 @@ export default function BranchSwitcher({
     });
   }
 
-  if (!isOwner) {
+  if (!canSwitch) {
     const branch = branches.find((b) => b.id === currentBranchId);
     return (
       <div className="adm-nav" style={{ pointerEvents: "none" }}>

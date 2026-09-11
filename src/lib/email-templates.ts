@@ -249,7 +249,7 @@ export function otpEmail(opts: OtpEmailOptions): {
 }
 
 // ============================================================================
-// MANUAL UPI JOIN FLOW
+// JOIN FLOW
 // ============================================================================
 
 /**
@@ -324,9 +324,13 @@ function detailTable(rows: Array<[string, string]>): string {
 }
 
 /**
- * Sent to the MEMBER once the owner confirms their UPI payment. Carries the Gym
- * ID prominently — it's what they show at the counter — plus the plan, amount
- * and expiry so the email doubles as a receipt.
+ * Sent to the MEMBER once their membership is active. Carries the Gym ID
+ * prominently — it's what they show at the counter — plus the plan, amount and
+ * expiry so the email doubles as a receipt.
+ *
+ * One template for both routes into "active": Razorpay captured the payment, or
+ * the owner took the money at the gym and pressed confirm. The member does not
+ * need to know which, and a single template means the two can't drift apart.
  *
  * Note (not a bug to fix here): until the `brothersgym.in` domain is verified in
  * Resend, the shared `onboarding@resend.dev` sender only delivers to the Resend
@@ -420,10 +424,15 @@ export function joinConfirmedEmail(opts: {
 }
 
 /**
- * Sent to the OWNER when a member taps "I've paid". A heads-up, not an
- * instruction: nothing is activated until the owner checks their own bank/UPI
- * record and clicks Confirm. Links straight to the Join Requests page when a
- * site URL is configured.
+ * Sent to the OWNER when someone fills the join form but the gateway didn't take
+ * their money — Razorpay off for the site, an order call that failed, or checkout
+ * that never loaded. It is a lead, not a payment: nobody has paid anything yet,
+ * and the owner has to call them and collect it the old way.
+ *
+ * That is why this fires at form submission rather than on an "I've paid" tap.
+ * There is no such tap any more, so if this email doesn't go out nobody ever
+ * learns the lead exists. Links straight to the Join Requests page when a site URL
+ * is configured.
  */
 export function ownerNewJoinAlertEmail(opts: {
   memberName: string;
@@ -431,14 +440,13 @@ export function ownerNewJoinAlertEmail(opts: {
   amount: number;
   branchName: string;
   reference: string;
-  upiReference?: string | null;
   isRenewal?: boolean;
   planName?: string;
 }): { subject: string; html: string; text: string } {
   const amountStr = `₹${opts.amount.toLocaleString("en-IN")}`;
   const kind = opts.isRenewal ? "renewal" : "new join";
-  const subject = `${amountStr} UPI claim — ${opts.memberName || "member"} (${opts.reference})`;
-  const lead = `${escapeHtml(opts.memberName || "Someone")} says they've paid by UPI for a ${kind}. Check the money landed in your account, then confirm it in the admin panel to activate the membership.`;
+  const subject = `Call ${opts.memberName || "a member"} — ${amountStr} ${kind} (${opts.reference})`;
+  const lead = `${escapeHtml(opts.memberName || "Someone")} filled the ${kind} form on the website but couldn't pay online. Give them a call, take the payment however suits you, then confirm it in the admin panel to activate the membership.`;
   const preheader = `${opts.reference} · ${amountStr} · ${opts.contactNumber}`;
 
   const site = (process.env.NEXT_PUBLIC_SITE_URL || process.env.NEXT_PUBLIC_BASE_URL || "")
@@ -451,13 +459,9 @@ export function ownerNewJoinAlertEmail(opts: {
     ["Phone", escapeHtml(opts.contactNumber)],
   ];
   if (opts.planName) rows.push(["Plan", escapeHtml(opts.planName)]);
-  rows.push(["Amount", amountStr]);
+  rows.push(["Amount to collect", amountStr]);
   rows.push(["Reference", escapeHtml(opts.reference)]);
   if (opts.branchName) rows.push(["Branch", escapeHtml(opts.branchName)]);
-  rows.push([
-    "UTR / Ref no.",
-    opts.upiReference ? escapeHtml(opts.upiReference) : "— not provided —",
-  ]);
 
   const button = adminUrl
     ? `
@@ -472,7 +476,7 @@ export function ownerNewJoinAlertEmail(opts: {
         <!-- Intro -->
         <tr>
           <td style="padding:32px 32px 8px 32px;font-family:Arial,Helvetica,sans-serif;">
-            <div style="font-size:20px;font-weight:bold;color:#ffffff;padding-bottom:12px;">New payment to confirm</div>
+            <div style="font-size:20px;font-weight:bold;color:#ffffff;padding-bottom:12px;">Someone wants to join — call them</div>
             <div style="font-size:16px;line-height:24px;color:${BRAND.muted};">${lead}</div>
           </td>
         </tr>
@@ -490,7 +494,7 @@ ${button}
         <tr>
           <td style="padding:0 32px 28px 32px;font-family:Arial,Helvetica,sans-serif;">
             <div style="font-size:13px;line-height:20px;color:${BRAND.faint};">
-              Nothing is activated until you confirm. If you don't recognise this, reject it in the panel.
+              No money has been taken. Nothing is activated until you confirm — and only confirm once you actually have the payment in hand.
             </div>
           </td>
         </tr>`;
@@ -498,22 +502,156 @@ ${button}
   const html = emailShell({ subject, preheader, bodyHtml });
 
   const text = [
-    `${BRAND.name} — new payment to confirm`,
+    `${BRAND.name} — someone wants to join, call them`,
     "",
-    `${opts.memberName || "Someone"} says they've paid by UPI for a ${kind}.`,
-    "Check your account, then confirm in the admin panel.",
+    `${opts.memberName || "Someone"} filled the ${kind} form but couldn't pay online.`,
+    "Call them, take the payment, then confirm in the admin panel.",
     "",
     `Member: ${opts.memberName || "—"}`,
     `Phone: ${opts.contactNumber}`,
     opts.planName ? `Plan: ${opts.planName}` : null,
-    `Amount: ${amountStr}`,
+    `Amount to collect: ${amountStr}`,
     `Reference: ${opts.reference}`,
     opts.branchName ? `Branch: ${opts.branchName}` : null,
-    `UTR / Ref no.: ${opts.upiReference || "not provided"}`,
     "",
     adminUrl ? `Confirm here: ${adminUrl}` : "Open the admin panel → Join Requests to confirm.",
     "",
-    "Nothing is activated until you confirm.",
+    "No money has been taken. Nothing is activated until you confirm.",
+  ]
+    .filter((l): l is string => l !== null)
+    .join("\n");
+
+  return { subject, html, text };
+}
+
+/**
+ * Sent to the MEMBER when they filled the join form but couldn't pay online — the
+ * receipt for their details, not for a payment.
+ *
+ * WHY THE COPY MATTERS HERE
+ * This email used to say "payment received, under verification", because it was
+ * sent after a member uploaded a UPI screenshot. That flow is gone: there is no
+ * online payment on this path at all, and telling someone their payment was
+ * received when they have not paid a rupee is worse than sending nothing — they
+ * would stop expecting a phone call, and turn up at the gym believing they were
+ * already a member. So this now says exactly what is true: we have your details,
+ * you owe nothing yet, the gym will call you.
+ *
+ * It deliberately does NOT contain a Gym ID: none exists yet. fulfilManualJoin
+ * allocates it when the owner confirms, so the identifier the member holds in the
+ * meantime is the REFERENCE, and the copy says so plainly rather than promising a
+ * number that hasn't been issued.
+ *
+ * Only ever sent when the member actually gave an email address — see the
+ * `if (!join.email)` guard in notifyMemberOfLead. Same delivery caveat as
+ * joinConfirmedEmail: until `brothersgym.in` is verified in Resend, the shared
+ * sender only reaches the Resend account owner, so this reaches nobody in
+ * production yet. The contact screen and the status page are the channels that
+ * work today — this one starts working the moment FROM_EMAIL is switched, with no
+ * code change.
+ */
+export function joinReceivedEmail(opts: {
+  memberName: string;
+  reference: string;
+  amount: number;
+  planName?: string;
+  branchName: string;
+  branchPhone?: string | null;
+  isRenewal?: boolean;
+}): { subject: string; html: string; text: string } {
+  const name = escapeHtml(opts.memberName || "there");
+  const amountStr = `₹${opts.amount.toLocaleString("en-IN")}`;
+  const subject = `We've got your details — ${BRAND.name} (${opts.reference})`;
+  const preheader = `${opts.reference} · ${amountStr} · the gym will call you`;
+
+  const site = (process.env.NEXT_PUBLIC_SITE_URL || process.env.NEXT_PUBLIC_BASE_URL || "")
+    .trim()
+    .replace(/\/$/, "");
+  const statusUrl = site
+    ? `${site}/join/status?ref=${encodeURIComponent(opts.reference)}`
+    : "";
+
+  const rows: Array<[string, string]> = [];
+  if (opts.planName) rows.push(["Plan", escapeHtml(opts.planName)]);
+  rows.push(["Amount due", amountStr]);
+  if (opts.branchName) rows.push(["Branch", escapeHtml(opts.branchName)]);
+  rows.push(["Status", "Awaiting payment"]);
+
+  const button = statusUrl
+    ? `
+        <tr>
+          <td style="padding:8px 32px 24px 32px;" align="center">
+            <a href="${statusUrl}" style="display:inline-block;background:${BRAND.gold};color:#09090b;font-family:Arial,Helvetica,sans-serif;font-size:15px;font-weight:bold;text-decoration:none;padding:14px 28px;border-radius:10px;">Track your status</a>
+          </td>
+        </tr>`
+    : "";
+
+  const bodyHtml = `
+        <!-- Intro -->
+        <tr>
+          <td style="padding:32px 32px 8px 32px;font-family:Arial,Helvetica,sans-serif;">
+            <div style="font-size:20px;font-weight:bold;color:#ffffff;padding-bottom:12px;">We've got your details</div>
+            <div style="font-size:16px;color:${BRAND.text};padding-bottom:8px;">Hi ${name},</div>
+            <div style="font-size:16px;line-height:24px;color:${BRAND.muted};">Thanks — your ${opts.isRenewal ? "renewal" : "membership"} details are saved. Online payment wasn't available just now, so <strong style="color:${BRAND.text};">nothing has been charged</strong>. The gym will call you to take the payment${opts.branchPhone ? `, or you can call them on ${escapeHtml(opts.branchPhone)}` : ""}.</div>
+          </td>
+        </tr>
+
+        <!-- Reference -->
+        <tr>
+          <td style="padding:20px 32px 8px 32px;">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:${BRAND.cardInner};border:1px solid ${BRAND.gold};border-radius:12px;">
+              <tr>
+                <td align="center" style="padding:24px 16px;font-family:Arial,Helvetica,sans-serif;">
+                  <div style="font-size:11px;letter-spacing:2px;color:${BRAND.faint};text-transform:uppercase;padding-bottom:10px;">Your reference</div>
+                  <div style="font-family:'Courier New',Courier,monospace;font-size:28px;line-height:32px;font-weight:bold;letter-spacing:3px;color:${BRAND.gold};">${escapeHtml(opts.reference)}</div>
+                  <div style="font-size:13px;color:${BRAND.faint};padding-top:12px;">Quote this when you speak to the gym</div>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+
+        <!-- Details -->
+        <tr>
+          <td style="padding:16px 32px 8px 32px;">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:${BRAND.cardInner};border-radius:10px;">
+              <tr><td style="padding:6px 18px;">${detailTable(rows)}</td></tr>
+            </table>
+          </td>
+        </tr>
+${button}
+        <!-- What happens next -->
+        <tr>
+          <td style="padding:0 32px 28px 32px;font-family:Arial,Helvetica,sans-serif;">
+            <div style="font-size:14px;line-height:22px;color:${BRAND.muted};">
+              <strong style="color:${BRAND.text};">What happens next:</strong> pay the gym directly — in person at the counter, or however the owner arranges it on the call. Once they mark it received,
+              your ${opts.isRenewal ? "membership is extended" : "Gym ID is issued"} and you'll hear from us straight away.
+              ${opts.branchPhone ? `Didn't hear from anyone? Call ${escapeHtml(opts.branchPhone)}.` : "Didn't hear from anyone? Please contact the gym."}
+            </div>
+          </td>
+        </tr>`;
+
+  const html = emailShell({ subject, preheader, bodyHtml });
+
+  const text = [
+    `${BRAND.name} — we've got your details`,
+    "",
+    `Hi ${opts.memberName || "there"},`,
+    `Thanks — your ${opts.isRenewal ? "renewal" : "membership"} details are saved.`,
+    "Online payment wasn't available just now, so NOTHING has been charged.",
+    "The gym will call you to take the payment.",
+    "",
+    `Your reference: ${opts.reference}`,
+    opts.planName ? `Plan: ${opts.planName}` : null,
+    `Amount due: ${amountStr}`,
+    opts.branchName ? `Branch: ${opts.branchName}` : null,
+    "Status: Awaiting payment",
+    "",
+    `Once the gym marks the payment received, your ${opts.isRenewal ? "membership is extended" : "Gym ID is issued"}.`,
+    statusUrl ? `Track your status: ${statusUrl}` : null,
+    opts.branchPhone ? `Questions, or want to pay now? Call the gym on ${opts.branchPhone}.` : null,
+    "",
+    `Automated message from ${BRAND.name} — please do not reply.`,
   ]
     .filter((l): l is string => l !== null)
     .join("\n");

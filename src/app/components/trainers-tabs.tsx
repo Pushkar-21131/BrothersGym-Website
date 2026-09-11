@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Building2, MapPin, User } from "lucide-react";
 import { formatINR } from "@/lib/utils";
+import { resolveTrainerPhoto } from "@/lib/trainer-photo";
 
 // Add this component at the bottom of the file:
 function InstagramIcon({ size = 16, className = "" }: { size?: number; className?: string }) {
@@ -33,6 +34,9 @@ type Trainer = {
   branchName: string | null;
   name: string;
   photoUrl: string | null;
+  // Set only when a photo was uploaded through the admin panel. resolveTrainerPhoto
+  // turns this pair into a src; the bytes never travel with the page.
+  photoMime: string | null;
   experience: string;
   ptFee: number;
   isOwner: boolean;
@@ -152,15 +156,16 @@ export default function TrainersTabs({ branches, trainers, owners }: Props) {
 
 // ===== Trainer Card =====
 function TrainerCard({ trainer, isOwner = false }: { trainer: Trainer; isOwner?: boolean }) {
+  const photoSrc = resolveTrainerPhoto(trainer);
   return (
     <div className="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden group hover:border-yellow-500/50 transition-all duration-300 hover:-translate-y-1">
       {/* Image — 7/8 is portrait, which is right for a narrow grid cell but ~410px
           tall once the card goes full-width on a phone. 4/3 keeps the photo
           prominent without turning one trainer into a whole screen of scrolling. */}
       <div className="aspect-4/3 sm:aspect-7/8 bg-zinc-800 relative overflow-hidden">
-        {trainer.photoUrl ? (
+        {photoSrc ? (
           <img
-            src={trainer.photoUrl}
+            src={photoSrc}
             alt={trainer.name}
             loading="lazy"
             decoding="async"

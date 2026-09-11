@@ -2,7 +2,6 @@
 
 import { useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
-import ExcelJS from "exceljs";
 import toast from "react-hot-toast";
 import {
   Plus,
@@ -144,6 +143,7 @@ export default function StaffList({
 
   async function exportExcel() {
     try {
+      const { default: ExcelJS } = await import("exceljs");
       const workbook = new ExcelJS.Workbook();
       const sheet = workbook.addWorksheet("Staff");
 

@@ -96,19 +96,22 @@ export default async function AdminDashboard() {
   // eslint-disable-next-line react-hooks/purity
   const soon = new Date(Date.now() + 7 * 86400000).toISOString().split("T")[0];
 
+  // Only the branches this account may see. Filtering BEFORE the stats queries
+  // (rather than after) means a branch owner's dashboard never reads the other
+  // gym's revenue at all — and nothing downstream can accidentally render it.
+  const visibleBranches =
+    scope.type === "single"
+      ? allBranches.filter((b) => b.id === scope.branchId)
+      : allBranches;
+
   const perBranchStats = await Promise.all(
-    allBranches.map(async (b) => ({
+    visibleBranches.map(async (b) => ({
       branch: b,
       stats: await getBranchStats(b.id, today, soon),
     }))
   );
 
-  const relevantStats =
-    scope.type === "single"
-      ? perBranchStats.filter((r) => r.branch.id === scope.branchId)
-      : perBranchStats;
-
-  const combined = relevantStats.reduce(
+  const combined = perBranchStats.reduce(
     (acc, r) => ({
       totalMembers: acc.totalMembers + r.stats.totalMembers,
       totalRevenue: acc.totalRevenue + r.stats.totalRevenue,

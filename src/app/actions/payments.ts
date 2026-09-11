@@ -2,7 +2,6 @@
 
 import Razorpay from "razorpay";
 import crypto from "crypto";
-import QRCode from "qrcode";
 import { Resend } from "resend";
 import { db } from "@/db";
 import { members, payments, onlineJoins, membershipPlans, branches } from "@/db/schema";
@@ -11,45 +10,32 @@ import { revalidatePath } from "next/cache";
 import { checkRateLimit, getClientInfo } from "@/lib/security";
 import { sanitizeError } from "@/lib/errors";
 import { fulfilPaidJoin } from "@/lib/fulfil-join";
+import { notifyJoinConfirmed } from "@/lib/join-notify";
+import { deriveJoinReference, parseJoinReference } from "@/lib/manual-join";
 import {
-  deriveJoinReference,
-  parseJoinReference,
-  buildUpiPayString,
-} from "@/lib/manual-join";
-import { fromHeader, ownerNewJoinAlertEmail } from "@/lib/email-templates";
+  createStatusPollToken,
+  verifyStatusPollToken,
+} from "@/lib/join-proof";
+import {
+  fromHeader,
+  ownerNewJoinAlertEmail,
+  joinReceivedEmail,
+} from "@/lib/email-templates";
+import { razorpayAccountFor } from "@/lib/razorpay-account";
 
 /**
- * Razorpay's Key ID is the same value whether it is read from RAZORPAY_KEY_ID or
- * NEXT_PUBLIC_RAZORPAY_KEY_ID — it identifies the account and is meant to be
- * public, since checkout.js needs it in the browser. The server-only name is
- * preferred here (env-check validates that one) with the public name as a
- * fallback, so the SDK works whichever of the two is set.
+ * Razorpay SDK client for the account that receives a given branch's money.
  *
- * KEY_SECRET is the one that must never gain a NEXT_PUBLIC_ prefix: it signs
- * orders and verifies payment signatures.
+ * Takes a branch code rather than reading a global key pair because the two
+ * branches have different owners and therefore two separate merchant accounts.
+ * All the resolution rules — including the deliberate refusal to fall back to a
+ * global key once any per-branch key exists — live in razorpay-account.ts, so
+ * this stays a one-liner and there is exactly one place that decides whose bank
+ * account a payment lands in.
  */
-function getRazorpay() {
-  // A placeholder counts as unset. Left as-is, "rzp_test_xxxxxxxxxx" is a
-  // non-empty string, so `||` treats it as a real value, skips the fallback,
-  // and Razorpay answers with a bare 401 "Authentication failed" that says
-  // nothing about which variable is wrong. Fail here with a useful message.
-  const isPlaceholder = (v?: string) => !v || /x{4,}/i.test(v);
-
-  const key_id = [process.env.RAZORPAY_KEY_ID, process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID]
-    .find((v) => !isPlaceholder(v));
-  const key_secret = process.env.RAZORPAY_KEY_SECRET;
-
-  if (!key_id) {
-    throw new Error(
-      "Razorpay key ID is missing or still a placeholder — set RAZORPAY_KEY_ID in .env"
-    );
-  }
-  if (isPlaceholder(key_secret)) {
-    throw new Error(
-      "Razorpay key secret is missing or still a placeholder — set RAZORPAY_KEY_SECRET in .env"
-    );
-  }
-  return new Razorpay({ key_id, key_secret });
+function getRazorpay(branchCode: string) {
+  const account = razorpayAccountFor(branchCode);
+  return new Razorpay({ key_id: account.keyId, key_secret: account.keySecret });
 }
 
 // ============= GET PUBLIC PLANS (per branch) =============
@@ -293,9 +279,20 @@ export async function createOnlineJoinOrder(formData: FormData) {
 
     const plan = planRows[0];
     const branchRow = await db.select().from(branches).where(eq(branches.id, branchId)).limit(1);
-    const branchCode = branchRow[0]?.code || "BG";
+    // No "BG" fallback any more. The branch code now selects WHICH owner's
+    // Razorpay account receives this money, so an invented default is not a
+    // harmless placeholder — it decides who gets paid. Fail instead.
+    const branchCode = branchRow[0]?.code;
+    if (!branchCode) return { error: "Please select a branch" };
 
-    const razorpay = getRazorpay();
+    // Resolved once and reused: the client signs the order, and the same
+    // account's public key ID goes back to the browser so checkout.js opens
+    // against the right merchant.
+    const account = razorpayAccountFor(branchCode);
+    const razorpay = new Razorpay({
+      key_id: account.keyId,
+      key_secret: account.keySecret,
+    });
     const order = await razorpay.orders.create({
       amount: plan.price * 100,
       currency: "INR",
@@ -337,12 +334,25 @@ export async function createOnlineJoinOrder(formData: FormData) {
       orderId: order.id,
       amount: plan.price * 100,
       currency: "INR",
-      key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID,
+      // This branch's own account, not a global NEXT_PUBLIC_ value. Reading it
+      // from a build-time public env var would open every branch's checkout
+      // against the same merchant regardless of which gym was chosen.
+      key: account.keyId,
       joinId: join[0].id,
       planName: plan.name,
       planDurationDays: plan.durationDays,
       branchName: branchRow[0]?.name || "",
       customer: { name, email, contact: contactNumber },
+      // ===== ENOUGH TO FALL BACK WITHOUT A SECOND ROW =====
+      // If checkout.js can't be opened, or the member closes the modal without
+      // paying, the client shows the contact-the-owner screen for THIS join
+      // rather than calling createJoinLead — which would leave the owner two
+      // rows for one person. These are the fields that screen needs.
+      reference: deriveJoinReference(branchCode, join[0].id),
+      planPrice: plan.price,
+      branchPhone: branchRow[0]?.phone || null,
+      branchAddress: branchRow[0]?.address || "",
+      isRenewal,
       // Nothing about the membership round trips through the browser any more.
       // parentName and emergencyContact were the last two, and they now live on
       // the join row alongside the routing fields (joinType, existingMemberId,
@@ -373,6 +383,36 @@ function signaturesMatch(expected: string, received: string): boolean {
 
 // ============= VERIFY PAYMENT =============
 /**
+ * Spelled out rather than left to inference, because the two success paths are
+ * not the same shape: the already-processed early return has no plan name and
+ * sends no email, while a fresh fulfilment has both. Inferred, TypeScript folds
+ * them into one type where every field is possibly-undefined, and the caller
+ * ends up assigning `number | undefined` into a `number`.
+ *
+ * `error?: undefined` on the success arm is what makes the caller's plain
+ * `if (result.error) return;` both compile and narrow — without it, `.error`
+ * cannot be read off a union whose other member has no such property.
+ */
+export type VerifyFailure = { error: string; success?: undefined };
+
+export type VerifySuccess = {
+  success: true;
+  error?: undefined;
+  gymId: number;
+  expiry: string;
+  amount: number;
+  memberName: string;
+  planName?: string;
+  contactNumber: string;
+  /** Only on the replayed-callback path; the membership already existed. */
+  alreadyProcessed?: true;
+  /** Address the Gym ID went to, or null when they gave none / it bounced. */
+  emailedTo?: string | null;
+};
+
+export type VerifyResult = VerifySuccess | VerifyFailure;
+
+/**
  * Everything that decides WHO gets the membership and WHAT it costs is read
  * from the onlineJoins row, not from this payload. joinType, existingMemberId
  * and branchId used to be accepted here and are deliberately gone: they were
@@ -387,7 +427,7 @@ export async function verifyOnlinePayment(data: {
   razorpay_signature: string;
   parentName?: string;
   emergencyContact?: string;
-}) {
+}): Promise<VerifyResult> {
   // Metered so a stolen signature can't be replayed across joinIds in a tight
   // loop, and so a flood of bogus callbacks can't hammer the database.
   const { ip } = await getClientInfo();
@@ -399,24 +439,49 @@ export async function verifyOnlinePayment(data: {
   }
 
   try {
+    // ===== LOAD THE JOIN BEFORE VERIFYING =====
+    // This used to happen after the signature check, because the signing secret
+    // was one global value. With per-branch accounts the correct secret depends
+    // on which branch the join belongs to, so the row must be read first.
+    //
+    // The "not found" case deliberately returns the SAME generic string as a
+    // signature failure. Distinguishing them would turn this action into a
+    // join-ID enumeration oracle: post any garbage signature against joinId
+    // 1, 2, 3… and "Join request not found" vs "Payment verification failed"
+    // maps out precisely which joins exist. That is the same class of leak the
+    // order-binding check further down was added to close, so reordering must
+    // not quietly reopen it.
+    const joins = await db
+      .select()
+      .from(onlineJoins)
+      .where(eq(onlineJoins.id, data.joinId))
+      .limit(1);
+    if (!joins.length) return { error: "Payment verification failed" };
+
+    const join = joins[0];
+
+    // Whose account signed this payment. Read from the join row — a record this
+    // server created — and never from the caller's payload, which would let a
+    // caller nominate the branch whose secret their signature is checked against.
+    const branchRow = await db
+      .select({ code: branches.code })
+      .from(branches)
+      .where(eq(branches.id, join.branchId))
+      .limit(1);
+    const branchCode = branchRow[0]?.code;
+    if (!branchCode) return { error: "Payment verification failed" };
+
+    const account = razorpayAccountFor(branchCode);
+
     const body = `${data.razorpay_order_id}|${data.razorpay_payment_id}`;
     const expected = crypto
-      .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET || "")
+      .createHmac("sha256", account.keySecret)
       .update(body)
       .digest("hex");
 
     if (!signaturesMatch(expected, data.razorpay_signature)) {
       return { error: "Payment verification failed" };
     }
-
-    const joins = await db
-      .select()
-      .from(onlineJoins)
-      .where(eq(onlineJoins.id, data.joinId))
-      .limit(1);
-    if (!joins.length) return { error: "Join request not found" };
-
-    const join = joins[0];
 
     // ===== BIND THE SIGNATURE TO THIS JOIN =====
     // This MUST come before the idempotency guard below. The HMAC above only
@@ -464,7 +529,7 @@ export async function verifyOnlinePayment(data: {
     // API directly, so a tampered client response cannot fake it.
     let paymentAmountPaise: number;
     try {
-      const razorpay = getRazorpay();
+      const razorpay = getRazorpay(branchCode);
       const payment = await razorpay.payments.fetch(data.razorpay_payment_id);
 
       if (payment.status !== "captured" && payment.status !== "authorized") {
@@ -506,6 +571,22 @@ export async function verifyOnlinePayment(data: {
       return { error: result.error };
     }
 
+    // ===== GYM ID DELIVERY =====
+    // Only the compare-and-swap winner reaches here, so the webhook arriving for
+    // the same payment a second later sends nothing — exactly one email per
+    // membership. Sent only if the member gave an address; never throws.
+    const notify = await notifyJoinConfirmed({
+      email: join.email,
+      branchId: join.branchId,
+      memberName: result.memberName,
+      gymId: result.gymId,
+      planName: result.planName,
+      amount: result.amount,
+      expiry: result.expiry,
+      contactNumber: result.contactNumber,
+      isRenewal: Boolean(join.memberId),
+    });
+
     return {
       success: true,
       gymId: result.gymId,
@@ -514,6 +595,11 @@ export async function verifyOnlinePayment(data: {
       memberName: result.memberName,
       planName: result.planName,
       contactNumber: result.contactNumber,
+      // Lets the success screen say where the copy went. Deliberately NOT a
+      // wa.me link: the only number we hold is the member's own, so handing them
+      // one would open a chat with themselves. The owner gets the one-tap link
+      // from the admin panel instead.
+      emailedTo: notify.emailSent ? join.email : null,
     };
   } catch (e) {
     return { error: sanitizeError(e, "Verification failed") };
@@ -521,20 +607,34 @@ export async function verifyOnlinePayment(data: {
 }
 
 // ============================================================================
-// MANUAL UPI JOIN FLOW  (PAYMENT_MODE=manual — the active flow)
+// FALLBACK JOIN FLOW  —  the lead queue
 // ============================================================================
-// The member pays the branch's UPI ID out of band — scanning a QR or opening a
-// upi:// link with the amount locked — and the OWNER confirms receipt in the
-// admin panel. The Razorpay actions above stay parked for PAYMENT_MODE=razorpay.
-// The write half lives in src/lib/fulfil-join.ts (fulfilManualJoin); the owner's
-// confirm/reject actions live in src/app/actions/join-requests.ts.
+// Razorpay is the payment method. This is what happens when it can't run: the
+// gateway is off for the site (PAYMENT_MODE=contact), the order call failed, or
+// checkout.js never loaded in the member's browser.
+//
+// NO MONEY MOVES HERE. There is no UPI ID on screen, no QR code, no amount to
+// transfer, and nothing for the member to claim afterwards. The member's details
+// are saved so the effort of filling the form isn't wasted, they get a reference
+// and the branch's phone/WhatsApp, and the payment happens the way it did before
+// this website existed — in person or over the phone with the owner.
+//
+// That is why the owner alert fires the moment the lead is created rather than
+// when the member says they've paid: the member never says anything. The lead
+// sits in the owner's Join Requests queue, they call, they take the money, they
+// confirm. The write half of that confirm lives in src/lib/fulfil-join.ts
+// (fulfilManualJoin); the confirm/reject actions live in
+// src/app/actions/join-requests.ts.
 
 /**
- * Create a pending join request and hand back everything the pay-by-UPI screen
- * needs. Mirrors createOnlineJoinOrder — same validation, same server-side
- * renewal re-proof, same active-plan lookup — but writes NO Razorpay order.
+ * Save a join lead and hand back what the contact screen needs.
+ *
+ * Mirrors createOnlineJoinOrder — same validation, same server-side renewal
+ * re-proof, same active-plan lookup — but writes no Razorpay order and takes no
+ * payment. Row status is "pending", which now means exactly "form filled, money
+ * not collected".
  */
-export async function createManualJoinRequest(formData: FormData) {
+export async function createJoinLead(formData: FormData) {
   const consentToHealthData = formData.get("consentToHealthData") === "true";
   if (!consentToHealthData) {
     return { error: "You must accept the Privacy Policy and Terms to proceed." };
@@ -636,9 +736,9 @@ export async function createManualJoinRequest(formData: FormData) {
     const branch = branchRow[0];
     const branchCode = branch?.code || "BG";
 
-    // Create the pending request. No Razorpay order: there is nothing to charge
-    // here. The row exists so the owner sees the request even if the member pays
-    // but never taps "I've paid".
+    // Save the lead. No Razorpay order — there is nothing to charge here. The row
+    // exists so the owner has someone to call, and so the member's details
+    // survive whatever went wrong with the gateway.
     const join = await db
       .insert(onlineJoins)
       .values({
@@ -659,34 +759,35 @@ export async function createManualJoinRequest(formData: FormData) {
     const joinId = join[0].id;
     const reference = deriveJoinReference(branchCode, joinId);
 
-    // Build the UPI payload + QR only when the branch has a payee configured.
-    // Without a upiId there is nothing to pay to; the client shows a "contact the
-    // gym" message with the Call/WhatsApp buttons and the reference.
-    const upiId = branch?.upiId?.trim() || "";
-    const payeeName = branch?.upiName?.trim() || branch?.name || "Brothers Gym";
-
-    let upiString: string | null = null;
-    let qrDataUrl: string | null = null;
-
-    if (upiId) {
-      upiString = buildUpiPayString({
-        upiId,
-        payeeName,
-        amount: plan.price,
-        note: `Brothers Gym ${reference}`,
-      });
-      try {
-        qrDataUrl = await QRCode.toDataURL(upiString, {
-          margin: 1,
-          width: 320,
-          errorCorrectionLevel: "M",
-        });
-      } catch (e) {
-        // Not fatal — the deep link and copy-UPI-ID still work without the QR.
-        console.error("[ManualJoin] QR generation failed:", e);
-        qrDataUrl = null;
-      }
+    // ===== TELL BOTH SIDES, NOW =====
+    // This used to fire when the member submitted a payment screenshot. There is
+    // no screenshot step any more, and no "I've paid" tap either — so if the
+    // owner isn't told at lead creation they are never told at all, and someone
+    // who filled the whole form sits in the queue unnoticed.
+    //
+    // Awaited but best-effort: a serverless invocation can be frozen the moment
+    // this action returns, so fire-and-forget could drop the send mid-flight —
+    // and neither email failing may fail the lead, which is already committed.
+    // The member's copy is skipped entirely when they gave no address (the field
+    // is optional, and unsent mail costs no quota).
+    try {
+      await notifyOwnerOfLead(join[0]);
+    } catch (e) {
+      console.error("[JoinLead] owner alert failed:", e);
     }
+    try {
+      await notifyMemberOfLead(
+        join[0],
+        reference,
+        branch?.name || "",
+        branch?.phone || null,
+        plan.name
+      );
+    } catch (e) {
+      console.error("[JoinLead] member acknowledgement failed:", e);
+    }
+
+    revalidatePath("/admin/join-requests");
 
     return {
       success: true,
@@ -697,28 +798,22 @@ export async function createManualJoinRequest(formData: FormData) {
       planDurationDays: plan.durationDays,
       branchName: branch?.name || "",
       branchPhone: branch?.phone || null,
-      upiConfigured: Boolean(upiId),
-      upiId: upiId || null,
-      payeeName,
-      upiString,
-      qrDataUrl,
+      // The contact screen tells them where to walk in, so it needs the address.
+      branchAddress: branch?.address || "",
       email: email || null,
       isRenewal,
     };
   } catch (e) {
-    return { error: sanitizeError(e, "Failed to create join request") };
+    return { error: sanitizeError(e, "Failed to save your details") };
   }
 }
 
 /**
- * Best-effort email to the branch owner that a member has claimed a UPI payment.
+ * Best-effort email to the branch owner that a join lead needs a phone call.
  * Not exported (this file is "use server", so every export is a public endpoint)
- * and the caller wraps it in try/catch — a failed ping must never fail the claim.
+ * and the caller wraps it in try/catch — a failed ping must never fail the lead.
  */
-async function notifyOwnerOfClaim(
-  join: typeof onlineJoins.$inferSelect,
-  utr: string | null
-) {
+async function notifyOwnerOfLead(join: typeof onlineJoins.$inferSelect) {
   const branchRow = await db
     .select()
     .from(branches)
@@ -750,7 +845,6 @@ async function notifyOwnerOfClaim(
     amount: join.amount,
     branchName: branch?.name || "",
     reference,
-    upiReference: utr || join.upiReference,
     isRenewal: Boolean(join.memberId),
     planName: planRow[0]?.name,
   });
@@ -765,78 +859,49 @@ async function notifyOwnerOfClaim(
 }
 
 /**
- * The member tapped "I've paid". Flip pending → claimed, capture an optional
- * UTR, and ping the owner. Public and rate-limited. The UTR is never required —
- * the owner confirms from their own bank record, so a member who doesn't have
- * the reference number to hand is never blocked.
+ * Best-effort "we've got your details, the gym will call you" email to the
+ * MEMBER. Not exported for the same reason as notifyOwnerOfLead — every export of
+ * a "use server" module is a public endpoint — and the caller wraps it, because a
+ * failed email must never fail the lead.
+ *
+ * The `if (!join.email)` guard is the whole email budget in one line: the address
+ * is optional on the join form, and no address means no send rather than a
+ * throwaway attempt against the 3,000/month allowance.
+ *
+ * Note this cannot actually reach members until the sending domain is verified in
+ * Resend (the shared sender only delivers to the Resend account owner). It is
+ * written and wired now so that switching FROM_EMAIL is the only step left; the
+ * status page carries the reassurance in the meantime.
  */
-export async function submitManualPaymentClaim(data: {
-  joinId: number;
-  upiReference?: string;
-}) {
-  const { ip } = await getClientInfo();
-  const rl = await checkRateLimit(`claim:${ip}`);
-  if (!rl.allowed) {
-    return {
-      error: `Too many attempts. Try again in ${rl.blockMinutesLeft} minutes.`,
-    };
-  }
+async function notifyMemberOfLead(
+  join: typeof onlineJoins.$inferSelect,
+  reference: string,
+  branchName: string,
+  branchPhone: string | null,
+  planName?: string
+) {
+  if (!join.email) return;
 
-  try {
-    const joins = await db
-      .select()
-      .from(onlineJoins)
-      .where(eq(onlineJoins.id, data.joinId))
-      .limit(1);
-    if (!joins.length) return { error: "Request not found." };
-    const join = joins[0];
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey || /x{4,}/i.test(apiKey)) return;
 
-    // Idempotent: a member double-tapping "I've paid" after the owner already
-    // confirmed shouldn't see an error.
-    if (join.status === "paid") {
-      return { success: true, alreadyConfirmed: true };
-    }
-    if (join.status === "rejected") {
-      return {
-        error:
-          "This request was cancelled. Please start a new join, or contact the gym.",
-      };
-    }
+  const { subject, html, text } = joinReceivedEmail({
+    memberName: join.name,
+    reference,
+    amount: join.amount,
+    planName,
+    branchName,
+    branchPhone,
+    isRenewal: Boolean(join.memberId),
+  });
 
-    // Normalise the UTR: strip spaces, cap length. A UTR is ~12 digits; 32 is a
-    // generous ceiling that still blocks someone pasting an essay into the field.
-    const utr =
-      (data.upiReference || "").replace(/\s/g, "").slice(0, 32) || null;
-
-    if (join.status === "pending") {
-      await db
-        .update(onlineJoins)
-        .set({ status: "claimed", claimedAt: new Date(), upiReference: utr })
-        .where(
-          and(eq(onlineJoins.id, join.id), eq(onlineJoins.status, "pending"))
-        );
-    } else if (join.status === "claimed" && utr && !join.upiReference) {
-      // Member came back to add a UTR they didn't have the first time.
-      await db
-        .update(onlineJoins)
-        .set({ upiReference: utr })
-        .where(eq(onlineJoins.id, join.id));
-    }
-
-    // Ping the owner. Awaited but best-effort: a serverless invocation can be
-    // frozen the moment this action returns, so fire-and-forget could drop the
-    // email — and a failed ping must never fail the member's claim.
-    try {
-      await notifyOwnerOfClaim(join, utr);
-    } catch (e) {
-      console.error("[ManualJoin] owner alert failed:", e);
-    }
-
-    revalidatePath("/admin/join-requests");
-    return { success: true };
-  } catch (e) {
-    return { error: sanitizeError(e, "Couldn't record your payment") };
-  }
+  await new Resend(apiKey).emails.send({
+    from: fromHeader(),
+    to: join.email,
+    subject,
+    html,
+    text,
+  });
 }
 
 /**
@@ -864,8 +929,21 @@ export async function getJoinStatus(data: { reference: string; phone: string }) 
   if (!parsed || !phone) return GENERIC;
 
   try {
+    // Column list rather than select(): a `select()` here would drag proofImage
+    // (~80KB of base64) into the action on every status check, to be used for
+    // nothing but a boolean.
     const joins = await db
-      .select()
+      .select({
+        id: onlineJoins.id,
+        branchId: onlineJoins.branchId,
+        name: onlineJoins.name,
+        contactNumber: onlineJoins.contactNumber,
+        amount: onlineJoins.amount,
+        status: onlineJoins.status,
+        memberId: onlineJoins.memberId,
+        claimedAt: onlineJoins.claimedAt,
+        proofUploadedAt: onlineJoins.proofUploadedAt,
+      })
       .from(onlineJoins)
       .where(eq(onlineJoins.id, parsed.joinId))
       .limit(1);
@@ -917,8 +995,101 @@ export async function getJoinStatus(data: { reference: string; phone: string }) 
       gymId,
       expiry,
       claimedAt: join.claimedAt ? join.claimedAt.toISOString() : null,
+      hasProof: Boolean(join.proofUploadedAt),
+      // Exchanged here, once, for the reference+phone proof the caller just
+      // passed. The status page polls with this instead of re-submitting the
+      // phone number on a timer — see pollJoinStatus below.
+      pollToken: await createStatusPollToken(join.id),
     };
   } catch (e) {
     return { error: sanitizeError(e, "Status check failed") };
+  }
+}
+
+/**
+ * Re-check a request the caller has ALREADY proved they own, using the signed
+ * token getJoinStatus handed back.
+ *
+ * WHY THIS IS SEPARATE FROM getJoinStatus
+ * The status page polls every few seconds so it flips to "confirmed" while the
+ * member is watching, which is the single most reassuring thing the site can do
+ * while they wait on the owner. It cannot poll getJoinStatus: that action is
+ * metered at 5 attempts per 15 minutes with a 30-minute block, so a 20-second
+ * poll would lock the member out of checking their own membership inside two
+ * minutes.
+ *
+ * Verifying a signature instead of re-proving identity means this endpoint has no
+ * brute-force surface — a token naming someone else's join id cannot be forged —
+ * so it can carry a much more generous limit. It still returns only what changes
+ * (status, and the Gym ID once there is one), never the member's details, so even
+ * a leaked token discloses nothing new to whoever already had it.
+ */
+export async function pollJoinStatus(data: { token: string }) {
+  const joinId = await verifyStatusPollToken(data.token);
+  if (!joinId) {
+    // Expired or malformed — the client falls back to the form.
+    return { error: "expired" as const };
+  }
+
+  // Generous, but not unlimited: this exists to stop a flood, not to authorise.
+  //
+  // Keyed on the join id rather than the IP, which is the opposite of every other
+  // limit here — deliberately. Mobile carriers put thousands of phones behind one
+  // address, so an IP key would make two members polling from the same network
+  // share a bucket and cut each other off. The token already proves which request
+  // this is and cannot be forged, so a per-join key is both safe and precise: the
+  // worst anyone can do with their own token is throttle their own page.
+  const rl = await checkRateLimit(`joinpoll:${joinId}`, {
+    max: 240,
+    windowMinutes: 15,
+    blockMinutes: 5,
+  });
+  if (!rl.allowed) return { error: "throttled" as const };
+
+  try {
+    const joins = await db
+      .select({
+        status: onlineJoins.status,
+        memberId: onlineJoins.memberId,
+        // proofUploadedAt, not proofImage. This runs every few seconds for as
+        // long as the member watches the page, and proofImage is ~80KB of
+        // base64 — reading it to produce a boolean would move megabytes per
+        // wait, for nothing. The timestamp is written in the same statement as
+        // the image, so its presence means the same thing.
+        proofUploadedAt: onlineJoins.proofUploadedAt,
+      })
+      .from(onlineJoins)
+      .where(eq(onlineJoins.id, joinId))
+      .limit(1);
+    if (!joins.length) return { error: "expired" as const };
+    const join = joins[0];
+
+    let gymId: number | null = null;
+    let expiry: string | null = null;
+    if (join.status === "paid" && join.memberId) {
+      const m = (
+        await db
+          .select({
+            gymId: members.gymId,
+            membershipExpiry: members.membershipExpiry,
+          })
+          .from(members)
+          .where(eq(members.id, join.memberId))
+          .limit(1)
+      )[0];
+      gymId = m?.gymId ?? null;
+      expiry = m?.membershipExpiry ?? null;
+    }
+
+    return {
+      success: true as const,
+      status: join.status,
+      gymId,
+      expiry,
+      hasProof: Boolean(join.proofUploadedAt),
+    };
+  } catch {
+    // A failed poll is not worth surfacing — the next tick tries again.
+    return { error: "failed" as const };
   }
 }

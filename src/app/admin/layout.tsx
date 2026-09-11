@@ -1,6 +1,5 @@
 import type { Metadata, Viewport } from "next";
 import { ReactNode } from "react";
-import { cookies } from "next/headers";
 import {
   Users,
   UserCircle,
@@ -20,7 +19,13 @@ import {
 import { db } from "@/db";
 import { onlineJoins } from "@/db/schema";
 import { and, count, eq, inArray } from "drizzle-orm";
-import { getAllBranches } from "@/lib/branch";
+import {
+  canManageBrandContent,
+  getAllBranches,
+  getBranchScope,
+  isBrandContentBranch,
+  isSuperAdmin,
+} from "@/lib/branch";
 import { hasPermission, getCurrentUser } from "@/lib/auth-check";
 import BranchSwitcher from "./branch-switcher";
 import LogoutButton from "./logout-button";
@@ -43,16 +48,30 @@ export const viewport: Viewport = {
 };
 
 export default async function AdminLayout({ children }: { children: ReactNode }) {
-  const cookieStore = await cookies();
   const user = await getCurrentUser();
   const role = user?.role || "owner";
   const name = user?.name || "Admin";
-  const activeBranchCookie = cookieStore.get("admin_branch")?.value || "all";
   const isOwner = role === "owner";
 
+  // Whether this account sees BOTH gyms. `isOwner` is not the right question for
+  // anything group-wide any more: with the dashboards separated, a branch owner
+  // is a full owner who happens to be locked to one gym.
+  const superAdmin = await isSuperAdmin();
+
   const branches = await getAllBranches();
-  const currentBranchId: number | "all" =
-    activeBranchCookie === "all" ? "all" : Number(activeBranchCookie);
+
+  // The branch indicator and the join badge both read getBranchScope() rather
+  // than the admin_branch cookie. For a locked user the cookie is ignored when
+  // data is queried, so trusting it here would print "All Branches" above one
+  // branch's numbers. A throw (unassigned or deleted branch) is swallowed so the
+  // shell still renders — the page inside it reports the real error.
+  let currentBranchId: number | "all" = "all";
+  try {
+    const scope = await getBranchScope();
+    if (scope.type === "single") currentBranchId = scope.branchId;
+  } catch {
+    currentBranchId = "all";
+  }
 
   // 🔒 Permission checks — computed once for the whole navigation.
   // The dashboard is not among them: it is owner-only, so `isOwner` gates it
@@ -65,15 +84,25 @@ export default async function AdminLayout({ children }: { children: ReactNode })
   const canSeeEquipment =
     isOwner || (await hasPermission("equipment", "canView"));
   const canSeeImport = isOwner || (await hasPermission("import", "canView"));
-  const canSeeSecurity =
-    isOwner || (await hasPermission("security", "canView"));
+  // Security is the login log. It has no branch column and cannot get one (an
+  // attempt is recorded before anyone is authenticated), so it is main-owner
+  // only — see the comment in admin/security/page.tsx.
+  const canSeeSecurity = superAdmin;
   const canSeeTrainers =
     isOwner || (await hasPermission("trainers", "canView"));
   const canSeeStaff = isOwner || (await hasPermission("staff", "canView"));
-  const canSeeReviews = isOwner || (await hasPermission("reviews", "canView"));
+  // Homepage testimonials are shared across both gyms, so one account curates
+  // them. Matches the gate on the page and on the write actions.
+  const canSeeReviews =
+    (await canManageBrandContent()) ||
+    ((await isBrandContentBranch()) &&
+      (await hasPermission("reviews", "canView")));
 
-  // Badge on the owner's "Join Requests" nav: how many online joins are still
-  // awaiting action (paid-but-unconfirmed or not-yet-paid) in the current view.
+  // Badge on the owner's "Join Requests" nav: how many online joins still need a
+  // human, in the current view. That is people who filled the form without
+  // paying (`pending`) plus the legacy screenshot rows still awaiting a ruling
+  // (`claimed`). Gateway payments activate themselves and are never counted —
+  // the badge is a call list, not a backlog of unread rows.
   // Wrapped so a DB hiccup can never take down the whole admin shell.
   let pendingJoinCount = 0;
   if (isOwner) {
@@ -123,11 +152,11 @@ export default async function AdminLayout({ children }: { children: ReactNode })
         }}
         footer={<LogoutButton className="adm-logout" iconSize={17} />}
       >
-        <div className="adm-sec">Active Branch</div>
+        <div className="adm-sec">{superAdmin ? "Active Branch" : "Your Gym"}</div>
         <BranchSwitcher
           branches={branchOptions}
           currentBranchId={currentBranchId}
-          isOwner={isOwner}
+          canSwitch={superAdmin}
         />
 
         <div className="adm-sec">Daily</div>

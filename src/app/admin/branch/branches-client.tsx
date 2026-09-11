@@ -12,7 +12,6 @@ import {
   Mail,
   Edit,
   ExternalLink,
-  IndianRupee,
 } from "lucide-react";
 import { Sheet } from "../sheet";
 
@@ -25,16 +24,19 @@ type Branch = {
   ownerName: string | null;
   ownerEmail: string | null;
   mapUrl: string | null;
-  upiId: string | null;
-  upiName: string | null;
+  // upiId / upiName are on the row (the page passes whole branch records) but
+  // deliberately absent from this type — nothing on this screen reads them any
+  // more, and declaring them would invite the next edit to render them.
   isActive: boolean;
   createdAt: Date | null;
 };
 
 export default function BranchesClient({
   initialBranches,
+  canToggleActive,
 }: {
   initialBranches: Branch[];
+  canToggleActive: boolean;
 }) {
   const [editing, setEditing] = useState<Branch | null>(null);
   const [loading, setLoading] = useState(false);
@@ -85,9 +87,6 @@ export default function BranchesClient({
                   </span>
                   {!branch.mapUrl && (
                     <span className="adm-tag warn">No map link</span>
-                  )}
-                  {!branch.upiId && (
-                    <span className="adm-tag warn">No UPI</span>
                   )}
                 </div>
               </div>
@@ -145,20 +144,12 @@ export default function BranchesClient({
                 </div>
               )}
 
-              {branch.upiId && (
-                <div style={{ gridColumn: "1 / -1" }}>
-                  <div className="adm-rec-k">
-                    <IndianRupee size={9} style={{ display: "inline", marginRight: 3 }} />
-                    UPI (online payments)
-                  </div>
-                  <div className="adm-rec-v" style={{ whiteSpace: "normal" }}>
-                    {branch.upiId}
-                    {branch.upiName ? (
-                      <span style={{ color: "var(--text3)" }}> · {branch.upiName}</span>
-                    ) : null}
-                  </div>
-                </div>
-              )}
+              {/* The branch's UPI ID and display name used to be shown here. They
+                  drove the deleted QR pay screen and nothing reads them now —
+                  online payments settle into the branch's Razorpay account, which
+                  is configured by env var, not by this form. Showing them would
+                  imply otherwise. The columns stay in the database (old rows carry
+                  real values); only the UI is gone. */}
             </div>
 
             <div className="adm-rec-foot">
@@ -285,63 +276,39 @@ export default function BranchesClient({
               </div>
             </div>
 
-            {/* UPI details power the online-join pay screen: the QR and the
-                "Open in UPI app" button are built from these. Leave blank and
-                online joins simply show "payment not set up — contact us". */}
-            <div className="adm-field">
-              <label className="adm-label" htmlFor="br-upi-id">
-                UPI ID (for online payments)
-              </label>
-              <input
-                id="br-upi-id"
-                type="text"
-                name="upiId"
-                defaultValue={editing.upiId || ""}
-                placeholder="e.g. brothersgym@okhdfcbank"
-                className="adm-input"
-                autoComplete="off"
-                autoCapitalize="none"
-                spellCheck={false}
-              />
-              <p className="adm-hint">
-                Money from online joins is sent here. Double-check it — payments
-                go to whatever you type.
-              </p>
-            </div>
+            {/* The "UPI ID" and "UPI Display Name" fields used to sit here. They
+                are removed rather than merely hidden, because their own hint text
+                said "Money from online joins is sent here — payments go to
+                whatever you type", and that is now false: online payments settle
+                into the branch's Razorpay account, resolved from
+                RAZORPAY_KEY_ID_<CODE> in the environment. An owner who typed a UPI
+                ID into a form making that promise would reasonably believe money
+                was arriving somewhere it wasn't.
 
-            <div className="adm-field">
-              <label className="adm-label" htmlFor="br-upi-name">
-                UPI Display Name
-              </label>
-              <input
-                id="br-upi-name"
-                type="text"
-                name="upiName"
-                defaultValue={editing.upiName || ""}
-                placeholder="e.g. Brothers Gym"
-                className="adm-input"
-              />
-              <p className="adm-hint">
-                The name members see in their UPI app before they pay. Usually
-                your gym or account name.
-              </p>
-            </div>
+                updateBranchAction no longer reads either field — see the note
+                there about why it can't just leave them in the update. */}
 
-            <label className="adm-switch">
-              <span className="adm-switch-text">
-                <span className="adm-switch-title">Active branch</span>
-                <span className="adm-switch-sub">
-                  Off removes it from the public website
+            {/* Deactivating a branch hides it from the site AND from
+                getAllBranches(), which would lock that branch's own owner out of
+                their dashboard. Main owner account only — updateBranchAction
+                ignores the field for anyone else. */}
+            {canToggleActive && (
+              <label className="adm-switch">
+                <span className="adm-switch-text">
+                  <span className="adm-switch-title">Active branch</span>
+                  <span className="adm-switch-sub">
+                    Off removes it from the public website
+                  </span>
                 </span>
-              </span>
-              <input
-                type="checkbox"
-                name="isActive"
-                value="true"
-                defaultChecked={editing.isActive}
-              />
-              <span className="adm-switch-track" aria-hidden="true" />
-            </label>
+                <input
+                  type="checkbox"
+                  name="isActive"
+                  value="true"
+                  defaultChecked={editing.isActive}
+                />
+                <span className="adm-switch-track" aria-hidden="true" />
+              </label>
+            )}
 
             <div style={{ display: "flex", gap: 9, marginTop: 16 }}>
               <button

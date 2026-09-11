@@ -28,8 +28,25 @@ export async function getClientInfo() {
 /**
  * Check if this IP/email is rate-limited.
  * Returns true if allowed, false if blocked.
+ *
+ * The defaults (5 / 15min / 30min block) are tuned for guessing a secret — a
+ * login, an OTP, a member lookup — where being slow is the entire point. Callers
+ * whose economics differ can override them.
+ *
+ * The one that actually needs this is the join status poll: it re-checks an
+ * already-authenticated request every few seconds, so the default would lock a
+ * member out of watching their own membership inside two minutes. It authorises
+ * with a signed token rather than a guessable secret, so its limit exists only to
+ * stop a flood, not to slow an attacker down.
  */
-export async function checkRateLimit(identifier: string) {
+export async function checkRateLimit(
+  identifier: string,
+  opts?: { max?: number; windowMinutes?: number; blockMinutes?: number }
+) {
+  const max = opts?.max ?? MAX_ATTEMPTS;
+  const windowMinutes = opts?.windowMinutes ?? WINDOW_MINUTES;
+  const blockMinutes = opts?.blockMinutes ?? BLOCK_MINUTES;
+
   try {
     // Single atomic upsert. Concurrent requests for the same identifier can no
     // longer each read "no row" and split the counter across duplicate rows —
@@ -39,7 +56,7 @@ export async function checkRateLimit(identifier: string) {
     // The CASE expressions reproduce the previous behavior exactly:
     //   - still blocked            → leave the row untouched
     //   - rolling window expired   → reset to attempt 1, clear the block
-    //   - otherwise                → increment; if this pushes past MAX, block
+    //   - otherwise                → increment; if this pushes past max, block
     const res = await db.execute(sql`
       INSERT INTO rate_limit_attempts (identifier, attempts, window_start, blocked_until)
       VALUES (${identifier}, 1, now(), NULL)
@@ -48,7 +65,7 @@ export async function checkRateLimit(identifier: string) {
           WHEN rate_limit_attempts.blocked_until IS NOT NULL
                AND rate_limit_attempts.blocked_until > now()
             THEN rate_limit_attempts.attempts
-          WHEN rate_limit_attempts.window_start + (${WINDOW_MINUTES} * interval '1 minute') < now()
+          WHEN rate_limit_attempts.window_start + (${windowMinutes} * interval '1 minute') < now()
             THEN 1
           ELSE rate_limit_attempts.attempts + 1
         END,
@@ -56,7 +73,7 @@ export async function checkRateLimit(identifier: string) {
           WHEN rate_limit_attempts.blocked_until IS NOT NULL
                AND rate_limit_attempts.blocked_until > now()
             THEN rate_limit_attempts.window_start
-          WHEN rate_limit_attempts.window_start + (${WINDOW_MINUTES} * interval '1 minute') < now()
+          WHEN rate_limit_attempts.window_start + (${windowMinutes} * interval '1 minute') < now()
             THEN now()
           ELSE rate_limit_attempts.window_start
         END,
@@ -64,10 +81,10 @@ export async function checkRateLimit(identifier: string) {
           WHEN rate_limit_attempts.blocked_until IS NOT NULL
                AND rate_limit_attempts.blocked_until > now()
             THEN rate_limit_attempts.blocked_until
-          WHEN rate_limit_attempts.window_start + (${WINDOW_MINUTES} * interval '1 minute') < now()
+          WHEN rate_limit_attempts.window_start + (${windowMinutes} * interval '1 minute') < now()
             THEN NULL
-          WHEN rate_limit_attempts.attempts + 1 > ${MAX_ATTEMPTS}
-            THEN now() + (${BLOCK_MINUTES} * interval '1 minute')
+          WHEN rate_limit_attempts.attempts + 1 > ${max}
+            THEN now() + (${blockMinutes} * interval '1 minute')
           ELSE rate_limit_attempts.blocked_until
         END
       RETURNING attempts, blocked_until
@@ -79,7 +96,7 @@ export async function checkRateLimit(identifier: string) {
 
     if (!row) {
       // Should not happen (INSERT or UPDATE always returns a row), but fail open.
-      return { allowed: true, remainingAttempts: MAX_ATTEMPTS };
+      return { allowed: true, remainingAttempts: max };
     }
 
     const blockedUntil = row.blocked_until ? new Date(row.blocked_until) : null;
@@ -95,12 +112,12 @@ export async function checkRateLimit(identifier: string) {
 
     return {
       allowed: true,
-      remainingAttempts: Math.max(0, MAX_ATTEMPTS - Number(row.attempts)),
+      remainingAttempts: Math.max(0, max - Number(row.attempts)),
     };
   } catch (e) {
     // If rate limit check fails, allow (don't block real users)
     console.error("Rate limit check failed:", e);
-    return { allowed: true, remainingAttempts: MAX_ATTEMPTS };
+    return { allowed: true, remainingAttempts: max };
   }
 }
 

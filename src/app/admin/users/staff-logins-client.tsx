@@ -30,9 +30,26 @@ type Branch = { id: number; code: string; name: string };
 type Props = {
   initialUsers: User[];
   branches: Branch[];
+  /**
+   * Super-admin only. Controls whether the Role select is offered at all: a
+   * branch-scoped owner may add staff to their own gym but never another owner
+   * login, since an owner with no branch is a super-admin.
+   */
+  canManageOwners: boolean;
+  /**
+   * Set for a branch-scoped owner — the one branch every login they create goes
+   * into. The branch picker is replaced by a static line, because the server
+   * forces this value regardless of what the form posts.
+   */
+  lockedBranchName: string | null;
 };
 
-export default function StaffLoginsClient({ initialUsers, branches }: Props) {
+export default function StaffLoginsClient({
+  initialUsers,
+  branches,
+  canManageOwners,
+  lockedBranchName,
+}: Props) {
   const [permissionsUser, setPermissionsUser] = useState<
     (User & { permissions?: StaffPermissions | null }) | null
   >(null);
@@ -46,7 +63,7 @@ export default function StaffLoginsClient({ initialUsers, branches }: Props) {
     setLoading(true);
     const r = await createStaffUserAction(fd);
     setLoading(false);
-    if (r.error) toast.error(r.error);
+    if ("error" in r) toast.error(r.error);
     else {
       toast.success("Staff login created!");
       setShowAdd(false);
@@ -58,7 +75,7 @@ export default function StaffLoginsClient({ initialUsers, branches }: Props) {
     setLoading(true);
     const r = await updateStaffUserAction(id, fd);
     setLoading(false);
-    if (r.error) toast.error(r.error);
+    if ("error" in r) toast.error(r.error);
     else {
       toast.success("Updated!");
       setEditing(null);
@@ -71,7 +88,7 @@ export default function StaffLoginsClient({ initialUsers, branches }: Props) {
     setDeletingId(id);
     const r = await deleteStaffUserAction(id);
     setDeletingId(null);
-    if (r.error) toast.error(r.error);
+    if ("error" in r) toast.error(r.error);
     else {
       toast.success("Deleted!");
       router.refresh();
@@ -221,40 +238,59 @@ export default function StaffLoginsClient({ initialUsers, branches }: Props) {
               <p className="adm-hint">At least 6 characters.</p>
             </div>
 
-            <div className="adm-form-grid">
+            {lockedBranchName ? (
               <div className="adm-field">
-                <label className="adm-label" htmlFor="us-role">
-                  Role *
-                </label>
-                <select
-                  id="us-role"
-                  name="role"
-                  defaultValue="staff"
-                  required
-                  className="adm-select"
-                >
-                  <option value="staff">Staff (single branch)</option>
-                  <option value="owner">Owner (all branches)</option>
-                </select>
-              </div>
-
-              <div className="adm-field">
-                <label className="adm-label" htmlFor="us-branch">
-                  Assigned Branch
-                </label>
-                <select id="us-branch" name="branchId" className="adm-select">
-                  <option value="">-- No branch (owner only) --</option>
-                  {branches.map((b) => (
-                    <option key={b.id} value={b.id}>
-                      {b.name} ({b.code})
-                    </option>
-                  ))}
-                </select>
+                <div className="adm-rec-k">Branch</div>
+                <div className="adm-rec-v">{lockedBranchName}</div>
                 <p className="adm-hint">
-                  Staff must have a branch. Owners see all branches automatically.
+                  Staff logins you add belong to your gym and can only see your
+                  gym&apos;s data.
                 </p>
               </div>
-            </div>
+            ) : (
+              <div className="adm-form-grid">
+                {canManageOwners && (
+                  <div className="adm-field">
+                    <label className="adm-label" htmlFor="us-role">
+                      Role *
+                    </label>
+                    <select
+                      id="us-role"
+                      name="role"
+                      defaultValue="staff"
+                      required
+                      className="adm-select"
+                    >
+                      <option value="staff">Staff (single branch)</option>
+                      <option value="owner">Owner</option>
+                    </select>
+                  </div>
+                )}
+
+                <div className="adm-field">
+                  <label className="adm-label" htmlFor="us-branch">
+                    Assigned Branch
+                  </label>
+                  <select id="us-branch" name="branchId" className="adm-select">
+                    <option value="">-- No branch (all branches) --</option>
+                    {branches.map((b) => (
+                      <option key={b.id} value={b.id}>
+                        {b.name} ({b.code})
+                      </option>
+                    ))}
+                  </select>
+                  <p className="adm-hint">
+                    Staff must have a branch. An <strong>owner with a branch</strong>{" "}
+                    sees only that gym; an <strong>owner with no branch</strong> sees
+                    and manages both.
+                  </p>
+                </div>
+              </div>
+            )}
+            {/* Only the main owner account may choose a role, so for everyone
+                else it is pinned to staff here rather than left to the server to
+                silently correct. */}
+            {!canManageOwners && <input type="hidden" name="role" value="staff" />}
 
             <div style={{ display: "flex", gap: 9, marginTop: 16 }}>
               <button
@@ -323,24 +359,38 @@ export default function StaffLoginsClient({ initialUsers, branches }: Props) {
               <p className="adm-hint">Leave empty to keep the current password.</p>
             </div>
 
-            <div className="adm-field">
-              <label className="adm-label" htmlFor="ue-branch">
-                Assigned Branch
-              </label>
-              <select
-                id="ue-branch"
-                name="branchId"
-                defaultValue={editing.branchId || ""}
-                className="adm-select"
-              >
-                <option value="">-- No branch (owner only) --</option>
-                {branches.map((b) => (
-                  <option key={b.id} value={b.id}>
-                    {b.name} ({b.code})
-                  </option>
-                ))}
-              </select>
-            </div>
+            {lockedBranchName ? (
+              <div className="adm-field">
+                <div className="adm-rec-k">Branch</div>
+                <div className="adm-rec-v">{lockedBranchName}</div>
+              </div>
+            ) : (
+              <div className="adm-field">
+                <label className="adm-label" htmlFor="ue-branch">
+                  Assigned Branch
+                </label>
+                <select
+                  id="ue-branch"
+                  name="branchId"
+                  defaultValue={editing.branchId || ""}
+                  className="adm-select"
+                >
+                  <option value="">-- No branch (all branches) --</option>
+                  {branches.map((b) => (
+                    <option key={b.id} value={b.id}>
+                      {b.name} ({b.code})
+                    </option>
+                  ))}
+                </select>
+                {editing.role === "owner" && (
+                  <p className="adm-hint">
+                    This is the switch for dashboard separation. A branch here
+                    limits this owner to that gym; clearing it gives them both
+                    gyms back immediately — no other change needed.
+                  </p>
+                )}
+              </div>
+            )}
 
             <label className="adm-switch">
               <span className="adm-switch-text">

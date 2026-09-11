@@ -1,5 +1,13 @@
 /**
- * Pure helpers for the manual UPI join flow.
+ * Pure helpers for the join flow: the member-facing reference, and date display.
+ *
+ * The filename says "manual" for a flow that no longer exists as such, and the
+ * two reference helpers below outlived it — a join still gets a `BG-NR-000123`
+ * reference whether Razorpay took the money or the owner took it at the counter,
+ * because that string is what the member quotes on the status page and what the
+ * owner reads off the follow-up queue. The file keeps its name so the churn stays
+ * small; only `buildUpiPayString` (the `upi://pay` QR payload) is gone, along with
+ * the screen that displayed it.
  *
  * Deliberately NOT a "use server" module — these are called from server actions,
  * server components and are side-effect free. Nothing here touches the database
@@ -37,32 +45,6 @@ export function parseJoinReference(
   const joinId = parseInt(m[2], 10);
   if (!joinId) return null;
   return { branchCode: m[1], joinId };
-}
-
-/**
- * Build the `upi://pay` deep-link / QR payload.
- *
- * `pa` is the payee VPA, `pn` the payee name the UPI app shows before the payer
- * confirms, `am` locks the amount, `tn` is a free-text note carrying our
- * reference so the transfer is traceable. We deliberately do NOT set `tr`
- * (merchant transaction ref): several UPI apps validate it and reject the whole
- * intent when it isn't a registered merchant ref, whereas `tn` is always free
- * text.
- */
-export function buildUpiPayString(opts: {
-  upiId: string;
-  payeeName: string;
-  amount: number;
-  note?: string;
-}): string {
-  const params = new URLSearchParams();
-  params.set("pa", opts.upiId);
-  params.set("pn", opts.payeeName);
-  params.set("am", opts.amount.toFixed(2));
-  params.set("cu", "INR");
-  if (opts.note) params.set("tn", opts.note);
-  // URLSearchParams encodes spaces as "+"; UPI apps are happier with %20.
-  return `upi://pay?${params.toString().replace(/\+/g, "%20")}`;
 }
 
 /**

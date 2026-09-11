@@ -1,6 +1,24 @@
 import { getVisibleReviews } from "@/app/actions/reviews";
 import { Star, Quote, MapPin } from "lucide-react";
 
+/**
+ * Roughly how many characters fit in the collapsed 5-line clamp.
+ *
+ * The card is ~310px wide on a phone and ~350px on desktop at text-sm, so call
+ * it ~44 characters a line — five lines is a little over 220. This threshold
+ * sits deliberately below that: set it too high and a review clipped by a few
+ * words renders with no way to read the rest, which is the exact problem this
+ * fixes. Set it too low and a mid-length review shows a control that reveals
+ * only a line, which is merely untidy.
+ *
+ * A character count is an estimate because CSS cannot detect its own overflow.
+ * The accurate alternative is measuring scrollHeight in the browser, which would
+ * turn this prerendered server component into a client one and ship a JS bundle
+ * to toggle a line-clamp. Not worth it for the difference.
+ */
+const CLAMP_CHAR_ESTIMATE = 200;
+
+
 export default async function ReviewsSection() {
   const reviews = await getVisibleReviews();
 
@@ -75,10 +93,46 @@ export default async function ReviewsSection() {
                 ))}
               </div>
 
-              {/* Review text */}
-              <p className="text-zinc-300 text-sm leading-relaxed mb-6 line-clamp-5">
-                &ldquo;{review.reviewText}&rdquo;
-              </p>
+              {/* Review text. Long ones expand with a checkbox and peer
+                  variants rather than useState: this keeps the section a server
+                  component with no client JS at all. The page is prerendered and
+                  revalidated hourly, so shipping a bundle just to toggle a
+                  line-clamp would be a bad trade. */}
+              {review.reviewText.length > CLAMP_CHAR_ESTIMATE ? (
+                <div className="mb-6">
+                  {/* sr-only rather than hidden: display:none takes the input out
+                      of the tab order, which would leave the control reachable
+                      by mouse only. */}
+                  <input
+                    type="checkbox"
+                    id={`review-${review.id}-expand`}
+                    className="peer sr-only"
+                  />
+                  <p className="text-zinc-300 text-sm leading-relaxed line-clamp-5 peer-checked:line-clamp-none">
+                    &ldquo;{review.reviewText}&rdquo;
+                  </p>
+                  {/* Two labels instead of one with swapped text: peer-checked:
+                      compiles to a sibling selector, so it can only reach
+                      elements alongside the input — never a span nested inside
+                      a label. */}
+                  <label
+                    htmlFor={`review-${review.id}-expand`}
+                    className="mt-2 inline-block cursor-pointer text-xs font-bold uppercase tracking-wider text-yellow-500 hover:text-yellow-400 peer-checked:hidden peer-focus-visible:underline"
+                  >
+                    Read more
+                  </label>
+                  <label
+                    htmlFor={`review-${review.id}-expand`}
+                    className="mt-2 hidden cursor-pointer text-xs font-bold uppercase tracking-wider text-yellow-500 hover:text-yellow-400 peer-checked:inline-block peer-focus-visible:underline"
+                  >
+                    Show less
+                  </label>
+                </div>
+              ) : (
+                <p className="text-zinc-300 text-sm leading-relaxed mb-6">
+                  &ldquo;{review.reviewText}&rdquo;
+                </p>
+              )}
 
               {/* Author */}
               <div className="flex items-center gap-3 pt-4 border-t border-zinc-800">

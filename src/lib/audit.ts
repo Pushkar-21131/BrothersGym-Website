@@ -57,21 +57,6 @@ export type AuditEvent =
   | "sms.sent";
 
 /**
- * Simple console-only audit log (legacy — still works).
- * Kept for backward compatibility.
- */
-export async function auditLog(action: string, details: unknown) {
-  const user = await getCurrentUser();
-  const name = user?.name || "unknown";
-  const role = user?.role || "unknown";
-
-  console.log(
-    `[AUDIT] ${new Date().toISOString()} · ${role}:${name} · ${action}`,
-    details
-  );
-}
-
-/**
  * Enhanced audit logging — saves to database AND console.
  * Use this for all new sensitive actions.
  *

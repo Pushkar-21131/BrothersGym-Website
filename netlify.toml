@@ -1,0 +1,21 @@
+# Netlify build configuration for Brothers Gym (Next.js 15 App Router).
+#
+# Deliberately minimal. There is NO `/api/*` redirect here on purpose:
+# @netlify/plugin-nextjs maps App Router routes — including route handlers like
+# /api/trainer-photo/[id] and /api/webhooks/razorpay — automatically. Adding a
+# blanket /api/* redirect to a single function would hijack those and break them.
+#
+# next.config.ts intentionally has no `output` setting; the plugin expects that.
+
+[build]
+  command = "npm run build"
+  publish = ".next"
+
+[build.environment]
+  # Pinned to match @types/node (22.x). package.json has no `engines` field and
+  # there is no .nvmrc, so without this the build drifts with Netlify's default
+  # and can diverge from what typechecks locally.
+  NODE_VERSION = "22"
+
+[[plugins]]
+  package = "@netlify/plugin-nextjs"

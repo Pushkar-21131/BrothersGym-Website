@@ -30,12 +30,31 @@ export type SessionPayload = {
   branchId: number | null;
 };
 
+/**
+ * A verified session, plus the one thing the signature can tell us that the
+ * payload cannot: when this token was signed.
+ *
+ * The middleware re-signs the token on every /admin request, so `issuedAt` IS
+ * the user's last activity — and unlike the `last_activity` cookie it used to
+ * read, this one is inside the signature. A client can throw the whole token
+ * away (which logs it out) but cannot rewind the clock on it or drop it to skip
+ * the idle check.
+ *
+ * `null` only for a token signed before `setIssuedAt()` existed in this file, or
+ * one carrying a non-numeric `iat`. Callers must treat that as "unknown, assume
+ * stale" rather than "fresh".
+ */
+export type VerifiedSession = SessionPayload & {
+  issuedAt: number | null; // unix seconds
+};
+
 export const SESSION_COOKIE = "admin_session";
 // Admin sessions slide on activity — the middleware re-issues this token on
 // every /admin request — so this is really the inactivity window: 3 days with
-// no request logs the user out. The extra hour is headroom so the signed token
-// always outlives the middleware's `last_activity` check, letting the user hit
-// the explicit "session expired" screen instead of a silent redirect.
+// no request logs the user out. The extra hour is headroom: the middleware's
+// idle check fires at 3 days using this token's own `iat`, so the signature is
+// still valid at the moment that check runs and the user is logged out
+// deliberately rather than by a signature failure.
 const SESSION_DURATION_SECONDS = 60 * 60 * 24 * 3 + 60 * 60; // 3 days + 1h
 
 function getSecret(): Uint8Array {
@@ -63,7 +82,7 @@ export async function createSessionToken(payload: SessionPayload): Promise<strin
 /**
  * Verify a session token. Returns the payload, or null if missing/invalid/expired.
  */
-export async function verifySessionToken(token: string | undefined | null): Promise<SessionPayload | null> {
+export async function verifySessionToken(token: string | undefined | null): Promise<VerifiedSession | null> {
   if (!token) return null;
   try {
     const { payload } = await jwtVerify(token, getSecret(), { algorithms: ["HS256"] });
@@ -82,6 +101,7 @@ export async function verifySessionToken(token: string | undefined | null): Prom
       role,
       name,
       branchId: typeof branchId === "number" ? branchId : null,
+      issuedAt: typeof payload.iat === "number" ? payload.iat : null,
     };
   } catch {
     // Invalid signature, malformed token, or expired — treat as logged out.

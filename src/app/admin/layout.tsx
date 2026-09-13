@@ -49,7 +49,12 @@ export const viewport: Viewport = {
 
 export default async function AdminLayout({ children }: { children: ReactNode }) {
   const user = await getCurrentUser();
-  const role = user?.role || "owner";
+  // Default to the LEAST privileged role, never "owner". getCurrentUser()
+  // returns null both for "no session" and for "the database call threw"
+  // (lib/auth-check.ts), so a transient DB blip must not be what decides to
+  // render the owner-only navigation. The pages themselves re-check, so this
+  // was never a breach — but the shell should fail closed too.
+  const role = user?.role || "staff";
   const name = user?.name || "Admin";
   const isOwner = role === "owner";
 

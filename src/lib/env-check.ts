@@ -105,8 +105,8 @@ function validateEnv() {
     warnings.push(
       `PAYMENT_MODE="${mode}" is not a recognised value — treating it as "razorpay" ` +
         `(gateway live). The only two values are "razorpay" and "contact". If you meant ` +
-        `to switch online payments off, set PAYMENT_MODE=contact and redeploy (the CSP ` +
-        `is spliced at build time, so an env change alone won't do it).`
+        `to switch online payments off, set PAYMENT_MODE=contact — the CSP is now built ` +
+        `per request in lib/csp.ts, so this takes effect without a rebuild.`
     );
   }
 

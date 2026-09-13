@@ -1,45 +1,21 @@
 import type { NextConfig } from "next";
 import { withSentryConfig } from "@sentry/nextjs";
 
-// Sentry reports are POSTed to the project's ingest host, which the CSP has to
-// allow or the browser blocks them silently — no console error, no report, and
-// nothing to explain why the dashboard stays empty.
+// NO CONTENT-SECURITY-POLICY IN THIS FILE.
 //
-// The host is derived from the DSN so it matches whatever project is configured.
-// With no DSN set (local dev) nothing is added to the policy at all.
-const sentryIngestHost = (() => {
-  const dsn = process.env.NEXT_PUBLIC_SENTRY_DSN;
-  if (!dsn) return "";
-  try {
-    return ` https://${new URL(dsn).host}`;
-  } catch {
-    // A malformed DSN shouldn't break the build — Sentry just stays off.
-    return "";
-  }
-})();
-
-// Razorpay's hosts are in the CSP unless PAYMENT_MODE=contact, which is the
-// site-wide kill switch for online payments — in that one mode we drop every
-// razorpay.com origin so the shipped policy carries no third-party payment hosts
-// at all. Cloudflare (Turnstile captcha) and MSG91 stay regardless; they're
-// unrelated to payments.
+// It used to be here, with Razorpay's hosts spliced in unless
+// PAYMENT_MODE=contact. But `headers()` below is evaluated ONCE, at build time,
+// while layout.tsx decides whether to emit checkout.js by reading the same env
+// var per request — so the kill switch was half build-time and half runtime, and
+// building with the gateway off and then turning it on left a policy that
+// silently blocked the checkout script. The policy now lives in
+// `src/lib/csp.ts` and is emitted from `src/middleware.ts`, which runs on every
+// document request. See the long note in that file.
 //
-// NOTE: this is read at BUILD time, so flipping PAYMENT_MODE needs a redeploy,
-// not just an env change. Defaulting to "gateway on" matters here: if an env var
-// went missing and this fell through to the restrictive policy, checkout.js
-// would be blocked by the CSP with nothing in the UI to explain it.
-const razorpayMode = process.env.PAYMENT_MODE !== "contact";
-const rzpScript = razorpayMode
-  ? " https://checkout.razorpay.com https://cdn.razorpay.com https://*.razorpay.com"
-  : "";
-const rzpConnect = razorpayMode
-  ? " https://api.razorpay.com https://checkout.razorpay.com https://lumberjack.razorpay.com https://lumberjack-cx.razorpay.com https://*.razorpay.com"
-  : "";
-const rzpFrame = razorpayMode
-  ? " https://api.razorpay.com https://checkout.razorpay.com https://*.razorpay.com"
-  : "";
-const rzpForm = razorpayMode ? " https://api.razorpay.com" : "";
-
+// The headers that remain are constants, so build time is the right place for
+// them — and unlike the CSP they still apply to the paths the middleware matcher
+// skips (api routes, /_next, static assets), which is where `nosniff` and
+// `X-Frame-Options` earn their keep.
 const nextConfig: NextConfig = {
   async headers() {
     return [
@@ -52,29 +28,6 @@ const nextConfig: NextConfig = {
           { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
           { key: "Strict-Transport-Security", value: "max-age=31536000; includeSubDomains" },
           { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=(), interest-cohort=(), payment=(self)" },
-          { key: "Content-Security-Policy",
-            value: [
-              "default-src 'self'",
-              // checkout.js also pulls its risk-detection bundle from
-              // cdn.razorpay.com at runtime — both hosts are added via
-              // rzpScript. Under PAYMENT_MODE=contact none of this is present.
-              `script-src 'self' 'unsafe-inline' 'unsafe-eval'${rzpScript} https://challenges.cloudflare.com https://*.cloudflare.com`,
-              "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-              "img-src 'self' data: blob: https: http:",
-              "font-src 'self' data: https://fonts.gstatic.com",
-              // lumberjack* are Razorpay's telemetry endpoints (dropped under
-              // PAYMENT_MODE=contact via rzpConnect); control.msg91.com is the
-              // SMS API.
-              `connect-src 'self'${rzpConnect}${sentryIngestHost} https://challenges.cloudflare.com https://*.cloudflare.com https://control.msg91.com`,
-              `frame-src 'self'${rzpFrame} https://challenges.cloudflare.com`,
-              "worker-src 'self' blob:",
-              "object-src 'none'",
-              "base-uri 'self'",
-              `form-action 'self'${rzpForm}`,
-              "frame-ancestors 'none'",
-              "upgrade-insecure-requests",
-            ].join("; "),
-          }
         ],
       },
     ];

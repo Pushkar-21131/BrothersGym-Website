@@ -15,11 +15,75 @@ const BLOCK_MINUTES = 30;
  */
 const DAILY_EMAIL_CAP = 10;
 
+/**
+ * Identifier prefixes whose limiter must FAIL CLOSED.
+ *
+ * Every checkRateLimit call used to return `{ allowed: true }` when the query
+ * itself failed, on the reasoning that a database blip should not lock out a
+ * paying customer. That is the right trade for the join form and the status
+ * poll — a blocked customer is a lost sale, and there is no secret being
+ * guessed.
+ *
+ * It is the wrong trade for anything guarding a secret. These endpoints check a
+ * password, an OTP, a reset token, or a member's ID-and-phone pair, and for
+ * those the limiter IS the defense: an unlimited number of guesses is the whole
+ * prize. The realistic window is not a total outage — an outage takes the
+ * lookup being brute-forced down with it — but partial pooler degradation,
+ * where the limiter's write fails while the read the attacker wants still
+ * succeeds.
+ *
+ * Prefixes, matched against the identifier's part before the first ":":
+ *   login         — password and OTP verification (auth.ts, otp.ts)
+ *   lookup        — member ID + phone, the enumeration target (payments.ts)
+ *   password-reset / reset-verify — reset request and token check
+ *   verify        — payment signature verification
+ * Left failing open on purpose: join, joinstatus, joinpoll.
+ */
+const FAIL_CLOSED_PREFIXES = new Set([
+  "login",
+  "lookup",
+  "password-reset",
+  "reset-verify",
+  "verify",
+]);
+
+/**
+ * How long to tell the caller to wait when the limiter itself is broken.
+ *
+ * Short on purpose. The block is not a punishment for the user in front of it —
+ * it is a pause while the database recovers, and a 30-minute lockout from a
+ * five-second blip would be its own outage.
+ */
+const FAIL_CLOSED_RETRY_MINUTES = 1;
+
+function failClosed(identifier: string) {
+  return FAIL_CLOSED_PREFIXES.has(identifier.split(":")[0]);
+}
+
+/**
+ * The caller's IP, as far as it can be trusted, plus their user agent.
+ *
+ * ORDER MATTERS. `x-forwarded-for` is a client-settable header: it arrives as a
+ * comma-separated chain and the leftmost entry is whatever the *original* client
+ * claimed. Behind Vercel that is safe, because Vercel rewrites the header with
+ * the real socket address — but "the proxy overwrites it" is a property of the
+ * deployment, not of this function, and every rate limit and audit row here is
+ * keyed on what it returns. Run this behind anything that appends rather than
+ * replaces, and an attacker picks their own rate-limit bucket per request.
+ *
+ * So the Vercel-specific headers are consulted first. `x-vercel-forwarded-for`
+ * is set by Vercel's edge from the connection itself and cannot be spoofed by
+ * the client; `x-real-ip` likewise. `x-forwarded-for` stays as the last resort
+ * for local development and any non-Vercel host, where it is the only thing
+ * available — but it is no longer the first choice merely because it is the
+ * best-known name.
+ */
 export async function getClientInfo() {
   const h = await headers();
   const ip =
+    h.get("x-vercel-forwarded-for")?.split(",")[0].trim() ||
+    h.get("x-real-ip")?.trim() ||
     h.get("x-forwarded-for")?.split(",")[0].trim() ||
-    h.get("x-real-ip") ||
     "unknown";
   const userAgent = h.get("user-agent") || "unknown";
   return { ip, userAgent };
@@ -95,7 +159,17 @@ export async function checkRateLimit(
       | undefined;
 
     if (!row) {
-      // Should not happen (INSERT or UPDATE always returns a row), but fail open.
+      // INSERT or UPDATE always returns a row, so reaching here means the
+      // statement did something unexpected rather than nothing. Treated like
+      // the catch below: guard a secret and you get a pause, guard a form and
+      // you get through.
+      if (failClosed(identifier)) {
+        return {
+          allowed: false,
+          blocked: true,
+          blockMinutesLeft: FAIL_CLOSED_RETRY_MINUTES,
+        };
+      }
       return { allowed: true, remainingAttempts: max };
     }
 
@@ -115,8 +189,19 @@ export async function checkRateLimit(
       remainingAttempts: Math.max(0, max - Number(row.attempts)),
     };
   } catch (e) {
-    // If rate limit check fails, allow (don't block real users)
     console.error("Rate limit check failed:", e);
+
+    // No counter means no limit, so for anything guarding a secret the safe
+    // answer is "not now" — see FAIL_CLOSED_PREFIXES. Everything else still
+    // fails open, because blocking a customer over a database blip is worse
+    // than the spam it would prevent.
+    if (failClosed(identifier)) {
+      return {
+        allowed: false,
+        blocked: true,
+        blockMinutesLeft: FAIL_CLOSED_RETRY_MINUTES,
+      };
+    }
     return { allowed: true, remainingAttempts: max };
   }
 }

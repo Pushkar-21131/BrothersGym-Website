@@ -12,6 +12,7 @@ import {
 } from "@/app/actions/payments";
 import { buildWhatsAppLink } from "@/lib/whatsapp";
 import { CHECKOUT_LOGO_DATA_URI } from "@/lib/checkout-logo";
+import TurnstileWidget from "@/app/components/turnstile-widget";
 
 declare global {
   interface Window {
@@ -121,6 +122,22 @@ export default function JoinPlansClient({
   const [loading, setLoading] = useState(false);
   const [formError, setFormError] = useState<string>("");
   const [consentChecked, setConsentChecked] = useState(false);
+
+  // Captcha, required before the form will submit.
+  //
+  // Only createJoinLead verifies the token server-side — it is the action that
+  // sends email, and email is the resource worth protecting. But the token is
+  // demanded on EVERY submit, including the gateway path, because the gateway
+  // path falls back to createJoinLead the moment Razorpay is unreachable. A
+  // token gathered only on the fallback would mean asking someone to solve a
+  // captcha after their payment already failed, which is the worst possible
+  // moment to add a step.
+  //
+  // captchaKey remounts the widget. Turnstile tokens are single-use, so once a
+  // submit has spent one the widget has to be reset before the next attempt or
+  // a retry is rejected for a reason the member cannot see.
+  const [captchaToken, setCaptchaToken] = useState("");
+  const [captchaKey, setCaptchaKey] = useState(0);
 
   // Fallback (contact-the-owner) flow state.
   const [leadInfo, setLeadInfo] = useState<LeadInfo | null>(null);
@@ -339,6 +356,13 @@ export default function JoinPlansClient({
   ) {
     const res = await createJoinLead(formData);
 
+    // The token is spent either way — Turnstile tokens are single-use, and
+    // createJoinLead redeems it before it does anything else. Reset the widget
+    // now so a retry after an error has a fresh one instead of failing on a
+    // captcha the member already solved.
+    setCaptchaToken("");
+    setCaptchaKey((k) => k + 1);
+
     if ("error" in res) {
       const msg =
         res.error ||
@@ -384,12 +408,18 @@ export default function JoinPlansClient({
       return;
     }
 
+    if (!captchaToken) {
+      setFormError("Please complete the security check below.");
+      return;
+    }
+
     const formEl = e.currentTarget;
     const formData = new FormData(formEl);
     formData.set("planCode", selectedPlan.code);
     formData.set("joinType", memberType);
     formData.set("branchId", String(selectedBranch.id));
     formData.set("consentToHealthData", "true");
+    formData.set("captchaToken", captchaToken);
 
     if (memberType === "renewal" && verified) {
       formData.set("existingMemberId", String(verified.id));
@@ -1143,6 +1173,23 @@ export default function JoinPlansClient({
                 </label>
               </div>
 
+              {/* Security check.
+                  Placed directly under the consent box and above the trust
+                  badges, so it reads as the last thing before submitting
+                  rather than an interruption in the middle of the fields.
+                  key={captchaKey} remounts it after a submit has spent the
+                  token — see the captchaToken state for why. */}
+              <div className="consent-box" key={captchaKey}>
+                <TurnstileWidget
+                  onVerify={(token) => {
+                    setCaptchaToken(token);
+                    if (token) setFormError("");
+                  }}
+                  action="join"
+                  theme="dark"
+                />
+              </div>
+
               {/* SUBTLE TRUST BADGES — Monochrome yellow */}
               <div className="trust-strip">
                 <div className="trust-item">
@@ -1219,7 +1266,7 @@ export default function JoinPlansClient({
               <button
                 type="submit"
                 className="submit-btn"
-                disabled={loading || !consentChecked}
+                disabled={loading || !consentChecked || !captchaToken}
               >
                 {loading ? (
                   <>

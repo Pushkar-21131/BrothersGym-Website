@@ -3,7 +3,7 @@ import { membershipPlans, branches } from "@/db/schema";
 import { eq, inArray } from "drizzle-orm";
 import { requireOwner } from "@/lib/auth-check";
 import { getBranchScope, getAllBranches } from "@/lib/branch";
-import PlansEditorClient from "./plans-editor-client";
+import PlansEditorClient, { type Plan } from "./plans-editor-client";
 
 export const dynamic = "force-dynamic";
 
@@ -13,7 +13,7 @@ export default async function PlansPage() {
   const scope = await getBranchScope();
   const allBranches = await getAllBranches();
 
-  const rows = await db
+  const rows: Plan[] = await db
     .select({
       id: membershipPlans.id,
       branchId: membershipPlans.branchId,
@@ -48,7 +48,7 @@ export default async function PlansPage() {
         </p>
       </div>
       <PlansEditorClient
-        initialPlans={rows as any}
+        initialPlans={rows}
         allBranches={allBranches.map((b) => ({ id: b.id, code: b.code, name: b.name }))}
       />
     </>

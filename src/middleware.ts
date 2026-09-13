@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
+import { buildContentSecurityPolicy } from "@/lib/csp";
 import {
   verifySessionToken,
   createSessionToken,
@@ -44,8 +45,17 @@ function normalizePath(value: string | undefined): string | null {
 /**
  * Apply security headers to any response.
  * These enhance the base headers set in next.config.ts.
+ *
+ * The Content-Security-Policy is emitted HERE rather than in next.config.ts
+ * because it depends on `PAYMENT_MODE`, and next.config's `headers()` runs once
+ * at build time — see lib/csp.ts for why that combination fails silently. Every
+ * return path in this middleware goes through this function, so every document
+ * response carries the policy. The two routes that serve user-uploaded images
+ * (`api/trainer-photo`, `api/admin/join-proof`) are outside the matcher and set
+ * their own, far stricter, `default-src 'none'; sandbox` policy.
  */
 function applySecurityHeaders(response: NextResponse): NextResponse {
+  response.headers.set("Content-Security-Policy", buildContentSecurityPolicy());
   response.headers.set("X-DNS-Prefetch-Control", "on");
   response.headers.set("X-Download-Options", "noopen");
   response.headers.set("X-Permitted-Cross-Domain-Policies", "none");
@@ -82,24 +92,30 @@ export async function middleware(request: NextRequest) {
   const role = session?.role;
 
   // ===== 1. Session timeout check =====
-  if (isAuthed) {
-    const lastActivity = request.cookies.get("last_activity")?.value;
-    if (lastActivity) {
-      const parsed = parseInt(lastActivity);
-      // A non-numeric/garbled value can't be trusted — force re-login.
-      const timeSince = Number.isNaN(parsed)
-        ? Number.POSITIVE_INFINITY
-        : Date.now() - parsed;
-      if (timeSince > SESSION_TIMEOUT_MS) {
-        // Sent to the homepage, never to a login path — the path stays secret.
-        // The user re-enters via their bookmarked secret URL.
-        const response = NextResponse.redirect(new URL("/", request.url));
-        clearSessionCookies(response);
-        return applySecurityHeaders(response);
-      }
+  // Anchored on the SIGNED token's `iat`, not on a cookie.
+  //
+  // This read `last_activity` — a cookie the client holds — and skipped the
+  // check entirely when it was absent (`if (lastActivity)`). Deleting one cookie
+  // therefore bypassed the idle timeout, and section 6 below then re-stamped it,
+  // so the bypass was repeatable: a stolen session could be kept alive
+  // indefinitely by dropping `last_activity` before each request. The JWT's own
+  // expiry was the backstop, but section 6 re-issues that too, so it never bit.
+  //
+  // `iat` is re-stamped by the same re-issue, which makes it the genuine
+  // last-activity time, and it lives inside the signature. A client can discard
+  // the token — that logs it out — but cannot rewind it or hide it.
+  if (session) {
+    const timeSince =
+      session.issuedAt === null
+        ? Number.POSITIVE_INFINITY // pre-`iat` token: treat as stale, not fresh
+        : Date.now() - session.issuedAt * 1000;
+    if (timeSince > SESSION_TIMEOUT_MS) {
+      // Sent to the homepage, never to a login path — the path stays secret.
+      // The user re-enters via their bookmarked secret URL.
+      const response = NextResponse.redirect(new URL("/", request.url));
+      clearSessionCookies(response);
+      return applySecurityHeaders(response);
     }
-    // If `last_activity` is missing it is (re)stamped in section 6 below, so a
-    // fresh session isn't kicked out on its very first admin request.
   }
 
   // ===== 2. Block direct hits on the internal login routes =====
@@ -159,24 +175,20 @@ export async function middleware(request: NextRequest) {
   }
 
   // ===== 6. Slide the session forward on admin activity =====
-  // Re-issue the signed token and re-stamp last_activity on every admin
-  // request, each with a fresh 3-day window. A user who keeps using the panel
-  // never gets logged out; 3 days with no request does. `session` is the
-  // already-verified payload, so this re-signs the same identity — no
-  // privilege change.
+  // Re-issue the signed token on every admin request, each with a fresh 3-day
+  // window and a fresh `iat` — which is what section 1 reads. A user who keeps
+  // using the panel never gets logged out; 3 days with no request does.
+  // `session` is the already-verified payload, so this re-signs the same
+  // identity — no privilege change.
+  //
+  // No `last_activity` cookie is written any more. It was the input to the idle
+  // check and the client could delete it to skip that check; the timestamp now
+  // travels inside the signature instead. clearSessionCookies still deletes the
+  // cookie so browsers holding one from an older session are cleaned up.
   if (session && pathname.startsWith("/admin")) {
     const response = NextResponse.next();
     const freshToken = await createSessionToken(session);
     response.cookies.set(SESSION_COOKIE, freshToken, sessionCookieOptions());
-    response.cookies.set("last_activity", Date.now().toString(), {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      // Must outlive SESSION_TIMEOUT_MS so the timestamp is still readable at
-      // the moment the 3-day inactivity check runs.
-      maxAge: 60 * 60 * 24 * 3 + 60 * 60, // 3 days + 1h
-      path: "/",
-      sameSite: "lax",
-    });
     return applySecurityHeaders(response);
   }
 

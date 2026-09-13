@@ -1,7 +1,7 @@
 "use server";
 
 import { Resend } from "resend";
-import { getClientInfo } from "@/lib/security";
+import { getClientInfo, checkDailyEmailCap } from "@/lib/security";
 import { escapeHtml, fromHeader } from "@/lib/email-templates";
 
 const resend = new Resend(process.env.RESEND_API_KEY);
@@ -45,6 +45,29 @@ export async function sendSecurityAlert(data: {
     // The other alert types have no template yet. Without this guard they sent
     // a real email with an empty subject and an empty body.
     if (!subject || !body) return;
+
+    // ===== DAILY CAP =====
+    // This fires on every failed owner login, and nothing bounded it. The rate
+    // limiter lets 5 attempts through per 15-minute window before a 30-minute
+    // block, so a patient script can keep ~5 alerts per half hour flowing — 240
+    // a day against a Resend free allowance of 100 that the owner's own login
+    // OTP comes out of. The alert warning about an attack was itself the way to
+    // lock the owner out of responding to one.
+    //
+    // Namespaced per alert type, deliberately not keyed on OWNER_EMAIL:
+    // checkDailyEmailCap builds `email-daily:<address>`, which is exactly the
+    // key the owner's OTP uses, so capping on the owner's address would spend
+    // the OTP quota and cause the lockout this exists to prevent. Per type also
+    // means a flood of login alerts cannot suppress a different alert later.
+    //
+    // 20 is well past the point of diminishing returns: after the second email
+    // the owner knows, and /admin/security holds the complete login_attempts
+    // log either way, so a suppressed alert loses no evidence.
+    //
+    // Placed after the template guard so only real sends are counted — see the
+    // note on checkDailyEmailCap.
+    const cap = await checkDailyEmailCap(`security-alert:${data.type}`, 20);
+    if (!cap.allowed) return;
 
     await resend.emails.send({
       from: fromHeader(),

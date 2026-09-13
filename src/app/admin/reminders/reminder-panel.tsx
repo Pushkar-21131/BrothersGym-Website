@@ -4,6 +4,7 @@ import { sendSMSReminder } from "@/app/actions/sms";
 import { useMemo, useState } from "react";
 import { MessageCircle, Send, Smartphone, BellRing } from "lucide-react";
 import toast from "react-hot-toast";
+import { istDateString } from "@/lib/utils";
 import {
   buildWhatsAppLink,
   generateReminderMessage,
@@ -12,7 +13,18 @@ import {
   ReminderTemplateId,
 } from "@/lib/whatsapp";
 
-type Member = {
+/**
+ * The six columns this panel actually reads — exported so `reminders/page.tsx`
+ * can annotate its query with it.
+ *
+ * The page used to call `db.select()` with no column list and pass the result
+ * straight in. That compiled silently: a wider object is assignable to a
+ * narrower type, so there was no cast to notice and no error to fix, while every
+ * active member's address, email, father's name, emergency contact and
+ * left-gym notes were serialised into the page for a module that asks for none
+ * of them.
+ */
+export type Member = {
   id: number;
   gymId: number;
   name: string;
@@ -264,7 +276,7 @@ export default function ReminderPanel({
   // ============================================
   // RENDER
   // ============================================
-  const today = new Date().toISOString().split("T")[0];
+  const today = istDateString();
 
   return (
     <div className="adm-pagebody">

@@ -15,7 +15,7 @@ import {
 } from "lucide-react";
 import { getBranchScope, getAllBranches } from "@/lib/branch";
 import { getVerifiedRole, hasPermission } from "@/lib/auth-check";
-import { formatINR } from "@/lib/utils";
+import { formatINR, istDateString, addDaysIso } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
@@ -90,11 +90,12 @@ export default async function AdminDashboard() {
   const scope = await getBranchScope();
   const allBranches = await getAllBranches();
 
-  const today = new Date().toISOString().split("T")[0];
   // Server component, rendered fresh on every request (force-dynamic), so
-  // reading the clock here is the point rather than a purity problem.
-  // eslint-disable-next-line react-hooks/purity
-  const soon = new Date(Date.now() + 7 * 86400000).toISOString().split("T")[0];
+  // reading the clock here is the point rather than a purity problem. IST, not
+  // UTC: on Vercel the host runs in UTC, and a UTC date would call a membership
+  // "expired" from 6:30 PM the evening before.
+  const today = istDateString();
+  const soon = addDaysIso(today, 7);
 
   // Only the branches this account may see. Filtering BEFORE the stats queries
   // (rather than after) means a branch owner's dashboard never reads the other

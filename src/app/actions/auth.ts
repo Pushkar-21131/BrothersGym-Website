@@ -45,8 +45,13 @@ const DUMMY_PASSWORD_HASH =
   "$2b$10$5IwIbSl6wdqwjjeNK1YI8OItXCbiPQvs/82rRBgkZ0Rw1giKkI4Q2";
 
 /**
- * Set the signed session cookie plus the two supporting cookies
- * (admin_branch = switchable active branch, last_activity = idle timer).
+ * Set the signed session cookie plus `admin_branch` (the switchable active
+ * branch).
+ *
+ * No `last_activity` cookie: the idle timer used to read one, and a cookie the
+ * client can delete is a check the client can skip. The timestamp now rides
+ * inside the signed token as `iat`, which the middleware re-stamps on every
+ * admin request — see section 1 of src/middleware.ts.
  *
  * `subject` is "owner" for the env-based owner, or the appUsers id as a string.
  */
@@ -61,7 +66,6 @@ async function setAuthCookies(
 
   const token = await createSessionToken({ sub: subject, role, name, branchId });
   cookieStore.set(SESSION_COOKIE, token, opts);
-  cookieStore.set("last_activity", Date.now().toString(), opts);
 
   // An owner WITH a branch is scoped to it, so seed the cookie with that branch
   // rather than "all". getBranchScope() ignores this cookie for them either way;
@@ -260,6 +264,8 @@ export async function logoutAction() {
   const cookieStore = await cookies();
   cookieStore.delete(SESSION_COOKIE);
   cookieStore.delete("admin_branch");
+  // Nothing writes `last_activity` any more (the idle timer moved into the
+  // signed token), but browsers from before that change still hold one.
   cookieStore.delete("last_activity");
   // Remove any legacy plaintext auth cookies left from before the session fix.
   cookieStore.delete("admin_token");
@@ -318,7 +324,29 @@ export async function switchBranchAction(branchIdOrAll: string) {
 }
 
 // ===== CREATE STAFF USER =====
-export async function createStaffUserAction(formData: FormData) {
+/**
+ * What every staff-login action returns.
+ *
+ * WRITTEN OUT RATHER THAN INFERRED, ON PURPOSE.
+ * TypeScript normalizes a union built from several `return` statements by adding
+ * each missing key back as an optional `?: undefined` member. The inferred type
+ * here was
+ *
+ *   { error: string; success?: undefined } | { success: boolean; error?: undefined }
+ *
+ * and on that, `if ("error" in r)` narrows nothing — `error` is *declared* on
+ * both arms, so the `in` check is satisfied by both. The callers in
+ * admin/users/staff-logins-client.tsx use exactly that check, so `r.error` came
+ * back as `string | undefined` and `toast.error(r.error)` stopped compiling.
+ *
+ * Declaring the union keeps `error` present on one arm only, which is what makes
+ * `"error" in r` a real discriminant.
+ */
+type UserAdminResult = { error: string } | { success: true };
+
+export async function createStaffUserAction(
+  formData: FormData
+): Promise<UserAdminResult> {
   try {
     await assertOwner();
   } catch {
@@ -367,7 +395,10 @@ export async function createStaffUserAction(formData: FormData) {
 }
 
 // ===== UPDATE STAFF USER =====
-export async function updateStaffUserAction(id: number, formData: FormData) {
+export async function updateStaffUserAction(
+  id: number,
+  formData: FormData
+): Promise<UserAdminResult> {
   try {
     await assertOwner();
   } catch {
@@ -416,7 +447,9 @@ export async function updateStaffUserAction(id: number, formData: FormData) {
 }
 
 // ===== DELETE STAFF USER =====
-export async function deleteStaffUserAction(id: number) {
+export async function deleteStaffUserAction(
+  id: number
+): Promise<UserAdminResult> {
   try {
     await assertOwner();
   } catch {
@@ -435,26 +468,10 @@ export async function deleteStaffUserAction(id: number) {
 }
 
 // ===== UPDATE PERMISSIONS =====
-export async function updateStaffPermissionsAction(
-  userId: number,
-  permissions: Record<string, unknown>
-) {
-  try {
-    await assertOwner();
-  } catch {
-    return { error: "Only the owner can update permissions." };
-  }
-
-  try {
-    const denied = await assertCanAdministerUser(userId);
-    if (denied) return denied;
-
-    await db
-      .update(appUsers)
-      .set({ permissions: permissions as any })
-      .where(eq(appUsers.id, userId));
-    return { success: true };
-  } catch (error) {
-    return { error: sanitizeError(error, "Failed to update permissions") };
-  }
-}
+// Deleted. There were two server actions writing the same `app_users.permissions`
+// jsonb column: this one, which took the blob as given and wrote it with
+// `permissions as any`, and `actions/permissions.ts:updatePermissionsAction`,
+// which the permissions modal actually calls. Nothing referenced this one — but
+// `"use server"` makes every export a real endpoint whether or not a page links
+// to it, so an unused action is still a second, unvalidated door onto the column.
+// The surviving one now runs the blob through `sanitizeStaffPermissions()`.

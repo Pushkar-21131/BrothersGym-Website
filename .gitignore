@@ -50,3 +50,10 @@ next-env.d.ts
 
 # Local reference screenshots used while fixing layouts — not part of the app
 fix/
+
+# Working notes — kept on disk, deliberately not pushed. HANDOVER.md is the
+# running context doc and IMPROVEMENTS.md is the open-issues list; both describe
+# unfixed weaknesses in the app, which is not something to publish next to the
+# code that has them.
+HANDOVER.md
+IMPROVEMENTS.md

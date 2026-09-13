@@ -4,14 +4,40 @@ import { db } from "@/db";
 import { payments, members } from "@/db/schema";
 import { eq, desc } from "drizzle-orm";
 import { getBranchScope } from "@/lib/branch";
+import { assertAuthenticated, assertPermission } from "@/lib/auth-check";
 import { sanitizeError } from "@/lib/errors";
 
 export async function getMemberPaymentHistory(memberId: number) {
+  // This is a "use server" export, so it is a public HTTP endpoint: the branch
+  // check below was the only thing standing between a logged-in staff account
+  // and every payment a member has ever made. Branch scope is not permission —
+  // an account configured without members.canView is scoped to its branch just
+  // the same, and could still read the full payment history of everyone in it.
+  //
+  // Same shape as every mutating action in members.ts: assert, then let the
+  // branch check that follows narrow it further.
+  try {
+    const role = await assertAuthenticated();
+    if (role !== "owner") {
+      await assertPermission("members", "canView");
+    }
+  } catch (e) {
+    return { error: sanitizeError(e, "Not authorized to view member history") };
+  }
+
   try {
     const scope = await getBranchScope();
 
     const memberRows = await db
-      .select()
+      .select({
+        id: members.id,
+        gymId: members.gymId,
+        branchId: members.branchId,
+        name: members.name,
+        contactNumber: members.contactNumber,
+        membershipExpiry: members.membershipExpiry,
+        joiningDate: members.joiningDate,
+      })
       .from(members)
       .where(eq(members.id, memberId))
       .limit(1);
@@ -26,8 +52,18 @@ export async function getMemberPaymentHistory(memberId: number) {
 
     if (!canAccess) return { error: "You don't have access to this member" };
 
+    // Exactly the four fields history-modal.tsx renders. `select()` was sending
+    // the whole row — branchId, memberId, createdAt and both Razorpay
+    // identifiers — into the browser for every payment in the timeline. A
+    // gateway payment id is not a secret, but it is an identifier for a real
+    // transaction and nothing on screen uses it.
     const allPayments = await db
-      .select()
+      .select({
+        id: payments.id,
+        amount: payments.amount,
+        date: payments.date,
+        method: payments.method,
+      })
       .from(payments)
       .where(eq(payments.memberId, memberId))
       .orderBy(desc(payments.date));

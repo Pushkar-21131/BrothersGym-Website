@@ -169,7 +169,31 @@ export async function deleteStaffAction(id: number) {
 }
 
 // ===== TOTAL STAFF SALARIES =====
-export async function getTotalStaffSalaries() {
+/**
+ * Monthly salary bill for the branches the caller can see.
+ *
+ * Gated on staff.canView, which DEFAULTS TO FALSE (see
+ * lib/permissions.ts DEFAULT_STAFF_PERMISSIONS). It had no permission check at
+ * all, only branch scoping — so a staff account explicitly configured not to see
+ * the staff module could still read the total wage bill of its branch by calling
+ * this action, which "use server" makes a real HTTP endpoint whether or not any
+ * page links to it. Nothing in the app calls it today; that is not a defence,
+ * since the endpoint exists regardless.
+ *
+ * Returns `null`, not 0, when the caller may not see it. A denied read must not
+ * be indistinguishable from "this branch pays no salaries" — that difference is
+ * the whole profit figure if this is ever wired into the dashboard.
+ */
+export async function getTotalStaffSalaries(): Promise<number | null> {
+  try {
+    const role = await assertAuthenticated();
+    if (role !== "owner") {
+      await assertPermission("staff", "canView");
+    }
+  } catch {
+    return null;
+  }
+
   try {
     const scope = await getBranchScope();
     const rows = await db
@@ -185,6 +209,6 @@ export async function getTotalStaffSalaries() {
       );
     return rows.reduce((sum, r) => sum + (Number(r.salary) || 0), 0);
   } catch {
-    return 0;
+    return null;
   }
 }

@@ -85,6 +85,13 @@
       "when": 1788768198591,
       "tag": "0011_trainer_photo_upload",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1789234071849,
+      "tag": "0012_add_performance_indexes",
+      "breakpoints": true
     }
   ]
 }

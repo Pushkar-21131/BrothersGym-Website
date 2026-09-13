@@ -15,6 +15,18 @@ const outfit = Outfit({ subsets: ["latin"], variable: "--font-outfit", display: 
 
 const SITE_URL = "https://brothersgym.in";
 
+// NO PRICES IN THIS FILE.
+//
+// The description, the OG card and the Twitter card all used to say "from
+// ₹900/month". That was three copies of one number, in a file nobody opens when
+// they change a plan in the admin panel, and all three were wrong — the cheapest
+// plan is ₹1000 now. Worse, this is the ROOT layout: every page that does not
+// override these inherits them, including pages that have no idea what a
+// membership costs.
+//
+// The homepage, which already holds an ISR-cached database read, derives the
+// figure and overrides all three in its own generateMetadata (src/app/page.tsx).
+// Everything else inherits copy that makes no numeric claim at all.
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
   title: {
@@ -23,7 +35,7 @@ export const metadata: Metadata = {
     template: "%s | Brothers Gym",
   },
   description:
-    "Brothers Gym offers premium fitness training, expert personal coaching, and modern equipment at 2 locations in Delhi — Nangal Raya (Janakpuri) & Sagar Pur. Join from ₹900/month with cardio & strength training options.",
+    "Brothers Gym offers premium fitness training, expert personal coaching, and modern equipment at 2 locations in Delhi — Nangal Raya (Janakpuri) & Sagar Pur. Monthly, quarterly, half-yearly and annual plans with cardio & strength training options.",
   keywords: [
     "gym in nangal raya",
     "gym in sagar pur",
@@ -52,7 +64,7 @@ export const metadata: Metadata = {
   openGraph: {
     title: "Brothers Gym - Premier Fitness Center in Delhi (2 Locations)",
     description:
-      "Transform your body at Brothers Gym. Expert trainers, modern equipment, affordable memberships from ₹900/month. Two convenient locations in Delhi.",
+      "Transform your body at Brothers Gym. Expert trainers, modern equipment, affordable memberships on flexible monthly plans. Two convenient locations in Delhi.",
     url: SITE_URL,
     siteName: "Brothers Gym",
     // No `images` here on purpose: src/app/opengraph-image.tsx generates the card
@@ -66,7 +78,7 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title: "Brothers Gym - Best Gym in Delhi",
     description:
-      "Premium fitness center with 2 locations in Delhi. Join from ₹900/month.",
+      "Premium fitness center with 2 locations in Delhi. Expert coaching and flexible memberships.",
     // Card comes from src/app/twitter-image.tsx — see the note above.
     creator: "@brothersgym12",
   },
@@ -131,9 +143,15 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           </>
         )}
 
-        {/* Favicon variants */}
+        {/* Favicon variants.
+            The SVG stays first for browsers that take it — it is sharp at any
+            size. The PNG is the fallback, and it is the only one that matters
+            for apple-touch-icon: iOS ignores SVG there entirely, so "Add to
+            Home Screen" used to produce a blank tile with a screenshot in it
+            rather than the logo. */}
         <link rel="icon" href="/images/brothers-gym-logo.svg" type="image/svg+xml" />
-        <link rel="apple-touch-icon" href="/images/brothers-gym-logo.svg" />
+        <link rel="icon" href="/images/brothers-gym-logo.png" type="image/png" sizes="512x512" />
+        <link rel="apple-touch-icon" href="/images/brothers-gym-logo.png" />
       </head>
       <body className="bg-zinc-950 text-zinc-100 antialiased">
         {children}

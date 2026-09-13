@@ -2,7 +2,7 @@ import { db } from "@/db";
 import { equipmentExpenses, branches } from "@/db/schema";
 import { desc, eq, inArray } from "drizzle-orm";
 import { redirect } from "next/navigation";
-import EquipmentList from "./equipment-list";
+import EquipmentList, { type Item } from "./equipment-list";
 import { getBranchScope, getAllBranches } from "@/lib/branch";
 import { getVerifiedRole, hasPermission } from "@/lib/auth-check";
 
@@ -24,7 +24,7 @@ export default async function EquipmentPage() {
   const scope = await getBranchScope();
   const allBranches = await getAllBranches();
 
-  const rows = await db
+  const rows: Item[] = await db
     .select({
       id: equipmentExpenses.id,
       branchId: equipmentExpenses.branchId,
@@ -56,7 +56,7 @@ export default async function EquipmentPage() {
         </p>
       </div>
       <EquipmentList
-        initialItems={rows as any}
+        initialItems={rows}
         showBranchColumn={showBranchColumn}
         branches={allBranches.map((b) => ({ id: b.id, code: b.code, name: b.name }))}
         currentBranchId={scope.type === "single" ? scope.branchId : null}

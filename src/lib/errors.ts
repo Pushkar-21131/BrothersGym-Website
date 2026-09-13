@@ -61,6 +61,40 @@ export function sanitizeError(error: unknown, fallback = "Something went wrong")
     return message || fallback;
   }
 
+  // ===== DATABASE AND RUNTIME WORDING NEVER REACHES THE USER =====
+  // Checked BEFORE the allowlist below, and that order is the whole point: the
+  // allowlist is a substring match, and Postgres words its errors in the same
+  // vocabulary this file is trying to let through.
+  //
+  //   `/invalid/i`       passed `invalid input syntax for type integer: "NaN"`
+  //                      straight to the join form — the exact text a NaN fee or
+  //                      a mangled id produces. It names the database, the column
+  //                      type and the offending value, and to a member it reads
+  //                      as gibberish.
+  //   `/already exists/i` would pass `relation "members" already exists`.
+  //   `/not found/i`      would pass a driver's `ENOENT ... no such file` path.
+  //
+  // Matching on wording rather than on the error's type is deliberate: by the
+  // time it arrives here `extractMessage` has already flattened Error objects,
+  // Razorpay's envelope and raw JSON into a plain string, so the wording is all
+  // that is left to test. These patterns are the vocabulary of the layers
+  // underneath the app — none of them can occur in a message this codebase
+  // writes for a member.
+  const leakPatterns = [
+    /invalid input (syntax|value)/i,
+    /violates (unique|foreign key|not-null|check) constraint/i,
+    /duplicate key value/i,
+    /relation "|column "|constraint "/i,
+    /syntax error at or near/i,
+    /\b(ECONNREFUSED|ENOTFOUND|ETIMEDOUT|ECONNRESET|ENOENT|EACCES)\b/,
+    /\b(postgres|postgresql|neon|drizzle|node_modules)\b/i,
+    /[A-Za-z]:\\|\/(?:var|usr|home|app|tmp)\//, // filesystem paths
+  ];
+
+  if (leakPatterns.some((p) => p.test(message))) {
+    return fallback;
+  }
+
   // In production, only show safe messages
   const safePatterns = [
     /already exists/i,

@@ -13,7 +13,11 @@ import {
 } from "@/app/actions/auth";
 import { Sheet } from "../sheet";
 
-type User = {
+/** One row as `admin/users/page.tsx` selects it. Exported so that page can
+ *  annotate its query instead of casting the prop to `any`. Note what is NOT
+ *  here: `passwordHash`. The page's column list already excludes it, and this
+ *  type is the second place that has to stay true. */
+export type User = {
   id: number;
   branchId: number | null;
   branchCode: string | null;

@@ -18,7 +18,18 @@ import {
 } from "lucide-react";
 import { Sheet } from "../sheet";
 
-type Member = {
+/**
+ * One row as `admin/inactive/page.tsx` selects it — exported so that page can
+ * annotate its query instead of casting to `any`.
+ *
+ * `email` and `feeAmount` used to be here and are deliberately gone. Nothing in
+ * this file ever rendered either one, but the page selected both and shipped
+ * them in the RSC payload for every expired and left member — including to a
+ * staff account with fees or email hidden, since this page never consulted
+ * `hiddenFields` at all. Not selecting a column is a stronger guarantee than
+ * blanking it: there is no configuration to get wrong and nothing to leak.
+ */
+export type Member = {
   id: number;
   branchId: number;
   branchCode: string | null;
@@ -26,8 +37,6 @@ type Member = {
   gymId: number;
   name: string;
   contactNumber: string;
-  email: string | null;
-  feeAmount: number;
   joiningDate: string;
   membershipExpiry: string;
   leftGym: boolean;

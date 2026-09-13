@@ -3,7 +3,7 @@ import { appUsers, branches } from "@/db/schema";
 import { and, eq } from "drizzle-orm";
 import { requireOwner } from "@/lib/auth-check";
 import { getAllBranches, getBranchScope, isSuperAdmin } from "@/lib/branch";
-import StaffLoginsClient from "./staff-logins-client";
+import StaffLoginsClient, { type User } from "./staff-logins-client";
 
 export const dynamic = "force-dynamic";
 
@@ -19,7 +19,7 @@ export default async function UsersPage() {
   const scope = await getBranchScope();
   const myBranchId = scope.type === "single" ? scope.branchId : null;
 
-  const rows = await db
+  const rows: User[] = await db
     .select({
       id: appUsers.id,
       branchId: appUsers.branchId,
@@ -66,7 +66,7 @@ export default async function UsersPage() {
         </p>
       </div>
       <StaffLoginsClient
-        initialUsers={rows as any}
+        initialUsers={rows}
         branches={assignableBranches.map((b) => ({
           id: b.id,
           code: b.code,

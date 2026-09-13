@@ -2,16 +2,23 @@
 
 import { db } from "@/db";
 import { appUsers } from "@/db/schema";
-import type { StaffPermissions } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { assertOwner } from "@/lib/auth-check";
 import { assertCanAdministerUser } from "@/lib/user-admin";
+import { sanitizeStaffPermissions } from "@/lib/permissions";
 import { sanitizeError } from "@/lib/errors";
 
+/**
+ * `permissions` is typed `unknown` on purpose: this is a server action, so the
+ * argument is whatever the caller sends and a `StaffPermissions` annotation
+ * would be a comment, not a check. sanitizeStaffPermissions rebuilds the blob
+ * from PERMISSION_MODULES before it reaches the jsonb column — see the long
+ * note there for what a malformed `hiddenFields` does downstream.
+ */
 export async function updatePermissionsAction(
   userId: number,
-  permissions: StaffPermissions
+  permissions: unknown
 ) {
   try {
     await assertOwner();
@@ -31,7 +38,7 @@ export async function updatePermissionsAction(
   try {
     await db
       .update(appUsers)
-      .set({ permissions })
+      .set({ permissions: sanitizeStaffPermissions(permissions) })
       .where(eq(appUsers.id, userId));
 
     revalidatePath("/admin/users");

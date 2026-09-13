@@ -17,10 +17,12 @@ import {
   updateEquipmentAction,
   deleteEquipmentAction,
 } from "@/app/actions/equipment";
-import { formatINR } from "@/lib/utils";
+import { formatINR, istDateString } from "@/lib/utils";
 import { Sheet } from "../sheet";
 
-type Item = {
+/** One row as `admin/equipment/page.tsx` selects it. Exported so that page can
+ *  annotate its query instead of casting the prop to `any`. */
+export type Item = {
   id: number;
   branchId: number;
   branchCode: string | null;
@@ -59,7 +61,7 @@ export default function EquipmentList({
   const router = useRouter();
 
   const needsBranchPick = currentBranchId === null;
-  const today = new Date().toISOString().split("T")[0];
+  const today = istDateString();
 
   const totals = useMemo(() => {
     const all = initialItems.reduce((sum, i) => sum + (Number(i.cost) || 0), 0);

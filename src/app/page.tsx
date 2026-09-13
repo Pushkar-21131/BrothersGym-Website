@@ -1,5 +1,7 @@
+import type { Metadata } from "next";
+import { cache } from "react";
 import { db } from "@/db";
-import { trainers, branches } from "@/db/schema";
+import { trainers, branches, membershipPlans } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { getVisibleReviews } from "@/app/actions/reviews";
 import Link from "next/link";
@@ -34,12 +36,22 @@ const bebas = Bebas_Neue({
 // revalidatePath calls did nothing.)
 export const revalidate = 3600;
 
-// One parallel round-trip instead of three sequential awaits, wrapped so a
-// transient DB error degrades to empty sections rather than failing the build
-// or 500-ing the page.
+// One parallel round-trip instead of three sequential awaits.
+//
+// This deliberately does NOT swallow database errors. It used to return empty
+// arrays on failure, which looked safe but was worse: with revalidate = 3600,
+// an ISR regeneration during a blip would bake "Now at 0 locations" and "We
+// have 0 branches in Delhi" into the cached HTML and serve that for a full
+// hour. Throwing instead makes Next keep serving the last good snapshot.
+//
+// The one retry covers a Neon cold start (the free tier scales to zero and the
+// first query after an idle period can time out), so a genuine outage is what
+// throws, not a sleepy database. A failed `next build` is the intended
+// behaviour for a real outage — deploying a page that claims zero branches is
+// worse than not deploying.
 async function getHomeData() {
-  try {
-    const [allBranches, allTrainers, publicReviews] = await Promise.all([
+  const fetchAll = () =>
+    Promise.all([
       db
         .select()
         .from(branches)
@@ -67,14 +79,129 @@ async function getHomeData() {
         .leftJoin(branches, eq(trainers.branchId, branches.id)),
       getVisibleReviews(),
     ]);
-    return { allBranches, allTrainers, publicReviews };
-  } catch {
-    return { allBranches: [], allTrainers: [], publicReviews: [] };
+
+  let allBranches, allTrainers, publicReviews;
+  try {
+    [allBranches, allTrainers, publicReviews] = await fetchAll();
+  } catch (e) {
+    console.error("[Home] first attempt failed, retrying once:", e);
+    [allBranches, allTrainers, publicReviews] = await fetchAll();
   }
+
+  return { allBranches, allTrainers, publicReviews };
+}
+
+/**
+ * ₹ figures that a person reads, grouped the Indian way (1,00,000 — not
+ * 100,000). Used for FAQ copy and meta descriptions; the JSON-LD `price` fields
+ * stay unformatted, because those are parsed rather than read.
+ */
+const inr = (n: number) => new Intl.NumberFormat("en-IN").format(n);
+
+/**
+ * Live prices, read from the same membership_plans rows the join page sells
+ * from and the owner edits in the admin panel.
+ *
+ * Five places on this site used to quote a price from memory, and no two of them
+ * agreed: priceRange said "₹900 - ₹14000", the offer catalog said 1500 and 1200,
+ * the FAQ markup said "₹900 to ₹1500", and layout.tsx said "from ₹900" three
+ * times. None of them was still true — the cheapest plan is now ₹1000 — because
+ * nobody edits a meta tag when they change a price in the admin panel. Deriving
+ * them removes that whole class of staleness.
+ *
+ * cache() so the page body and generateMetadata share one query per render, and
+ * the route is ISR-cached for an hour on top of that.
+ *
+ * The retry-then-throw matches getHomeData above, and for the same reason: a
+ * Neon cold start should not fail the build, but a genuine outage must throw so
+ * ISR keeps serving the last good snapshot instead of baking a priceless page
+ * into the cache for an hour.
+ */
+const getPlanPricing = cache(async () => {
+  const fetchPlans = () =>
+    db
+      .select({
+        branchId: membershipPlans.branchId,
+        name: membershipPlans.name,
+        price: membershipPlans.price,
+        durationDays: membershipPlans.durationDays,
+      })
+      .from(membershipPlans)
+      .where(eq(membershipPlans.isActive, true))
+      .orderBy(membershipPlans.branchId, membershipPlans.displayOrder);
+
+  let plans;
+  try {
+    plans = await fetchPlans();
+  } catch (e) {
+    console.error("[Home] plan pricing failed, retrying once:", e);
+    plans = await fetchPlans();
+  }
+
+  // A gym with no active plans is a real state — a new branch mid-setup — and
+  // every caller below falls back to copy that names no figure at all. Quoting
+  // "from ₹0" would be worse than quoting nothing.
+  const priced = plans.filter((p) => p.price > 0);
+  if (priced.length === 0) return null;
+
+  const prices = priced.map((p) => p.price);
+  // "From ₹X/month" has to mean a monthly plan. Without this filter the minimum
+  // would happily be a 12-month plan's total, which is a much bigger number and
+  // not a monthly fee.
+  const monthly = priced.filter((p) => p.durationDays <= 31).map((p) => p.price);
+
+  return {
+    plans: priced,
+    min: Math.min(...prices),
+    max: Math.max(...prices),
+    monthlyMin: monthly.length > 0 ? Math.min(...monthly) : Math.min(...prices),
+  };
+});
+
+/**
+ * Homepage metadata. The one price claim it makes comes from the database.
+ *
+ * layout.tsx no longer quotes a figure anywhere — see the note there. The
+ * homepage is the page where the number earns its place in a search snippet, and
+ * it is also the page that already holds an ISR-cached database read, so this is
+ * where it is paid for.
+ *
+ * openGraph and twitter are respecified in full because Next replaces a parent
+ * segment's nested metadata object rather than merging it field by field. The
+ * card images are unaffected: they come from src/app/opengraph-image.tsx and
+ * twitter-image.tsx, and file-based metadata outranks anything set here.
+ */
+export async function generateMetadata(): Promise<Metadata> {
+  const pricing = await getPlanPricing();
+  const from = pricing
+    ? `from ₹${inr(pricing.monthlyMin)}/month`
+    : "on flexible monthly plans";
+
+  return {
+    description: `Brothers Gym offers premium fitness training, expert personal coaching, and modern equipment at 2 locations in Delhi — Nangal Raya (Janakpuri) & Sagar Pur. Join ${from} with cardio & strength training options.`,
+    openGraph: {
+      title: "Brothers Gym - Premier Fitness Center in Delhi (2 Locations)",
+      description: `Transform your body at Brothers Gym. Expert trainers, modern equipment, affordable memberships ${from}. Two convenient locations in Delhi.`,
+      url: "https://brothersgym.in",
+      siteName: "Brothers Gym",
+      locale: "en_IN",
+      type: "website",
+    },
+    twitter: {
+      card: "summary_large_image",
+      title: "Brothers Gym - Best Gym in Delhi",
+      description: `Premium fitness center with 2 locations in Delhi. Join ${from}.`,
+      creator: "@brothersgym12",
+    },
+  };
 }
 
 export default async function Home() {
-  const { allBranches, allTrainers, publicReviews } = await getHomeData();
+  // getPlanPricing was already awaited in generateMetadata, so cache() makes
+  // this one free; the Promise.all is for the case where it was not (a future
+  // caller, or a Next version that renders the body first).
+  const [{ allBranches, allTrainers, publicReviews }, pricing] =
+    await Promise.all([getHomeData(), getPlanPricing()]);
 
   const owners = allTrainers.filter((s) => s.isOwner);
   const gymTrainers = allTrainers.filter((s) => !s.isOwner);
@@ -92,6 +219,71 @@ export default async function Home() {
         }
       : undefined;
 
+  // Cheapest advertised PT rate, from the trainer rows the Trainers section
+  // already renders. The FAQ markup used to assert "PT fees start from
+  // ₹3,000/month" with nothing on the page to back it up.
+  const ptFees = allTrainers.map((t) => t.ptFee).filter((f) => f > 0);
+  const ptFrom = ptFees.length > 0 ? Math.min(...ptFees) : null;
+
+  // ===== FAQ: ONE SOURCE FOR THE VISIBLE COPY AND THE FAQPage MARKUP =====
+  //
+  // These were two hand-maintained lists — an inline array in the section below
+  // and a separate mainEntity block in the JSON-LD at the bottom of this file —
+  // and they had drifted badly. The markup claimed "fees start from ₹900/month
+  // to ₹1500/month" and "PT fees start from ₹3,000/month" while the visible
+  // answers named no figures at all, and the markup was missing a question the
+  // page actually shows.
+  //
+  // That is not a cosmetic mismatch. Google's FAQPage policy requires the
+  // marked-up answer to be the answer a visitor can read on the page, so the
+  // drift risked the rich result being dropped for the whole page — and the
+  // numbers it dropped it over were stale anyway.
+  //
+  // Rendering both from this one array makes a future mismatch impossible, and
+  // every figure in it comes from the rows the site already sells and staffs
+  // from, so a price change in the admin panel reaches the search result too.
+  const faqs = [
+    {
+      q: "Where are Brothers Gym located?",
+      a: `We have ${allBranches.length} branches in Delhi: ${allBranches
+        .map((b) => `${b.name} (${b.address.split(",").slice(0, 2).join(",")})`)
+        .join(" and ")}. Both branches offer the same premium quality.`,
+    },
+    {
+      q: "What are the membership fees?",
+      a: pricing
+        ? `Membership fees vary by branch. Monthly plans start from ₹${inr(
+            pricing.monthlyMin
+          )}, and the 3, 6 and 12-month plans work out cheaper per month. Visit our Join Online page and select your preferred branch to see the exact pricing with or without cardio access.`
+        : "Membership fees vary by branch. Visit our Join Online page and select your preferred branch to see the exact pricing for 1, 3, 6, or 12-month plans with or without cardio access.",
+    },
+    {
+      q: "What are the gym timings?",
+      a: "Sagar Pur branch operates in split timings (Morning: 5:30 AM – 12:00 PM, Evening: 4:00 PM – 10:00 PM). Nangal Raya branch is open full day: 5:30 AM – 10:00 PM. Both branches are closed on Sundays.",
+    },
+    {
+      q: "Do you offer personal training?",
+      a: ptFrom
+        ? `Yes, both branches have experienced personal trainers. PT fees start from ₹${inr(
+            ptFrom
+          )}/month — check our Trainers section to see the coaches at each branch and their individual fees.`
+        : "Yes, both branches have experienced personal trainers. Check our Trainers section to see the coaches at each branch and their PT fees.",
+    },
+    {
+      q: "Can I join online?",
+      a: "Yes! Visit our Join Online page, choose your preferred branch, pick a plan, and pay by UPI. Your membership is activated once the gym confirms your payment.",
+    },
+    {
+      q: "Can I use my membership at both branches?",
+      a: "Currently, memberships are branch-specific. If you want to switch or use both, please talk to the owner directly.",
+    },
+  ];
+
+  // Offers are named per branch below. The same plan costs different money at
+  // the two doors, so one unqualified "1 Month Full Access" offer could only
+  // ever be right about one of them.
+  const branchNameById = new Map(allBranches.map((b) => [b.id, b.name]));
+
   return (
     <div className="min-h-screen bg-zinc-950 font-sans selection:bg-yellow-500 selection:text-black">
       {/* ============ NAVBAR ============ */}
@@ -101,7 +293,7 @@ export default async function Home() {
       <PublicNavbar />
 
       {/* ============ HERO ============ */}
-      <section className="relative min-h-svh md:min-h-screen flex items-end pt-20 px-4 md:px-6 border-b border-zinc-800 overflow-hidden">
+      <section className="relative min-h-[70svh] md:min-h-screen flex items-end pt-20 px-4 md:px-6 border-b border-zinc-800 overflow-hidden">
         <HeroBackground />
         {/* Stronger left fade so text stays readable; logo side stays open */}
         <div className="absolute inset-0 bg-linear-to-r from-black/70 via-black/45 to-black/20"></div>
@@ -211,7 +403,7 @@ export default async function Home() {
             </p>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6">
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-3 md:gap-6">
             <FeatureCard
               number="01"
               icon={<Dumbbell size={28} />}
@@ -235,7 +427,7 @@ export default async function Home() {
       </section>
 
       <BMICalculator />
-      <ReviewsSection />
+      <ReviewsSection reviews={publicReviews} />
 
       {/* ============ TEAM SECTION ============ */}
       <section id="staff" className="py-10 md:py-20 px-4 md:px-6 border-b border-zinc-800">
@@ -287,34 +479,7 @@ export default async function Home() {
           </div>
 
           <div className="space-y-3">
-            {[
-              {
-                q: "Where are Brothers Gym located?",
-                a: `We have ${allBranches.length} branches in Delhi: ${allBranches
-                  .map((b) => `${b.name} (${b.address.split(",").slice(0, 2).join(",")})`)
-                  .join(" and ")}. Both branches offer the same premium quality.`,
-              },
-              {
-                q: "What are the membership fees?",
-                a: "Membership fees vary by branch. Visit our Join Online page and select your preferred branch to see the exact pricing for 1, 3, 6, or 12-month plans with or without cardio access.",
-              },
-              {
-                q: "What are the gym timings?",
-                a: "Sagar Pur branch operates in split timings (Morning: 5:30 AM – 12:00 PM, Evening: 4:00 PM – 10:00 PM). Nangal Raya branch is open full day: 5:30 AM – 10:00 PM. Both branches are closed on Sundays.",
-              },
-              {
-                q: "Do you offer personal training?",
-                a: "Yes, both branches have experienced personal trainers. Check our Trainers section to see the coaches at each branch and their PT fees.",
-              },
-              {
-                q: "Can I join online?",
-                a: "Yes! Visit our Join Online page, choose your preferred branch, pick a plan, and pay by UPI. Your membership is activated once the gym confirms your payment.",
-              },
-              {
-                q: "Can I use my membership at both branches?",
-                a: "Currently, memberships are branch-specific. If you want to switch or use both, please talk to the owner directly.",
-              },
-            ].map((faq, i) => (
+            {faqs.map((faq, i) => (
               <details
                 key={i}
                 className="group bg-zinc-900 border border-zinc-800 hover:border-yellow-500/30 rounded-xl overflow-hidden transition-colors"
@@ -368,7 +533,7 @@ export default async function Home() {
             </Link>
           </div>
 
-          <div id="locations" className="scroll-mt-24 grid md:grid-cols-3 gap-3 md:gap-6 mb-6 md:mb-12">
+          <div id="locations" className="scroll-mt-24 grid grid-cols-2 md:grid-cols-3 gap-3 md:gap-6 mb-6 md:mb-12">
             {allBranches.map((branch) => (
               <div
                 key={branch.id}
@@ -416,7 +581,9 @@ export default async function Home() {
               </div>
             ))}
 
-            <div className="bg-zinc-900/60 border border-zinc-800 p-4 md:p-6 rounded-2xl">
+            {/* Spans both phone columns: the split-timings rows below use
+                justify-between, which collides in a half-width card. */}
+            <div className="col-span-2 md:col-span-1 bg-zinc-900/60 border border-zinc-800 p-4 md:p-6 rounded-2xl">
               <div className="flex items-center gap-3 mb-5">
                 <div className="w-11 h-11 bg-yellow-500/10 border border-yellow-500/30 rounded-lg flex items-center justify-center">
                   <Clock size={20} className="text-yellow-500" />
@@ -513,7 +680,12 @@ export default async function Home() {
             logo: "https://brothersgym.in/images/brothers-gym-logo.svg",
             image: "https://brothersgym.in/images/brothers-gym-logo.svg",
             telephone: ["+917042061402", "+919818921234"],
-            priceRange: "₹900 - ₹14000",
+            // Omitted entirely when no plan is priced — see getPlanPricing. A
+            // missing priceRange costs a minor local-business signal; an invented
+            // one misprices the gym in Google's eyes.
+            priceRange: pricing
+              ? `₹${inr(pricing.min)} - ₹${inr(pricing.max)}`
+              : undefined,
             address: allBranches.map((b) => ({
               "@type": "PostalAddress",
               streetAddress: b.address,
@@ -557,14 +729,22 @@ export default async function Home() {
               "https://www.instagram.com/brothersgym12",
               "https://www.facebook.com/profile.php?id=100063764862295",
             ],
-            hasOfferCatalog: {
-              "@type": "OfferCatalog",
-              name: "Membership Plans",
-              itemListElement: [
-                { "@type": "Offer", name: "1 Month Full Access", price: "1500", priceCurrency: "INR" },
-                { "@type": "Offer", name: "1 Month No Cardio", price: "1200", priceCurrency: "INR" },
-              ],
-            },
+            hasOfferCatalog: pricing
+              ? {
+                  "@type": "OfferCatalog",
+                  name: "Membership Plans",
+                  itemListElement: pricing.plans.map((p) => ({
+                    "@type": "Offer",
+                    name: `${branchNameById.get(p.branchId) ?? "Brothers Gym"} — ${p.name}`,
+                    price: String(p.price),
+                    priceCurrency: "INR",
+                    category:
+                      p.durationDays <= 31
+                        ? "Monthly membership"
+                        : `${Math.round(p.durationDays / 30)}-month membership`,
+                  })),
+                }
+              : undefined,
           }),
         }}
       />
@@ -575,48 +755,16 @@ export default async function Home() {
           __html: JSON.stringify({
             "@context": "https://schema.org",
             "@type": "FAQPage",
-            mainEntity: [
-              {
-                "@type": "Question",
-                name: "Where are Brothers Gym located?",
-                acceptedAnswer: {
-                  "@type": "Answer",
-                  text: "Brothers Gym has two branches in Delhi: Nangal Raya (WZ-1391/23-B, PT Vishnu Datt Marg, Janakpuri, 110046) and Sagar Pur (WZ-105/46/3, Street No. 5, Mohan Nagar, Main Sagarpur, 110046).",
-                },
+            // Same `faqs` array the section above renders, so the marked-up
+            // answer is by construction the answer on the page.
+            mainEntity: faqs.map((faq) => ({
+              "@type": "Question",
+              name: faq.q,
+              acceptedAnswer: {
+                "@type": "Answer",
+                text: faq.a,
               },
-              {
-                "@type": "Question",
-                name: "What are the membership fees at Brothers Gym?",
-                acceptedAnswer: {
-                  "@type": "Answer",
-                  text: "Membership fees start from ₹900/month (No Cardio at Sagar Pur) to ₹1500/month (Full Access at Nangal Raya). Discounts available on 3, 6, and 12-month plans.",
-                },
-              },
-              {
-                "@type": "Question",
-                name: "What are the gym timings?",
-                acceptedAnswer: {
-                  "@type": "Answer",
-                  text: "The two branches keep different hours. Nangal Raya is open full day, 5:30 AM to 10:00 PM. Sagar Pur runs split timings: 5:30 AM to 12:00 PM in the morning and 4:00 PM to 10:00 PM in the evening. Both branches are closed on Sundays.",
-                },
-              },
-              {
-                "@type": "Question",
-                name: "Do you offer personal training?",
-                acceptedAnswer: {
-                  "@type": "Answer",
-                  text: "Yes, both branches have experienced personal trainers. PT fees start from ₹3,000/month.",
-                },
-              },
-              {
-                "@type": "Question",
-                name: "Can I join Brothers Gym online?",
-                acceptedAnswer: {
-                  "@type": "Answer",
-                  text: "Yes! Visit our Join Online page, choose your preferred branch, pick a plan, and pay by UPI. Your membership is activated once the gym confirms your payment.",
-                },
-              },
-            ],
+            })),
           }),
         }}
       />
@@ -638,18 +786,18 @@ function FeatureCard({
   description: string;
 }) {
   return (
-    <div className="relative bg-zinc-900 border border-zinc-800 hover:border-yellow-500/50 p-6 md:p-8 rounded-2xl transition-all duration-300 hover:-translate-y-1 group overflow-hidden">
+    <div className="relative bg-zinc-900 border border-zinc-800 hover:border-yellow-500/50 p-4 md:p-8 rounded-2xl transition-all duration-300 hover:-translate-y-1 group overflow-hidden">
       <div className="absolute -right-2 -top-2 text-[80px] md:text-[100px] font-black text-yellow-500/5 group-hover:text-yellow-500/10 select-none pointer-events-none transition-colors leading-none">
         {number}
       </div>
       <div className="relative">
-        <div className="w-14 h-14 bg-yellow-500/10 border border-yellow-500/30 rounded-xl flex items-center justify-center text-yellow-500 mb-5 group-hover:bg-yellow-500 group-hover:text-black transition-all">
+        <div className="w-11 h-11 md:w-14 md:h-14 bg-yellow-500/10 border border-yellow-500/30 rounded-xl flex items-center justify-center text-yellow-500 mb-3 md:mb-5 group-hover:bg-yellow-500 group-hover:text-black transition-all">
           {icon}
         </div>
-        <h3 className="text-xl md:text-2xl font-black mb-3 text-white uppercase tracking-wide">
+        <h3 className="text-base md:text-2xl font-black mb-2 md:mb-3 text-white uppercase tracking-wide">
           {title}
         </h3>
-        <p className="text-zinc-400 text-sm md:text-base leading-relaxed">
+        <p className="text-zinc-400 text-xs md:text-base leading-relaxed">
           {description}
         </p>
       </div>

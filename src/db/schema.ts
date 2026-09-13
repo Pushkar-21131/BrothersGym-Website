@@ -8,6 +8,7 @@ import {
   timestamp,
   jsonb,
   unique,
+  index,
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 
@@ -74,25 +75,45 @@ export const members = pgTable(
       table.branchId,
       table.gymId
     ),
+    // The expiry scans: the dashboard counts expired and expiring-in-7-days per
+    // branch on every load, and the reminder page reads the same range.
+    //
+    // Deliberately NOT a separate index on branchId alone — the composite
+    // unique above already covers `WHERE branch_id = ?` by leftmost prefix, so
+    // one would be dead weight on every insert.
+    membershipExpiryIdx: index("members_membership_expiry_idx").on(
+      table.membershipExpiry
+    ),
   })
 );
 
 // ========== PAYMENTS ==========
-export const payments = pgTable("payments", {
-  id: serial("id").primaryKey(),
-  branchId: integer("branch_id")
-    .references(() => branches.id)
-    .notNull(),
-  memberId: integer("member_id").references(() => members.id),
-  amount: integer("amount").notNull(),
-  date: date("date").notNull(),
-  method: text("method")
-    .$type<"cash" | "upi" | "razorpay" | "other">()
-    .default("cash"),
-  razorpayOrderId: text("razorpay_order_id"),
-  razorpayPaymentId: text("razorpay_payment_id"),
-  createdAt: timestamp("created_at").defaultNow(),
-});
+export const payments = pgTable(
+  "payments",
+  {
+    id: serial("id").primaryKey(),
+    branchId: integer("branch_id")
+      .references(() => branches.id)
+      .notNull(),
+    memberId: integer("member_id").references(() => members.id),
+    amount: integer("amount").notNull(),
+    date: date("date").notNull(),
+    method: text("method")
+      .$type<"cash" | "upi" | "razorpay" | "other">()
+      .default("cash"),
+    razorpayOrderId: text("razorpay_order_id"),
+    razorpayPaymentId: text("razorpay_payment_id"),
+    createdAt: timestamp("created_at").defaultNow(),
+  },
+  (table) => ({
+    // A member's payment history, read whenever the owner opens one member.
+    memberIdx: index("payments_member_id_idx").on(table.memberId),
+    // The revenue sum on the dashboard, per branch, on every load. This one is
+    // a genuine full-table scan without an index: it touches every payment row
+    // the gym has ever taken.
+    branchIdx: index("payments_branch_id_idx").on(table.branchId),
+  })
+);
 
 export const memberRelations = relations(members, ({ many, one }) => ({
   payments: many(payments),
@@ -236,84 +257,100 @@ export const membershipPlans = pgTable(
 );
 
 // ========== ONLINE JOIN ORDERS ==========
-export const onlineJoins = pgTable("online_joins", {
-  id: serial("id").primaryKey(),
-  branchId: integer("branch_id")
-    .references(() => branches.id)
-    .notNull(),
-  name: text("name").notNull(),
-  email: text("email"),
-  contactNumber: text("contact_number").notNull(),
-  address: text("address"),
-  planCode: text("plan_code").notNull(), // plan code from membershipPlans
-  amount: integer("amount").notNull(),
-  // Captured at order creation, where they are already validated. They used to
-  // make a round trip through the browser and come back on the verify call,
-  // which meant the Razorpay webhook — which never sees the browser — had no way
-  // to get them and created memberships with both fields empty. Nullable because
-  // rows created before this column existed have neither.
-  parentName: text("parent_name"),
-  emergencyContact: text("emergency_contact"),
-  status: text("status")
-    // "pending"  — request created, member is on the pay screen / hasn't paid.
-    // "claimed"  — member tapped "I've paid" (manual UPI); awaiting owner confirm.
-    // "paid"     — fulfilled: owner confirmed (UPI) or Razorpay captured. Member exists.
-    // "rejected" — owner rejected the request.
-    // "failed"   — reserved (Razorpay-era); never written by the manual flow.
-    .$type<"pending" | "claimed" | "paid" | "rejected" | "failed">()
-    .default("pending")
-    .notNull(),
-  razorpayOrderId: text("razorpay_order_id"),
-  razorpayPaymentId: text("razorpay_payment_id"),
-  // LEGACY. The join flow briefly asked members to type their UTR / UPI
-  // reference by hand. Almost nobody knows what a UTR is, so the field was
-  // replaced by the screenshot below — which shows the same number, and the
-  // amount and payee besides, without anyone having to find it. Kept, not
-  // dropped: rows created while the field existed still carry a real value, and
-  // fulfilManualJoin preserves it on confirm. Nothing writes it any more.
-  upiReference: text("upi_reference"),
-  claimedAt: timestamp("claimed_at"),
-  confirmedAt: timestamp("confirmed_at"),
-  // When the owner rejected the request. Drives the 10-day retention window on
-  // the payment screenshot below — deliberately not proofUploadedAt, because a
-  // request the owner leaves sitting for two weeks would otherwise have its
-  // evidence swept the same day it was rejected, which is exactly when the
-  // member is most likely to argue about it.
-  rejectedAt: timestamp("rejected_at"),
-  // ===== PAYMENT PROOF (manual UPI flow) =====
-  // The screenshot of the member's UPI success screen, base64-encoded, stored in
-  // the row rather than an object store: there is no bucket on the free tier and
-  // adding a vendor for ~60KB per join is not worth the dependency. Compressed
-  // client-side before upload (see compressToJpeg in join-plans-client), so a
-  // typical proof is 40–90KB of base64 — a few thousand fit inside a 0.5GB
-  // Postgres allowance.
-  //
-  // It is never sent to the browser inline. /api/admin/join-proof/[id] streams it
-  // to the owner on demand, so a 200-row admin page stays a normal-sized page.
-  //
-  // A screenshot carries the UTR, amount, timestamp and payee visibly, which is
-  // why the flow no longer asks the member to type a UTR — nobody knows what one
-  // is, and the image already contains it.
-  //
-  // RETENTION. base64 stores at 4/3 of the image, so a proof occupies ~53–120KB
-  // of the 0.5GB Neon allowance — about 6,400 of them, shared with every other
-  // table. Nothing reclaims that on its own, so two rules bound it:
-  //   • rejected  → swept 10 days after rejectedAt (sweepExpiredJoinProofs,
-  //                 called on each admin join-requests load; no cron needed).
-  //   • confirmed → kept indefinitely. The owner clears it by hand when they
-  //                 want to (deleteJoinProof), after downloading it if they
-  //                 want their own copy.
-  // Clearing sets proofImage AND proofMime to null but never touches
-  // proofUploadedAt: that timestamp is the audit trail that a screenshot was
-  // submitted, and it has to outlive the bytes. Which is why "is there an image
-  // to show?" is derived from proofMime — deriving it from proofUploadedAt would
-  // keep rendering a thumbnail for a row whose image is long gone.
-  proofImage: text("proof_image"),
-  proofMime: text("proof_mime"),
-  proofUploadedAt: timestamp("proof_uploaded_at"),
-  memberId: integer("member_id").references(() => members.id),
-  createdAt: timestamp("created_at").defaultNow(),
-});
+export const onlineJoins = pgTable(
+  "online_joins",
+  {
+    id: serial("id").primaryKey(),
+    branchId: integer("branch_id")
+      .references(() => branches.id)
+      .notNull(),
+    name: text("name").notNull(),
+    email: text("email"),
+    contactNumber: text("contact_number").notNull(),
+    address: text("address"),
+    planCode: text("plan_code").notNull(), // plan code from membershipPlans
+    amount: integer("amount").notNull(),
+    // Captured at order creation, where they are already validated. They used to
+    // make a round trip through the browser and come back on the verify call,
+    // which meant the Razorpay webhook — which never sees the browser — had no way
+    // to get them and created memberships with both fields empty. Nullable because
+    // rows created before this column existed have neither.
+    parentName: text("parent_name"),
+    emergencyContact: text("emergency_contact"),
+    status: text("status")
+      // "pending"  — request created, member is on the pay screen / hasn't paid.
+      // "claimed"  — member tapped "I've paid" (manual UPI); awaiting owner confirm.
+      // "paid"     — fulfilled: owner confirmed (UPI) or Razorpay captured. Member exists.
+      // "rejected" — owner rejected the request.
+      // "failed"   — reserved (Razorpay-era); never written by the manual flow.
+      .$type<"pending" | "claimed" | "paid" | "rejected" | "failed">()
+      .default("pending")
+      .notNull(),
+    razorpayOrderId: text("razorpay_order_id"),
+    razorpayPaymentId: text("razorpay_payment_id"),
+    // LEGACY. The join flow briefly asked members to type their UTR / UPI
+    // reference by hand. Almost nobody knows what a UTR is, so the field was
+    // replaced by the screenshot below — which shows the same number, and the
+    // amount and payee besides, without anyone having to find it. Kept, not
+    // dropped: rows created while the field existed still carry a real value, and
+    // fulfilManualJoin preserves it on confirm. Nothing writes it any more.
+    upiReference: text("upi_reference"),
+    claimedAt: timestamp("claimed_at"),
+    confirmedAt: timestamp("confirmed_at"),
+    // When the owner rejected the request. Drives the 10-day retention window on
+    // the payment screenshot below — deliberately not proofUploadedAt, because a
+    // request the owner leaves sitting for two weeks would otherwise have its
+    // evidence swept the same day it was rejected, which is exactly when the
+    // member is most likely to argue about it.
+    rejectedAt: timestamp("rejected_at"),
+    // ===== PAYMENT PROOF (manual UPI flow) =====
+    // The screenshot of the member's UPI success screen, base64-encoded, stored in
+    // the row rather than an object store: there is no bucket on the free tier and
+    // adding a vendor for ~60KB per join is not worth the dependency. Compressed
+    // client-side before upload (see compressToJpeg in join-plans-client), so a
+    // typical proof is 40–90KB of base64 — a few thousand fit inside a 0.5GB
+    // Postgres allowance.
+    //
+    // It is never sent to the browser inline. /api/admin/join-proof/[id] streams it
+    // to the owner on demand, so a 200-row admin page stays a normal-sized page.
+    //
+    // A screenshot carries the UTR, amount, timestamp and payee visibly, which is
+    // why the flow no longer asks the member to type a UTR — nobody knows what one
+    // is, and the image already contains it.
+    //
+    // RETENTION. base64 stores at 4/3 of the image, so a proof occupies ~53–120KB
+    // of the 0.5GB Neon allowance — about 6,400 of them, shared with every other
+    // table. Nothing reclaims that on its own, so two rules bound it:
+    //   • rejected  → swept 10 days after rejectedAt (sweepExpiredJoinProofs,
+    //                 called on each admin join-requests load; no cron needed).
+    //   • confirmed → kept indefinitely. The owner clears it by hand when they
+    //                 want to (deleteJoinProof), after downloading it if they
+    //                 want their own copy.
+    // Clearing sets proofImage AND proofMime to null but never touches
+    // proofUploadedAt: that timestamp is the audit trail that a screenshot was
+    // submitted, and it has to outlive the bytes. Which is why "is there an image
+    // to show?" is derived from proofMime — deriving it from proofUploadedAt would
+    // keep rendering a thumbnail for a row whose image is long gone.
+    proofImage: text("proof_image"),
+    proofMime: text("proof_mime"),
+    proofUploadedAt: timestamp("proof_uploaded_at"),
+    memberId: integer("member_id").references(() => members.id),
+    createdAt: timestamp("created_at").defaultNow(),
+  },
+  (table) => ({
+    // The webhook's only lookup key. It runs on Razorpay's clock with a retry
+    // timeout, so this is the one index where a slow scan can cost a confirmed
+    // payment rather than just a slow page.
+    razorpayOrderIdx: index("online_joins_razorpay_order_id_idx").on(
+      table.razorpayOrderId
+    ),
+    // The admin Join Requests queue: pending / claimed rows for one branch.
+    branchStatusIdx: index("online_joins_branch_status_idx").on(
+      table.branchId,
+      table.status
+    ),
+  })
+);
 
 // ========== REVIEWS ==========
 // Reviews are shared across branches (they're for the brand)
@@ -344,15 +381,22 @@ export const loginOtps = pgTable("login_otps", {
 });
 
 // ========== LOGIN ATTEMPTS LOG ==========
-export const loginAttempts = pgTable("login_attempts", {
-  id: serial("id").primaryKey(),
-  email: text("email").notNull(),
-  ipAddress: text("ip_address"),
-  userAgent: text("user_agent"),
-  success: boolean("success").notNull(),
-  reason: text("reason"),
-  createdAt: timestamp("created_at").defaultNow(),
-});
+export const loginAttempts = pgTable(
+  "login_attempts",
+  {
+    id: serial("id").primaryKey(),
+    email: text("email").notNull(),
+    ipAddress: text("ip_address"),
+    userAgent: text("user_agent"),
+    success: boolean("success").notNull(),
+    reason: text("reason"),
+    createdAt: timestamp("created_at").defaultNow(),
+  },
+  (table) => ({
+    // This table only grows, and every read of it is "recent attempts first".
+    createdAtIdx: index("login_attempts_created_at_idx").on(table.createdAt),
+  })
+);
 
 // ========== RATE LIMIT ==========
 export const rateLimitAttempts = pgTable("rate_limit_attempts", {

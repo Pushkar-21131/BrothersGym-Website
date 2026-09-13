@@ -2,7 +2,7 @@ import { db } from "@/db";
 import { members } from "@/db/schema";
 import { asc, eq, inArray, and } from "drizzle-orm";
 import { redirect } from "next/navigation";
-import ReminderPanel from "./reminder-panel";
+import ReminderPanel, { type Member } from "./reminder-panel";
 import { getBranchScope } from "@/lib/branch";
 import { getVerifiedRole, hasPermission } from "@/lib/auth-check";
 
@@ -25,8 +25,20 @@ export default async function RemindersPage() {
 
   const scope = await getBranchScope();
 
-  const allMembers = await db
-    .select()
+  // Only the columns reminder-panel.tsx reads. `select()` with no column list
+  // returned all ~20 and TypeScript accepted the wider object against the
+  // panel's six-field `Member`, so nothing flagged it — see the note on that
+  // type. The fee stays: it is the amount the member is about to be told they
+  // owe, and lib/whatsapp.ts builds the message from it.
+  const allMembers: Member[] = await db
+    .select({
+      id: members.id,
+      gymId: members.gymId,
+      name: members.name,
+      contactNumber: members.contactNumber,
+      feeAmount: members.feeAmount,
+      membershipExpiry: members.membershipExpiry,
+    })
     .from(members)
     .where(
       and(

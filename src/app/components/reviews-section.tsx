@@ -1,4 +1,4 @@
-import { getVisibleReviews } from "@/app/actions/reviews";
+import type { getVisibleReviews } from "@/app/actions/reviews";
 import { Star, Quote, MapPin } from "lucide-react";
 
 /**
@@ -18,10 +18,26 @@ import { Star, Quote, MapPin } from "lucide-react";
  */
 const CLAMP_CHAR_ESTIMATE = 200;
 
+/**
+ * One review row, shaped by the query rather than re-declared here — an
+ * `import type` so nothing from the `"use server"` module reaches the runtime.
+ */
+type Review = Awaited<ReturnType<typeof getVisibleReviews>>[number];
 
-export default async function ReviewsSection() {
-  const reviews = await getVisibleReviews();
-
+/**
+ * REVIEWS ARRIVE AS A PROP; THIS COMPONENT DOES NOT QUERY.
+ *
+ * It used to call `getVisibleReviews()` itself, while `page.tsx` called the same
+ * function for the AggregateRating in its JSON-LD. Two round-trips per render
+ * for one list, and — worse — two *independent* reads: the structured data could
+ * advertise a rating and a review count computed from a different snapshot than
+ * the cards below it, which is the one place a mismatch is machine-readable.
+ *
+ * The homepage already fetches this inside its single `Promise.all`, so passing
+ * it down costs nothing and makes the markup and the cards the same list by
+ * construction.
+ */
+export default function ReviewsSection({ reviews }: { reviews: Review[] }) {
   if (reviews.length === 0) return null;
 
   const avgRating =
@@ -67,11 +83,11 @@ export default async function ReviewsSection() {
         </div>
 
         {/* Reviews Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 md:gap-6">
           {reviews.map((review) => (
             <div
               key={review.id}
-              className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 hover:border-yellow-500/50 transition-colors relative"
+              className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 md:p-6 hover:border-yellow-500/50 transition-colors relative"
             >
               {/* Quote icon */}
               <div className="absolute -top-3 -left-3 bg-yellow-500 rounded-full p-2">

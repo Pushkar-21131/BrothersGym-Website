@@ -25,9 +25,15 @@ import {
 import toast from "react-hot-toast";
 import HistoryModal from "./history-modal";
 import { Sheet } from "../sheet";
-import { formatINR } from "@/lib/utils";
+import { formatINR, istDateString, addDaysIso } from "@/lib/utils";
 
-type Member = {
+/**
+ * One row as `admin/members/page.tsx` selects it — exported so that page can
+ * annotate its query result with it instead of casting to `any`. The cast used
+ * to hide the fact that `address` was never blanked for accounts that had it
+ * hidden.
+ */
+export type Member = {
   id: number;
   branchId: number;
   branchCode: string | null;
@@ -105,7 +111,8 @@ export default function MemberList({
       // Build headers in OWNER'S order
       const headers = ["Branch", "M.No"];
       if (!hide("feeAmount")) headers.push("Fees");
-      headers.push("Name", "Address");
+      headers.push("Name");
+      if (!hide("address")) headers.push("Address");
       if (!hide("parentName")) headers.push("Father Name");
       headers.push("Ph.No", "Joining Date", "Due Date");
       if (!hide("email")) headers.push("Email");
@@ -129,7 +136,8 @@ export default function MemberList({
         const row: (string | number)[] = [m.branchName || "", m.gymId];
         if (!hide("feeAmount"))
           row.push(`₹${m.feeAmount.toLocaleString("en-IN")}`);
-        row.push(m.name, m.address || "");
+        row.push(m.name);
+        if (!hide("address")) row.push(m.address || "");
         if (!hide("parentName")) row.push(m.parentName || "");
         row.push(m.contactNumber, m.joiningDate, m.membershipExpiry);
         if (!hide("email")) row.push(m.email || "");
@@ -260,10 +268,10 @@ export default function MemberList({
 
   // Both are date-only strings, so a re-render can only ever change them at
   // midnight — and if the owner has the list open at midnight, the fresher
-  // answer is the correct one.
-  const today = new Date().toISOString().split("T")[0];
-  // eslint-disable-next-line react-hooks/purity
-  const soon = new Date(Date.now() + 7 * 86400000).toISOString().split("T")[0];
+  // answer is the correct one. IST rather than the browser's UTC offset, so
+  // the list agrees with the dashboard and with what the server wrote.
+  const today = istDateString();
+  const soon = addDaysIso(today, 7);
 
   /** Membership state, derived once so the tag, the chip filter and the counts
    *  can never disagree about who is expiring. */
@@ -301,7 +309,7 @@ export default function MemberList({
         m.name.toLowerCase().includes(q) ||
         (m.email && !hide("email") && m.email.toLowerCase().includes(q)) ||
         m.contactNumber.includes(q) ||
-        (m.address && m.address.toLowerCase().includes(q)) ||
+        (m.address && !hide("address") && m.address.toLowerCase().includes(q)) ||
         (m.parentName &&
           !hide("parentName") &&
           m.parentName.toLowerCase().includes(q)) ||
@@ -314,9 +322,10 @@ export default function MemberList({
   }, [initialMembers, searchQuery, filter, hiddenFields, today, soon]);
 
   // Column count for the desktop table's empty state
-  let visibleColCount = 7; // M.No, Name, Ph.No, Address, Joining, Due Date, Actions
+  let visibleColCount = 6; // M.No, Name, Ph.No, Joining, Due Date, Actions
   if (showBranchColumn) visibleColCount += 1;
   if (!hide("feeAmount")) visibleColCount += 1;
+  if (!hide("address")) visibleColCount += 1;
   if (!hide("parentName")) visibleColCount += 1;
 
   // Shared by the mobile cards and the desktop table so the two can't drift.
@@ -526,7 +535,7 @@ export default function MemberList({
               <th>M.No</th>
               {!hide("feeAmount") && <th>Fees</th>}
               <th>Name</th>
-              <th>Address</th>
+              {!hide("address") && <th>Address</th>}
               {!hide("parentName") && <th>Father Name</th>}
               <th>Ph.No</th>
               <th>Joining Date</th>
@@ -567,7 +576,9 @@ export default function MemberList({
                         </span>
                       )}
                     </td>
-                    <td className="adm-td-clip">{m.address || "—"}</td>
+                    {!hide("address") && (
+                      <td className="adm-td-clip">{m.address || "—"}</td>
+                    )}
                     {!hide("parentName") && <td>{m.parentName || "—"}</td>}
                     <td>{m.contactNumber}</td>
                     <td style={{ color: "var(--blue2)" }}>{m.joiningDate}</td>
@@ -662,10 +673,19 @@ export default function MemberList({
                   type="number"
                   name="amount"
                   required
-                  defaultValue={showRenewModal.feeAmount}
+                  min={1}
+                  // Not pre-filled when fees are hidden from this account: the
+                  // last fee is exactly the number being concealed, and it is
+                  // no longer sent to the browser anyway. Whoever took the money
+                  // types what they took.
+                  defaultValue={
+                    hide("feeAmount") ? undefined : showRenewModal.feeAmount
+                  }
                   className="adm-input"
                 />
-              </div>
+                {hide("feeAmount") && (
+                  <p className="adm-hint">Enter the amount collected.</p>
+                )}              </div>
               <div className="adm-field">
                 <label className="adm-label" htmlFor="renew-duration">
                   Duration *
@@ -836,13 +856,15 @@ function MemberFormModal({
             defaultValue={member?.name}
             colSpan
           />
-          <Input
-            label="Address"
-            name="address"
-            defaultValue={member?.address || ""}
-            placeholder="Full address"
-            colSpan
-          />
+          {!hide("address") && (
+            <Input
+              label="Address"
+              name="address"
+              defaultValue={member?.address || ""}
+              placeholder="Full address"
+              colSpan
+            />
+          )}
           {!hide("parentName") && (
             <Input
               // Required when adding, optional when editing: members created
@@ -919,10 +941,12 @@ function MemberFormModal({
           </div>
         )}
 
-        {/* Hidden field for emergencyContact if not shown (still required by DB) */}
-        {hide("emergencyContact") && member && (
-          <input type="hidden" name="emergencyContact" value={member.emergencyContact} />
-        )}
+        {/* emergencyContact is NOT NULL in the schema, so a new member still
+            needs something in the column even when the field is hidden from
+            this account. On an EDIT there is no echo any more: the value is no
+            longer sent to the browser, and updateMemberAction leaves a hidden
+            column out of its SET list, so the stored contact survives on its
+            own. */}
         {hide("emergencyContact") && !member && (
           <input type="hidden" name="emergencyContact" value="N/A" />
         )}

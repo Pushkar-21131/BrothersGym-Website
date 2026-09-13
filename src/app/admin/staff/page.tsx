@@ -2,7 +2,7 @@ import { db } from "@/db";
 import { staff, branches } from "@/db/schema";
 import { desc, eq, inArray } from "drizzle-orm";
 import { redirect } from "next/navigation";
-import StaffList from "./staff-list";
+import StaffList, { type Staff } from "./staff-list";
 import { getBranchScope, getAllBranches } from "@/lib/branch";
 import { getVerifiedRole, hasPermission } from "@/lib/auth-check";
 
@@ -22,7 +22,7 @@ export default async function StaffPage() {
   const scope = await getBranchScope();
   const allBranches = await getAllBranches();
 
-  const rows = await db
+  const rows: Staff[] = await db
     .select({
       id: staff.id,
       branchId: staff.branchId,
@@ -58,7 +58,7 @@ export default async function StaffPage() {
         </p>
       </div>
       <StaffList
-        initialStaff={rows as any}
+        initialStaff={rows}
         showBranchColumn={showBranchColumn}
         branches={allBranches.map((b) => ({ id: b.id, code: b.code, name: b.name }))}
         currentBranchId={scope.type === "single" ? scope.branchId : null}

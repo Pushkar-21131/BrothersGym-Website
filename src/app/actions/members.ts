@@ -6,6 +6,7 @@ import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { getBranchScope, requireSingleBranch } from "@/lib/branch";
 import { sanitizeError } from "@/lib/errors";
+import { istDateString, addDaysIso } from "@/lib/utils";
 import {
   assertPermission,
   assertAuthenticated,
@@ -38,31 +39,48 @@ export async function addMemberAction(formData: FormData) {
     ? Number(formData.get("branchId"))
     : undefined;
 
-  if (
-    !gymId ||
-    !name ||
-    !contactNumber ||
-    !emergencyContact ||
-    !feeAmount ||
-    !membershipExpiry
-  ) {
+  // Which fields this account is even allowed to see. An owner can hide any of
+  // them per staff account, and the form then does not render the input at all
+  // — so `formData.get()` returns null and validating it unconditionally
+  // rejects a field the user has no way to fill in.
+  //
+  // Read once, used twice below. This generalises what the code already did for
+  // parentName alone.
+  const hiddenFields = await getHiddenFields("members");
+  const feeHidden = hiddenFields.includes("feeAmount");
+  const parentNameHidden = hiddenFields.includes("parentName");
+
+  if (!gymId || !name || !contactNumber || !emergencyContact || !membershipExpiry) {
     return { error: "Please fill all required fields" };
+  }
+
+  // Fee is required only from someone who can see the field. member-list.tsx
+  // renders the fee input behind the same check, so for a staff account with
+  // fees hidden `parseInt(null)` was NaN — which surfaced as "Please fill all
+  // required fields" naming a field that is not on their screen, and made
+  // adding a member impossible for exactly the configuration an owner is most
+  // likely to set up (can add members, cannot see money).
+  if (!feeHidden && !feeAmount) {
+    return { error: "Fee amount is required" };
   }
 
   // Parent name is mandatory on new members, but only for staff who can
   // actually see the field. An owner may hide it from a given staff account,
   // and the form then never renders the input — demanding it unconditionally
   // would lock those accounts out of adding members entirely.
-  const parentNameHidden = (await getHiddenFields("members")).includes(
-    "parentName"
-  );
   if (!parentName && !parentNameHidden) {
     return { error: "Parent / Father name is required" };
   }
 
+  // Nothing was typed and nothing can be inferred, so the fee is recorded as 0
+  // rather than NaN. It shows as ₹0 in the members list, which is the owner's
+  // cue to set the real figure — better than a rejected form or a fabricated
+  // amount.
+  const resolvedFee = feeHidden ? 0 : feeAmount;
+
   try {
     const branch = await requireSingleBranch(formBranchId);
-    const today = new Date().toISOString().split("T")[0];
+    const today = istDateString();
 
     const newMember = await db
       .insert(members)
@@ -75,17 +93,20 @@ export async function addMemberAction(formData: FormData) {
         address: address || null,
         parentName: parentName || null,
         emergencyContact,
-        feeAmount,
+        feeAmount: resolvedFee,
         joiningDate: joiningDate || today,
         membershipExpiry,
       })
       .returning();
 
-    if (newMember.length > 0) {
+    // No payment row when there is no amount: a ₹0 payment would sit in the
+    // history and in every revenue total as a real collection that never
+    // happened. The owner records the payment when they fill the fee in.
+    if (newMember.length > 0 && resolvedFee > 0) {
       await db.insert(payments).values({
         branchId: branch.branchId,
         memberId: newMember[0].id,
-        amount: feeAmount,
+        amount: resolvedFee,
         date: joiningDate || today,
       });
     }
@@ -120,6 +141,36 @@ export async function updateMemberAction(id: number, formData: FormData) {
   const joiningDate = formData.get("joiningDate") as string;
   const membershipExpiry = formData.get("membershipExpiry") as string;
 
+  // Same reasoning as the add path: a hidden field is not rendered, so it
+  // arrives as null — and on an UPDATE that is worse than a confusing error
+  // message, because null is a value.
+  //
+  //   feeAmount  — `parseInt(null)` is NaN, which reached `.set()` below and
+  //                Postgres rejected the whole statement. A staff account with
+  //                fees hidden could not save any edit to any member.
+  //   email      — `null || null` wrote NULL, silently deleting the stored
+  //   parentName   address / father's name the moment such an account saved an
+  //   address      unrelated change.
+  //
+  // Every hideable field is therefore omitted from the SET list rather than
+  // written, so the stored value survives untouched.
+  //
+  // `address` was the one that got missed, because until now it was not hidden
+  // anywhere: the column was in the payload, the table, the export and the edit
+  // form no matter what the owner configured. Now that member-list.tsx drops
+  // the input when it is hidden, this guard is what stops the blank form field
+  // from erasing the address on the next save.
+  const hiddenFields = await getHiddenFields("members");
+  const feeHidden = hiddenFields.includes("feeAmount");
+  const emailHidden = hiddenFields.includes("email");
+  const addressHidden = hiddenFields.includes("address");
+  const parentNameHidden = hiddenFields.includes("parentName");
+  const emergencyHidden = hiddenFields.includes("emergencyContact");
+
+  if (!feeHidden && !Number.isFinite(feeAmount)) {
+    return { error: "Fee amount is required" };
+  }
+
   try {
     const scope = await getBranchScope();
     const existing = await db.select().from(members).where(eq(members.id, id)).limit(1);
@@ -137,15 +188,15 @@ export async function updateMemberAction(id: number, formData: FormData) {
       .set({
         gymId,
         name,
-        email: email || null,
+        ...(emailHidden ? {} : { email: email || null }),
         contactNumber,
-        address: address || null,
+        ...(addressHidden ? {} : { address: address || null }),
         // Deliberately still nullable on edit. Members added before parent name
         // was mandatory have a blank one, and requiring it here would make every
         // one of those rows un-editable until someone tracked the name down.
-        parentName: parentName || null,
-        emergencyContact,
-        feeAmount,
+        ...(parentNameHidden ? {} : { parentName: parentName || null }),
+        ...(emergencyHidden ? {} : { emergencyContact }),
+        ...(feeHidden ? {} : { feeAmount }),
         joiningDate,
         membershipExpiry,
       })
@@ -233,6 +284,17 @@ export async function renewMemberAction(
     return { error: sanitizeError(e, "Not authorized to renew members") };
   }
 
+  // These arrive as arguments, not form fields, so nothing has validated them.
+  // A zero or NaN amount writes a ₹0 payment row that counts as a real
+  // collection in every revenue total, and zeroes the member's stored fee on
+  // the way past.
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return { error: "Enter the amount collected" };
+  }
+  if (!Number.isFinite(durationDays) || durationDays <= 0) {
+    return { error: "Select a membership duration" };
+  }
+
   try {
     const scope = await getBranchScope();
     const existing = await db
@@ -251,11 +313,13 @@ export async function renewMemberAction(
 
     if (!canAccess) return { error: "You don't have access to this member" };
 
-    const today = new Date();
-    const currentExpiry = new Date(member.membershipExpiry);
-    const base = currentExpiry > today ? currentExpiry : today;
-    base.setDate(base.getDate() + durationDays);
-    const newExpiry = base.toISOString().split("T")[0];
+    // Calendar arithmetic on "YYYY-MM-DD" strings — see lib/utils. An
+    // unexpired membership extends from its own expiry, a lapsed one from
+    // today.
+    const todayStr = istDateString();
+    const base =
+      member.membershipExpiry > todayStr ? member.membershipExpiry : todayStr;
+    const newExpiry = addDaysIso(base, durationDays);
 
     await db
       .update(members)
@@ -272,7 +336,7 @@ export async function renewMemberAction(
       branchId: member.branchId,
       memberId: member.id,
       amount,
-      date: new Date().toISOString().split("T")[0],
+      date: todayStr,
       method: paymentMethod,
     });
 
@@ -315,7 +379,7 @@ export async function markMemberLeftAction(
       .update(members)
       .set({
         leftGym: true,
-        leftGymDate: new Date().toISOString().split("T")[0],
+        leftGymDate: istDateString(),
         leftGymReason: reason,
         leftGymNote: note || null,
       })

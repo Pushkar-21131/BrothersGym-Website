@@ -25,6 +25,7 @@ import { db } from "@/db";
 import { members, payments, onlineJoins, membershipPlans } from "@/db/schema";
 import { and, eq, desc, sql, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { istDateString, addDaysIso } from "@/lib/utils";
 
 type MemberInsert = typeof members.$inferInsert;
 export type OnlineJoin = typeof onlineJoins.$inferSelect;
@@ -157,8 +158,8 @@ export async function fulfilPaidJoin(params: {
   }
 
   const durationDays = plan?.durationDays || 30;
-  const today = new Date();
-  const todayStr = today.toISOString().split("T")[0];
+  // The gym's calendar day, not the server's. See istDateString in lib/utils.
+  const todayStr = istDateString();
   const planType = (
     join.planCode.includes("no_cardio") ? "no_cardio" : "full"
   ) as any;
@@ -210,10 +211,14 @@ export async function fulfilPaidJoin(params: {
         if (!existing.length) throw new Error("Existing member not found");
         const m = existing[0];
 
-        const currentExpiry = new Date(m.membershipExpiry);
-        const base = currentExpiry > today ? currentExpiry : today;
-        base.setDate(base.getDate() + durationDays);
-        newExpiryStr = base.toISOString().split("T")[0];
+        // Both sides are "YYYY-MM-DD", so `>` compares them lexicographically,
+        // which for a zero-padded ISO date is the same as comparing the dates.
+        // A membership that has not lapsed extends from its own expiry; a
+        // lapsed one restarts from today. Done as strings so nothing round-
+        // trips through a Date and picks up a timezone shift on the way.
+        const base =
+          m.membershipExpiry > todayStr ? m.membershipExpiry : todayStr;
+        newExpiryStr = addDaysIso(base, durationDays);
 
         await tx
           .update(members)
@@ -248,9 +253,7 @@ export async function fulfilPaidJoin(params: {
           );
         }
 
-        const expiry = new Date(today);
-        expiry.setDate(expiry.getDate() + durationDays);
-        newExpiryStr = expiry.toISOString().split("T")[0];
+        newExpiryStr = addDaysIso(todayStr, durationDays);
 
         const inserted = await insertMemberWithNextGymId(tx, {
           branchId: join.branchId,
@@ -373,8 +376,8 @@ export async function fulfilManualJoin(params: {
   }
 
   const durationDays = plan?.durationDays || 30;
-  const today = new Date();
-  const todayStr = today.toISOString().split("T")[0];
+  // The gym's calendar day, not the server's. See istDateString in lib/utils.
+  const todayStr = istDateString();
   const planType = (
     join.planCode.includes("no_cardio") ? "no_cardio" : "full"
   ) as any;
@@ -424,10 +427,14 @@ export async function fulfilManualJoin(params: {
         if (!existing.length) throw new Error("Existing member not found");
         const m = existing[0];
 
-        const currentExpiry = new Date(m.membershipExpiry);
-        const base = currentExpiry > today ? currentExpiry : today;
-        base.setDate(base.getDate() + durationDays);
-        newExpiryStr = base.toISOString().split("T")[0];
+        // Both sides are "YYYY-MM-DD", so `>` compares them lexicographically,
+        // which for a zero-padded ISO date is the same as comparing the dates.
+        // A membership that has not lapsed extends from its own expiry; a
+        // lapsed one restarts from today. Done as strings so nothing round-
+        // trips through a Date and picks up a timezone shift on the way.
+        const base =
+          m.membershipExpiry > todayStr ? m.membershipExpiry : todayStr;
+        newExpiryStr = addDaysIso(base, durationDays);
 
         await tx
           .update(members)
@@ -455,9 +462,7 @@ export async function fulfilManualJoin(params: {
           );
         }
 
-        const expiry = new Date(today);
-        expiry.setDate(expiry.getDate() + durationDays);
-        newExpiryStr = expiry.toISOString().split("T")[0];
+        newExpiryStr = addDaysIso(todayStr, durationDays);
 
         const inserted = await insertMemberWithNextGymId(tx, {
           branchId: join.branchId,

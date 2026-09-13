@@ -7,8 +7,9 @@ import { db } from "@/db";
 import { members, payments, onlineJoins, membershipPlans, branches } from "@/db/schema";
 import { and, eq, desc, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import { checkRateLimit, getClientInfo } from "@/lib/security";
+import { checkRateLimit, checkDailyEmailCap, getClientInfo } from "@/lib/security";
 import { sanitizeError } from "@/lib/errors";
+import { verifyTurnstile } from "@/lib/turnstile";
 import { fulfilPaidJoin } from "@/lib/fulfil-join";
 import { notifyJoinConfirmed } from "@/lib/join-notify";
 import { deriveJoinReference, parseJoinReference } from "@/lib/manual-join";
@@ -107,6 +108,45 @@ function normalisePhone(raw: string): string | null {
         ? digits.slice(1)
         : digits;
   return local.length === 10 ? local : null;
+}
+
+/**
+ * Format checks shared by the two public join entry points.
+ *
+ * Both actions already check that these fields are *present*. Presence was not
+ * enough: "asdf" passed as a contact number, and an uncallable lead is
+ * indistinguishable from a lost one — the number is the whole reason the row
+ * exists. Phones go through normalisePhone, the same function the renewal match
+ * uses, so a number accepted here is a number that can be matched later.
+ *
+ * Email is deliberately optional. Plenty of walk-in members do not have one,
+ * and notifyMemberOfLead already skips the send when it is blank — so validate
+ * only what was actually typed. Without this, a typo means the confirmation
+ * silently never arrives, and a hand-crafted request could put anything at all
+ * into the Resend recipient field.
+ *
+ * Returns the error message, or null when everything is fine.
+ */
+function validateJoinContactFields(fields: {
+  contactNumber: string;
+  emergencyContact: string;
+  email: string;
+}): string | null {
+  if (!normalisePhone(fields.contactNumber)) {
+    return "Enter a valid 10-digit mobile number";
+  }
+  if (!normalisePhone(fields.emergencyContact)) {
+    return "Enter a valid 10-digit emergency contact number";
+  }
+  if (fields.email) {
+    if (
+      fields.email.length > 254 ||
+      !/^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i.test(fields.email)
+    ) {
+      return "Enter a valid email address, or leave it blank";
+    }
+  }
+  return null;
 }
 
 // ============= LOOKUP EXISTING MEMBER (branch-aware) =============
@@ -208,6 +248,13 @@ export async function createOnlineJoinOrder(formData: FormData) {
   if (!address) return { error: "Address is required" };
   if (!parentName) return { error: "Parent / Father name is required" };
   if (!emergencyContact) return { error: "Emergency contact is required" };
+
+  const fieldError = validateJoinContactFields({
+    contactNumber,
+    emergencyContact,
+    email,
+  });
+  if (fieldError) return { error: fieldError };
 
   try {
     // ===== RESOLVE THE RENEWAL TARGET, SERVER-SIDE =====
@@ -532,7 +579,13 @@ export async function verifyOnlinePayment(data: {
       const razorpay = getRazorpay(branchCode);
       const payment = await razorpay.payments.fetch(data.razorpay_payment_id);
 
-      if (payment.status !== "captured" && payment.status !== "authorized") {
+      // Only "captured" counts. "authorized" means Razorpay is holding the
+      // funds but they have not moved — the hold can expire or be voided, and
+      // the money never lands. The webhook refuses to act on it for the same
+      // reason (api/webhooks/razorpay/[branch]/route.ts). If auto-capture is
+      // off in the Razorpay dashboard, accepting it here hands out a
+      // membership against money the gym never receives.
+      if (payment.status !== "captured") {
         return {
           error:
             "This payment has not completed. If money left your account, contact us and we'll sort it out.",
@@ -648,6 +701,28 @@ export async function createJoinLead(formData: FormData) {
     };
   }
 
+  // ===== CAPTCHA =====
+  // This action sends two emails per call, and Resend's allowance is shared
+  // with the owner's login OTP — so someone scripting this form can lock the
+  // owner out of the admin panel without ever guessing a password. The IP rate
+  // limit above does not stop that: IPs are free and rotate.
+  //
+  // Ordered after the rate limit and before anything else, matching
+  // requestPasswordReset. Every other public entry point already verifies
+  // Turnstile (auth.ts, otp.ts, password-reset.ts); this form did not.
+  //
+  // Deliberately NOT added to createOnlineJoinOrder above, even though it is
+  // the same form: a Turnstile token is single-use, and handleContinue falls
+  // back to this action when the order call fails. Guarding both would spend
+  // the token on the gateway attempt and then reject the fallback, throwing
+  // away a filled form at exactly the moment it matters. The gateway path also
+  // sends no email, so it cannot burn the quota this check exists to protect.
+  const captchaToken = String(formData.get("captchaToken") || "");
+  const captchaResult = await verifyTurnstile(captchaToken, ip);
+  if (!captchaResult.success) {
+    return { error: captchaResult.error || "Captcha verification failed." };
+  }
+
   const branchId = Number(formData.get("branchId"));
   const joinType = String(formData.get("joinType") || "new");
   const name = String(formData.get("name") || "").trim();
@@ -667,6 +742,13 @@ export async function createJoinLead(formData: FormData) {
   if (!address) return { error: "Address is required" };
   if (!parentName) return { error: "Parent / Father name is required" };
   if (!emergencyContact) return { error: "Emergency contact is required" };
+
+  const fieldError = validateJoinContactFields({
+    contactNumber,
+    emergencyContact,
+    email,
+  });
+  if (fieldError) return { error: fieldError };
 
   try {
     // ===== RESOLVE THE RENEWAL TARGET, SERVER-SIDE =====
@@ -734,7 +816,20 @@ export async function createJoinLead(formData: FormData) {
       .where(eq(branches.id, branchId))
       .limit(1);
     const branch = branchRow[0];
-    const branchCode = branch?.code || "BG";
+    // NO "BG" FALLBACK — the same refusal as createOnlineJoinOrder at :329-333,
+    // for an additional reason.
+    //
+    // The branch code is half the member's reference (`BG-NR-000123`), and
+    // getJoinStatus re-checks the code the member typed against the row's real
+    // branch before it will show anything (:1071-1076). A lead saved with the
+    // placeholder therefore gets `BG-BG-000123`, which matches no branch and can
+    // never be looked up again: the member is handed a reference the status page
+    // rejects, and the owner's alert email quotes the same dead string. Refusing
+    // the lead is better than recording one nobody can find — and the plan
+    // lookup just above already proves a plan exists for this branchId, so this
+    // only fires if the branch vanished between the two queries.
+    if (!branch?.code) return { error: "Please select a branch" };
+    const branchCode = branch.code;
 
     // Save the lead. No Razorpay order — there is nothing to charge here. The row
     // exists so the owner has someone to call, and so the member's details
@@ -821,10 +916,32 @@ async function notifyOwnerOfLead(join: typeof onlineJoins.$inferSelect) {
     .limit(1);
   const branch = branchRow[0];
   const ownerEmail = branch?.ownerEmail?.trim();
-  if (!ownerEmail) return;
+  // `!branch` is redundant at runtime — no branch means no ownerEmail — but it
+  // is what lets the reference below be built from `branch.code` instead of
+  // `branch?.code || "BG"`. That placeholder would have put an unlookupable
+  // `BG-BG-nnnnnn` in the owner's alert; see the note in createJoinLead.
+  if (!branch || !ownerEmail) return;
 
   const apiKey = process.env.RESEND_API_KEY;
   if (!apiKey || /x{4,}/i.test(apiKey)) return; // unset or still a placeholder
+
+  // ===== DAILY CAP =====
+  // Resend's allowance is shared with the owner's login OTP, so an unbounded
+  // alert here is a way to lock the owner out of the admin panel without ever
+  // guessing a password. The captcha in createJoinLead is the front door; this
+  // is the backstop.
+  //
+  // Capped under its OWN identifier, deliberately not the owner's address:
+  // checkDailyEmailCap keys on `email-daily:<address>`, which is exactly the
+  // key the owner's OTP uses. Capping on ownerEmail would mean 30 join alerts
+  // spend the OTP quota and cause the lockout this check is here to prevent.
+  //
+  // 30/day per branch is far above a real day's joins and far below the point
+  // where the allowance is in danger. A suppressed alert costs the owner
+  // nothing structural: the lead is already written and still shows up in the
+  // Join Requests queue, which is where leads are actually worked.
+  const alertCap = await checkDailyEmailCap(`join-alert:${join.branchId}`, 30);
+  if (!alertCap.allowed) return;
 
   // Prefer the plan's display name; fall back to the stored code.
   const planRow = await db
@@ -838,12 +955,12 @@ async function notifyOwnerOfLead(join: typeof onlineJoins.$inferSelect) {
     )
     .limit(1);
 
-  const reference = deriveJoinReference(branch?.code || "BG", join.id);
+  const reference = deriveJoinReference(branch.code, join.id);
   const { subject, html, text } = ownerNewJoinAlertEmail({
     memberName: join.name,
     contactNumber: join.contactNumber,
     amount: join.amount,
-    branchName: branch?.name || "",
+    branchName: branch.name,
     reference,
     isRenewal: Boolean(join.memberId),
     planName: planRow[0]?.name,
@@ -884,6 +1001,14 @@ async function notifyMemberOfLead(
 
   const apiKey = process.env.RESEND_API_KEY;
   if (!apiKey || /x{4,}/i.test(apiKey)) return;
+
+  // Per-address cap, the same one login uses. This is the relay leg: without
+  // it, someone submitting the form repeatedly with a third party's address
+  // turns the join form into a way to mail a stranger on the gym's reputation
+  // and the gym's quota. 10/day/address (the default) is generous for someone
+  // legitimately re-submitting after a mistake.
+  const memberCap = await checkDailyEmailCap(join.email);
+  if (!memberCap.allowed) return;
 
   const { subject, html, text } = joinReceivedEmail({
     memberName: join.name,

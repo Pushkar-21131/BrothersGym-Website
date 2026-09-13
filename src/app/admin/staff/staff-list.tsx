@@ -17,10 +17,12 @@ import {
   updateStaffAction,
   deleteStaffAction,
 } from "@/app/actions/staff";
-import { formatINR } from "@/lib/utils";
+import { formatINR, istDateString } from "@/lib/utils";
 import { Sheet } from "../sheet";
 
-type Staff = {
+/** One row as `admin/staff/page.tsx` selects it. Exported so that page can
+ *  annotate its query instead of casting the prop to `any`. */
+export type Staff = {
   id: number;
   branchId: number;
   branchCode: string | null;
@@ -62,7 +64,7 @@ export default function StaffList({
   const router = useRouter();
 
   const needsBranchPick = currentBranchId === null;
-  const today = new Date().toISOString().split("T")[0];
+  const today = istDateString();
 
   // Only active staff are actually being paid, so the payroll figure ignores
   // inactive rows — the same rule the dashboard's salary total uses.

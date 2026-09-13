@@ -15,7 +15,9 @@ import { updatePlanAction, togglePlanActiveAction } from "@/app/actions/plans";
 import { formatINR } from "@/lib/utils";
 import { Sheet } from "../sheet";
 
-type Plan = {
+/** One row as `admin/plans/page.tsx` selects it. Exported so that page can
+ *  annotate its query instead of casting the prop to `any`. */
+export type Plan = {
   id: number;
   branchId: number;
   branchCode: string | null;
@@ -27,7 +29,11 @@ type Plan = {
   description: string | null;
   includesCardio: boolean;
   isActive: boolean;
-  displayOrder: number;
+  // Nullable, matching the column: `integer("display_order").default(0)` has a
+  // default but no NOT NULL, so the default only applies when the column is
+  // omitted — an explicit null still stores null. This said `number` until the
+  // `as any` on the prop came off and tsc disagreed.
+  displayOrder: number | null;
 };
 
 type Branch = { id: number; code: string; name: string };
@@ -250,7 +256,7 @@ export default function PlansEditorClient({ initialPlans, allBranches }: Props) 
                   type="number"
                   name="displayOrder"
                   min={0}
-                  defaultValue={editing.displayOrder}
+                  defaultValue={editing.displayOrder ?? 0}
                   className="adm-input"
                 />
                 <p className="adm-hint">Lower number shows first on the join page.</p>

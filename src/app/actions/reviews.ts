@@ -18,16 +18,24 @@ import { assertBrandContentAccess } from "@/lib/branch";
  */
 
 // ===== PUBLIC — for landing page (no auth) =====
+/**
+ * Visible testimonials, newest curation order first.
+ *
+ * DOES NOT SWALLOW ERRORS, ON PURPOSE. It used to `catch { return [] }`, which
+ * looked safe and was not: the homepage is ISR-cached for an hour and derives
+ * its `AggregateRating` from this list, so one failed query during a
+ * regeneration would bake a review-free page — no rating, no testimonials —
+ * into the cache and serve it for the full hour. Throwing instead lets
+ * `getHomeData()` in page.tsx retry once (Neon cold start) and then fail, which
+ * makes Next keep serving the last good snapshot. Same reasoning as the branch
+ * and trainer queries it sits beside in that Promise.all.
+ */
 export async function getVisibleReviews() {
-  try {
-    return await db
-      .select()
-      .from(reviews)
-      .where(eq(reviews.isVisible, true))
-      .orderBy(reviews.displayOrder, desc(reviews.createdAt));
-  } catch {
-    return [];
-  }
+  return await db
+    .select()
+    .from(reviews)
+    .where(eq(reviews.isVisible, true))
+    .orderBy(reviews.displayOrder, desc(reviews.createdAt));
 }
 
 // ===== ADD REVIEW =====

@@ -32,7 +32,7 @@ export default async function ContactPage() {
     >
       <div className="not-prose space-y-8">
         {/* Quick action cards */}
-        <div className="grid md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-3 md:gap-4">
           <QuickActionCard
             icon={<MessageCircle size={24} />}
             title="WhatsApp"
@@ -60,7 +60,7 @@ export default async function ContactPage() {
             Branch Contacts
           </h2>
 
-          <div className="grid md:grid-cols-2 gap-6">
+          <div className="grid sm:grid-cols-2 gap-4 md:gap-6">
             {allBranches.map((branch) => (
               <div
                 key={branch.id}
@@ -178,7 +178,7 @@ export default async function ContactPage() {
             Opening Hours
           </h2>
 
-          <div className="grid md:grid-cols-2 gap-4">
+          <div className="grid sm:grid-cols-2 gap-3 md:gap-4">
             <div className="bg-zinc-800/50 border border-zinc-700 rounded-lg p-4">
               <p className="text-[10px] font-black text-yellow-500 uppercase tracking-widest mb-2">
                 Nangal Raya (Full Day)

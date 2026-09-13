@@ -6,6 +6,7 @@ import { revalidatePath } from "next/cache";
 import { requireSingleBranch } from "@/lib/branch";
 import { sanitizeError } from "@/lib/errors";
 import { assertAuthenticated, assertPermission } from "@/lib/auth-check";
+import { istDateString } from "@/lib/utils";
 
 export type ImportMemberRow = {
   gymId: number;
@@ -44,7 +45,7 @@ export async function importMembersAction(
 
   let success = 0;
   const errors: string[] = [];
-  const today = new Date().toISOString().split("T")[0];
+  const today = istDateString();
 
   for (const row of rows) {
     try {

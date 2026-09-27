@@ -78,7 +78,12 @@ export default function TrainersTabs({ branches, trainers, owners }: Props) {
               The Owners
             </h3>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-6">
+          {/* Two-up on phones, not one. A single column makes the cell ~360px wide,
+              and the only photo frame short enough to be worth it there is a
+              landscape one — which crops an upright photo down to a band across
+              the middle of the face. Two columns keep the cell portrait-shaped,
+              like the photo, and cost half the scrolling. */}
+          <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-6">
             {owners.map((owner) => (
               <TrainerCard key={owner.id} trainer={owner} isOwner />
             ))}
@@ -133,7 +138,8 @@ export default function TrainersTabs({ branches, trainers, owners }: Props) {
             <p className="text-xs text-zinc-600 mt-1">Check back soon!</p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-6">
+          // Same two-up phone grid as the owners above — see the note there.
+          <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-6">
             {filteredTrainers.map((trainer) => (
               <TrainerCard key={trainer.id} trainer={trainer} />
             ))}
@@ -159,10 +165,13 @@ function TrainerCard({ trainer, isOwner = false }: { trainer: Trainer; isOwner?:
   const photoSrc = resolveTrainerPhoto(trainer);
   return (
     <div className="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden group hover:border-yellow-500/50 transition-all duration-300 hover:-translate-y-1">
-      {/* Image — 7/8 is portrait, which is right for a narrow grid cell but ~410px
-          tall once the card goes full-width on a phone. 4/3 keeps the photo
-          prominent without turning one trainer into a whole screen of scrolling. */}
-      <div className="aspect-4/3 sm:aspect-7/8 bg-zinc-800 relative overflow-hidden">
+      {/* 7/8 is portrait, which is what a trainer photo is — they are all shot
+          upright. Kept at every width rather than swapped for a landscape frame
+          on phones: object-cover only ever shows part of the photo, so the frame
+          has to match its shape or it crops to a horizontal slice through the
+          face. Same proportion everywhere means the crop the owner approved in
+          the admin preview is the crop a member sees. */}
+      <div className="aspect-7/8 bg-zinc-800 relative overflow-hidden">
         {photoSrc ? (
           <img
             src={photoSrc}
@@ -202,9 +211,11 @@ function TrainerCard({ trainer, isOwner = false }: { trainer: Trainer; isOwner?:
           <div className="flex-1 min-w-0">
             {/* No break-words: that is what split "SHUBHRANT" into "SHUBHRA"/"NT"
                 and "BHARDWAJ" into "BHARDW"/"AJ" once the name outgrew a narrow
-                cell. Without it a long name wraps between words instead, and at
-                full width on a phone it fits one line. */}
-            <h4 className="text-xl sm:text-2xl font-black uppercase tracking-wide text-white leading-tight md:truncate drop-shadow-lg">
+                cell. Without it a long name wraps between words instead.
+                text-base on phones rather than text-xl: the cell is ~165px there,
+                and one long single-word name has to clear the Instagram button
+                without spilling out of the card. */}
+            <h4 className="text-base sm:text-2xl font-black uppercase tracking-wide text-white leading-tight md:truncate drop-shadow-lg">
               {trainer.name}
             </h4>
             <p className="text-[10px] font-black uppercase tracking-widest text-yellow-500 mt-0.5">
@@ -217,13 +228,13 @@ function TrainerCard({ trainer, isOwner = false }: { trainer: Trainer; isOwner?:
               href={trainer.instagramUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="shrink-0 bg-black/60 backdrop-blur-md border border-white/20 hover:border-yellow-500 hover:bg-yellow-500 p-2 rounded-full transition-all duration-300 shadow-lg group/insta"
+              className="shrink-0 bg-black/60 backdrop-blur-md border border-white/20 hover:border-yellow-500 hover:bg-yellow-500 p-1.5 sm:p-2 rounded-full transition-all duration-300 shadow-lg group/insta"
               aria-label={`${trainer.name} on Instagram`}
               title="View Instagram"
             >
               <InstagramIcon
                 size={16}
-                className="text-white group-hover/insta:text-black transition-colors"
+                className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-white group-hover/insta:text-black transition-colors"
               />
             </a>
           )}
@@ -236,11 +247,14 @@ function TrainerCard({ trainer, isOwner = false }: { trainer: Trainer; isOwner?:
           {trainer.experience}
         </p>
 
+        {/* Label and price both step down on phones so the row still reads at
+            ~140px of content width instead of pushing "₹5,000" past the card
+            edge. */}
         <div className="flex items-center justify-between gap-2 pt-3 border-t border-zinc-800">
-          <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest whitespace-nowrap">
+          <span className="text-[9px] sm:text-[10px] font-bold text-zinc-500 uppercase tracking-wide sm:tracking-widest whitespace-nowrap">
             PT / month
           </span>
-          <span className="text-lg font-black text-yellow-500 whitespace-nowrap">
+          <span className="text-base sm:text-lg font-black text-yellow-500 whitespace-nowrap">
             {formatINR(trainer.ptFee)}
           </span>
         </div>

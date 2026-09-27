@@ -30,6 +30,42 @@ const nextConfig: NextConfig = {
           { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=(), interest-cohort=(), payment=(self)" },
         ],
       },
+      // Static media. This is the one place a long cache is worth the staleness
+      // it buys, because the hero video is the largest thing the homepage
+      // serves and it is on the critical path.
+      //
+      // Without this, a refresh revalidates: the browser has the bytes but
+      // still spends a round trip asking whether they are current. max-age=86400
+      // makes a same-day refresh a pure cache hit with no network at all, and
+      // stale-while-revalidate keeps it that way afterwards — past a day the
+      // browser serves the copy it already has and refreshes it in the
+      // background. There is no case where a returning visitor waits on this.
+      //
+      // Deliberately not `immutable`. The filename is unhashed, so a year of
+      // immutable caching would mean a replaced video never reaching anyone who
+      // had already visited — and the video has been replaced twice already.
+      // SWR keeps a replacement visible within about a day, which is the right
+      // trade for a piece of scenery.
+      {
+        source: "/videos/:path*",
+        headers: [
+          {
+            key: "Cache-Control",
+            value: "public, max-age=86400, stale-while-revalidate=604800",
+          },
+        ],
+      },
+      {
+        // The <video> element names its poster by path, so that JPG is fetched
+        // raw from here rather than through next/image. Same reasoning as above.
+        source: "/images/:path*",
+        headers: [
+          {
+            key: "Cache-Control",
+            value: "public, max-age=86400, stale-while-revalidate=604800",
+          },
+        ],
+      },
     ];
   },
 

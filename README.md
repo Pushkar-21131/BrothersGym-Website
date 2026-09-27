@@ -353,9 +353,10 @@ hidden:
 - **SMS reminders (MSG91) are wired but unconfigured;** WhatsApp links are used
   instead at launch. The send path and `sms_logs` table exist and are ready to
   switch on once the DLT templates are approved.
-- **Error monitoring is not live yet.** `@sentry/nextjs` is installed, but there is
-  no instrumentation hook or config, so nothing is being reported. It needs wiring
-  before launch.
+- **Error monitoring is live.** `@sentry/nextjs` is wired through `instrumentation.ts`
+  (server + edge), `withSentryConfig` in `next.config.ts`, and a `/monitoring` tunnel so
+  ad-blockers don't drop reports. It is inert until `NEXT_PUBLIC_SENTRY_DSN` is set —
+  see `.env.example` for it and `SENTRY_ORG` / `SENTRY_PROJECT` / `SENTRY_AUTH_TOKEN`.
 - **The background video file is still unoptimised** (`public/videos/gym-background.mp4`,
   ~4.7 MB, served as-is). It is no longer downloaded by every visitor — only on
   fast connections (see *Performance*) — but the file itself should still be

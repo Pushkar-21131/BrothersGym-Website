@@ -73,8 +73,14 @@ export default function OwnerAccessPage() {
     }
   }
 
+  // min-h-dvh, not min-h-screen. On iOS Safari 100vh resolves to the LARGE
+  // viewport — the one where the toolbars have retracted — so a min-h-screen
+  // box with justify-center is taller than what is actually on screen and the
+  // card settles low: the submit button can start under the toolbar, worst in
+  // landscape and with the keyboard up. dvh tracks the toolbar and is exact.
+  // Same change in login/, forgot-password/ and reset-password/.
   return (
-    <div className="min-h-screen flex items-center justify-center bg-zinc-950 text-white px-4 py-6 sm:py-8">
+    <div className="min-h-dvh flex items-center justify-center bg-zinc-950 text-white px-4 py-6 sm:py-8">
       <div className="max-w-md w-full bg-zinc-900 p-5 sm:p-8 rounded-2xl shadow-2xl border border-yellow-500/20">
         <div className="flex justify-center mb-4 sm:mb-6">
           <img

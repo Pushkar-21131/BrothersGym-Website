@@ -54,10 +54,15 @@ export default function PublicMobileMenu({
 
   return (
     <div ref={menuRef} className="md:hidden relative">
+      {/* p-2 around a 20px icon is a 36px box — under the 44pt tap target the
+          admin already holds itself to (.adm-input is min-height:44px). The
+          ::after overlay takes the hit area to 44pt while leaving the visible
+          button exactly the size it was; padding it up instead would have made
+          it visibly taller than the "Join Now" button beside it. */}
       <button
         type="button"
         onClick={() => onOpenChange(!open)}
-        className="rounded-lg border border-zinc-800 bg-zinc-900 p-2 text-zinc-200 hover:bg-zinc-800 transition-colors"
+        className="relative rounded-lg border border-zinc-800 bg-zinc-900 p-2 text-zinc-200 hover:bg-zinc-800 transition-colors after:absolute after:-inset-1 after:content-['']"
         aria-label="Toggle menu"
         aria-expanded={open}
       >

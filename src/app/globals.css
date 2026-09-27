@@ -1,6 +1,33 @@
 @import "tailwindcss";
 
 /* ============================================
+   FIXED NAVBAR — ANCHOR LANDING OFFSET
+   ============================================
+   The public navbar is a fixed 80px (h-20 in public-navbar.tsx), so an in-page
+   anchor scrolls its target to y=0 and the top of that section lands behind the
+   bar. Scroll-padding on the scrolling element is the offset that fixes this
+   for every anchor at once.
+
+   It lives here rather than as a scroll-mt-* on each target because that is how
+   it was done before, and it had already drifted: of the six anchors the nav
+   links to, only #locations carried one. The other five — #about, #staff,
+   #reviews, #bmi and #contact — had none, and on a phone that put their
+   headings 40px under the bar, because the mobile sections use py-10 and
+   40px < 80px. It went unnoticed on a laptop only because py-20 there happens
+   to equal h-20 exactly, so the heading landed flush with the bar's bottom edge.
+
+   A target's own scroll-mt-* STACKS on top of this — the two are added, not
+   maxed — so a new anchor target needs no scroll-mt at all, and the BMI result
+   panel's came down to 16px to keep its total where it was. See the note there.
+
+   The admin has no in-page anchors, so this reaches it only as extra clearance
+   when focus scrolls a field into view under its 56px topbar, which is the
+   direction we want anyway. */
+html {
+  scroll-padding-top: 5rem;
+}
+
+/* ============================================
    JOIN PAGE STYLES
    ============================================ */
 

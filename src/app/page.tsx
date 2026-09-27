@@ -533,7 +533,11 @@ export default async function Home() {
             </Link>
           </div>
 
-          <div id="locations" className="scroll-mt-24 grid grid-cols-2 md:grid-cols-3 gap-3 md:gap-6 mb-6 md:mb-12">
+          {/* No scroll-mt here any more: the offset moved to a single
+              scroll-padding-top on html, which now covers every anchor. A
+              scroll-mt would stack on top of it and land this grid ~96px lower
+              than the rest. See the note in globals.css. */}
+          <div id="locations" className="grid grid-cols-2 md:grid-cols-3 gap-3 md:gap-6 mb-6 md:mb-12">
             {allBranches.map((branch) => (
               <div
                 key={branch.id}

@@ -216,7 +216,12 @@ export default function BMICalculator() {
           </div>
 
           {/* Result Panel */}
-          <div ref={resultRef} className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 md:p-8 flex flex-col scroll-mt-24">
+          {/* 16px, not 24: this panel is scrolled to programmatically (line 77)
+              with block:"start", which lands it at scroll-padding-top + this
+              value. scroll-padding-top is now the navbar's 80px, so 16px keeps
+              the total at the same ~96px it was before that rule existed.
+              Raising this adds to the 80 rather than replacing it. */}
+          <div ref={resultRef} className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 md:p-8 flex flex-col scroll-mt-4">
             <div className="flex items-center gap-3 mb-6">
               <div className="p-3 bg-yellow-500/10 rounded-lg">
                 <Activity className="text-yellow-500" size={24} />

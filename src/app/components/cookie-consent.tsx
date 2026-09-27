@@ -61,9 +61,14 @@ export default function CookieConsent() {
                 .
               </p>
             </div>
+            {/* 20px of icon is a ~20px tap target, which is the smallest thing to
+                hit anywhere on the site. The ::after overlay grows the hit area
+                to 44pt without moving the icon or changing a single pixel of
+                layout — padding it up would have pushed the X inwards and
+                shifted the heading row. */}
             <button
               onClick={acceptEssential}
-              className="text-zinc-500 hover:text-white shrink-0"
+              className="relative shrink-0 text-zinc-500 hover:text-white after:absolute after:-inset-3 after:content-['']"
               aria-label="Close"
             >
               <X size={20} />

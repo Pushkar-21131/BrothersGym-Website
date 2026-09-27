@@ -34,8 +34,9 @@ function StaffLoginForm() {
   }, [state]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
+  // min-h-dvh, not min-h-screen — see the note in owner-login/page.tsx.
   return (
-    <div className="min-h-screen flex items-center justify-center bg-zinc-950 text-white px-4 py-6 sm:py-8">
+    <div className="min-h-dvh flex items-center justify-center bg-zinc-950 text-white px-4 py-6 sm:py-8">
       <div className="max-w-md w-full bg-zinc-900 p-5 sm:p-8 rounded-2xl border border-zinc-800 shadow-xl">
         <div className="text-center mb-5 sm:mb-8">
           <p className="text-xs font-bold uppercase tracking-[0.35em] text-yellow-500 mb-2">
@@ -141,7 +142,7 @@ export default function StaffLoginPage() {
   return (
     <Suspense
       fallback={
-        <div className="min-h-screen flex items-center justify-center bg-zinc-950 text-white">
+        <div className="min-h-dvh flex items-center justify-center bg-zinc-950 text-white">
           <p className="text-zinc-500">Loading…</p>
         </div>
       }

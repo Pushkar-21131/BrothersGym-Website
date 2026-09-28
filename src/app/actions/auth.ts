@@ -8,6 +8,8 @@ import { eq, and } from "drizzle-orm";
 import bcrypt from "bcryptjs";
 import {
   checkRateLimit,
+  checkAccountRateLimit,
+  accountRateLimitKey,
   resetRateLimit,
   logLoginAttempt,
   getClientInfo,
@@ -108,6 +110,26 @@ export async function completeOwnerLogin(
     };
   }
 
+  // Second, account-keyed bound — see checkAccountRateLimit. The IP limiter
+  // above is defeated by rotating IPs, which is cheap; the account is the part
+  // of the request an attacker cannot change, because naming it is the whole
+  // attack. Both have to pass. Skipped when no address was submitted, since an
+  // empty account would put every such request in one shared bucket — a way to
+  // lock out unrelated callers rather than a way to slow an attacker down.
+  if (emailLower) {
+    const accountLimit = await checkAccountRateLimit("login", emailLower);
+    if (!accountLimit.allowed) {
+      await logLoginAttempt({
+        email: emailLower,
+        success: false,
+        reason: "rate-limited",
+      });
+      return {
+        error: `Too many failed attempts. Try again in ${accountLimit.blockMinutesLeft} minutes.`,
+      };
+    }
+  }
+
   // Credentials first, so a wrong password never consumes a valid OTP.
   const identity = await verifyOwnerCredentials(emailLower, password);
   if (!identity) {
@@ -143,6 +165,7 @@ export async function completeOwnerLogin(
   }
 
   await resetRateLimit(`login:${ip}`);
+  await resetRateLimit(accountRateLimitKey("login", emailLower));
   await logLoginAttempt({ email: emailLower, success: true });
   await setAuthCookies("owner", identity.subject, identity.name, identity.branchId);
   redirect("/admin");
@@ -163,6 +186,18 @@ export async function staffLoginAction(
     return {
       error: `Too many failed attempts. Try again in ${rateLimit.blockMinutesLeft} minutes.`,
     };
+  }
+
+  // Same account-keyed bound as the owner login — see checkAccountRateLimit.
+  // Guarded on a non-empty address for the same reason as there.
+  if (email) {
+    const accountLimit = await checkAccountRateLimit("login", email);
+    if (!accountLimit.allowed) {
+      await logLoginAttempt({ email, success: false, reason: "rate-limited" });
+      return {
+        error: `Too many failed attempts. Try again in ${accountLimit.blockMinutesLeft} minutes.`,
+      };
+    }
   }
 
   // ✅ Verify Cloudflare Turnstile captcha
@@ -253,6 +288,7 @@ export async function staffLoginAction(
   }
 
   await resetRateLimit(`login:${ip}`);
+  await resetRateLimit(accountRateLimitKey("login", email));
   await logLoginAttempt({ email, success: true });
   await setAuthCookies("staff", String(user.id), user.name, user.branchId);
 

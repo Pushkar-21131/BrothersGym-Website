@@ -4,7 +4,7 @@ import { db } from "@/db";
 import { loginOtps, appUsers } from "@/db/schema";
 import { eq, and, gt } from "drizzle-orm";
 import { Resend } from "resend";
-import { checkRateLimit, checkDailyEmailCap, getClientInfo, logLoginAttempt } from "@/lib/security";
+import { checkRateLimit, checkAccountRateLimit, checkDailyEmailCap, getClientInfo, logLoginAttempt } from "@/lib/security";
 import { verifyTurnstile } from "@/lib/turnstile";
 import { verifyOwnerCredentials } from "@/lib/verify-credentials";
 import { fromHeader, otpEmail } from "@/lib/email-templates";
@@ -82,6 +82,22 @@ export async function sendLoginOTP(
     return {
       error: `Too many failed attempts. Try again in ${rateLimit.blockMinutesLeft} minutes.`,
     };
+  }
+
+  // The same account-keyed bound the password step uses, so rotating IPs cannot
+  // buy extra attempts against one owner address here either.
+  if (emailLower) {
+    const accountLimit = await checkAccountRateLimit("login", emailLower);
+    if (!accountLimit.allowed) {
+      await logLoginAttempt({
+        email: emailLower,
+        success: false,
+        reason: "rate-limited",
+      });
+      return {
+        error: `Too many failed attempts. Try again in ${accountLimit.blockMinutesLeft} minutes.`,
+      };
+    }
   }
 
   // 2. Captcha must be valid before we spend an email.

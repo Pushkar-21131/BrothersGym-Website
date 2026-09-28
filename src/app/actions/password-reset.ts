@@ -7,6 +7,8 @@ import bcrypt from "bcryptjs";
 import { sanitizeError } from "@/lib/errors";
 import {
   checkRateLimit,
+  checkAccountRateLimit,
+  accountRateLimitKey,
   checkDailyEmailCap,
   resetRateLimit,
   getClientInfo,
@@ -222,11 +224,20 @@ export async function resetPasswordWithOTP(formData: FormData) {
     return { error: passwordCheck.errors[0] };
   }
 
-  // Rate limit
+  // Rate limit. Both bounds, as on the login paths: the IP one is defeated by
+  // rotating addresses, and this flow is guessing a 6-digit code, so the account
+  // is the key that actually holds. `email` is non-empty here (guarded above).
   const rateLimit = await checkRateLimit(`reset-verify:${ip}`);
   if (!rateLimit.allowed) {
     return {
       error: `Too many attempts. Try again in ${rateLimit.blockMinutesLeft} minutes.`,
+    };
+  }
+
+  const accountLimit = await checkAccountRateLimit("reset-verify", email);
+  if (!accountLimit.allowed) {
+    return {
+      error: `Too many attempts. Try again in ${accountLimit.blockMinutesLeft} minutes.`,
     };
   }
 
@@ -314,6 +325,8 @@ export async function resetPasswordWithOTP(formData: FormData) {
     // Reset rate limits (user successfully recovered)
     await resetRateLimit(`reset-verify:${ip}`);
     await resetRateLimit(`login:${ip}`);
+    await resetRateLimit(accountRateLimitKey("reset-verify", email));
+    await resetRateLimit(accountRateLimitKey("login", email));
 
     await logLoginAttempt({
       email,

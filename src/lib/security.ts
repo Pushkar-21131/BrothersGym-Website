@@ -61,30 +61,85 @@ function failClosed(identifier: string) {
 }
 
 /**
+ * A well-formed IPv4 or IPv6 literal, or null.
+ *
+ * WHY VALIDATE AT ALL
+ * Whatever this returns becomes the key of a rate-limit bucket and a column in
+ * every audit row. Unvalidated, it is an arbitrary attacker-supplied string:
+ * `rate_limit_attempts.identifier` is unbounded `text` with a UNIQUE index, so a
+ * ~3KB header value makes the insert itself fail, and any value at all becomes a
+ * bucket the caller chose.
+ *
+ * The length cap is checked first for exactly that reason. 45 characters is the
+ * longest possible IPv6 literal including an embedded IPv4 address.
+ */
+function normaliseIp(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const value = raw.trim();
+  if (!value || value.length > 45) return null;
+
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(value);
+  if (v4) {
+    return v4.slice(1).every((octet) => Number(octet) <= 255) ? value : null;
+  }
+
+  // IPv4-mapped IPv6 (::ffff:203.0.113.5) — what a dual-stack proxy often sends.
+  const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(value);
+  if (mapped) return normaliseIp(mapped[1]);
+
+  // Hex groups joined by colons, at most one "::" run. Permissive about group
+  // count (the goal is "not an arbitrary string", not RFC-perfect parsing) but
+  // strict about the alphabet, so no header text survives as a bucket name.
+  return /^[0-9a-f]{0,4}(:[0-9a-f]{0,4}){2,7}$/i.test(value) ? value : null;
+}
+
+/**
  * The caller's IP, as far as it can be trusted, plus their user agent.
  *
- * ORDER MATTERS. `x-forwarded-for` is a client-settable header: it arrives as a
- * comma-separated chain and the leftmost entry is whatever the *original* client
- * claimed. Behind Vercel that is safe, because Vercel rewrites the header with
- * the real socket address — but "the proxy overwrites it" is a property of the
- * deployment, not of this function, and every rate limit and audit row here is
- * keyed on what it returns. Run this behind anything that appends rather than
- * replaces, and an attacker picks their own rate-limit bucket per request.
+ * ORDER MATTERS, AND IT USED TO BE WRONG. The previous version consulted
+ * `x-vercel-forwarded-for` and then `x-real-ip` before `x-forwarded-for`, on the
+ * reasoning that "behind Vercel the proxy rewrites the header". This deployment
+ * is on NETLIFY — the comment described a host we do not use. Netlify sets
+ * neither of those headers, so both branches read values the CLIENT supplied,
+ * and a request carrying `X-Vercel-Forwarded-For: <random>` got a fresh bucket
+ * every time. That defeated every IP-keyed limiter at once — login, OTP,
+ * password-reset, member lookup, payment verification — and poisoned the audit
+ * rows and the recorded consent IP along with them.
  *
- * So the Vercel-specific headers are consulted first. `x-vercel-forwarded-for`
- * is set by Vercel's edge from the connection itself and cannot be spoofed by
- * the client; `x-real-ip` likewise. `x-forwarded-for` stays as the last resort
- * for local development and any non-Vercel host, where it is the only thing
- * available — but it is no longer the first choice merely because it is the
- * best-known name.
+ * So the host's own header comes first, and the client-settable ones are only a
+ * fallback for local development:
+ *
+ *   1. x-nf-client-connection-ip — set by Netlify's edge from the connection
+ *      itself. Overwritten, not appended, so the client cannot choose it.
+ *   2. x-forwarded-for — a client-settable chain. The RIGHTMOST hop is taken,
+ *      because that is the one our own proxy appended; the leftmost is whatever
+ *      the original client claimed about itself.
+ *   3. x-real-ip — last, for any non-Netlify host.
+ *
+ * Anything that does not parse as an IP becomes "unknown", which puts those
+ * requests in one shared bucket rather than a bucket of the caller's choosing.
+ * An IP is never a sufficient key on its own anyway — see the account-keyed
+ * counters alongside the IP ones in auth.ts and password-reset.ts.
  */
 export async function getClientInfo() {
   const h = await headers();
-  const ip =
-    h.get("x-vercel-forwarded-for")?.split(",")[0].trim() ||
-    h.get("x-real-ip")?.trim() ||
-    h.get("x-forwarded-for")?.split(",")[0].trim() ||
-    "unknown";
+
+  let ip =
+    normaliseIp(h.get("x-nf-client-connection-ip")) ??
+    null;
+
+  if (!ip) {
+    const forwarded = h.get("x-forwarded-for");
+    if (forwarded) {
+      const hops = forwarded.split(",");
+      for (let i = hops.length - 1; i >= 0 && !ip; i--) {
+        ip = normaliseIp(hops[i]);
+      }
+    }
+  }
+
+  ip = ip ?? normaliseIp(h.get("x-real-ip")) ?? "unknown";
+
   const userAgent = h.get("user-agent") || "unknown";
   return { ip, userAgent };
 }
@@ -289,6 +344,58 @@ export async function resetRateLimit(identifier: string) {
   } catch (e) {
     console.error("Rate limit reset failed:", e);
   }
+}
+
+/**
+ * Thresholds for the per-ACCOUNT limiter. Deliberately looser than the per-IP
+ * defaults above; the reasoning is in checkAccountRateLimit.
+ */
+const ACCOUNT_MAX_ATTEMPTS = 10;
+const ACCOUNT_WINDOW_MINUTES = 60;
+const ACCOUNT_BLOCK_MINUTES = 15;
+
+/**
+ * The bucket name for one account on one flow. Exported so a successful login
+ * can clear it with resetRateLimit — a stale account block that outlives the
+ * real login is a lockout the owner cannot explain.
+ */
+export function accountRateLimitKey(
+  flow: "login" | "reset-verify",
+  account: string
+): string {
+  return `${flow}:acct:${account.trim().toLowerCase()}`;
+}
+
+/**
+ * A second limiter keyed on the ACCOUNT rather than the IP.
+ *
+ * WHY AN IP IS NOT ENOUGH, EVEN WHEN THE HEADER IS TRUSTWORTHY
+ * IPs are free and disposable. Anyone with a proxy list or a phone hotspot walks
+ * past an IP-keyed limit by rotating, and the password-guessing flows are
+ * exactly where that matters: the attacker picks one known owner address and
+ * guesses against it from a new IP every few requests. The account is the one
+ * part of the request they cannot rotate, because naming it is the attack.
+ *
+ * WHY THESE NUMBERS ARE LOOSER THAN THE IP BUCKET'S
+ * A global per-account counter is also a way to lock a real owner out of their
+ * own dashboard: trip it and nobody can log in to that account from anywhere,
+ * including the person who owns it. 10 failures in an hour is far past anything
+ * a genuine mistype produces and still only 240 guesses a day, which is nothing
+ * against a real password — and the 15-minute block (half the IP bucket's)
+ * bounds the damage in the case where an attacker does trip it deliberately.
+ *
+ * The prefix keeps this inside FAIL_CLOSED_PREFIXES, so a database failure
+ * pauses the flow rather than removing the limit — see the note there.
+ */
+export async function checkAccountRateLimit(
+  flow: "login" | "reset-verify",
+  account: string
+) {
+  return checkRateLimit(accountRateLimitKey(flow, account), {
+    max: ACCOUNT_MAX_ATTEMPTS,
+    windowMinutes: ACCOUNT_WINDOW_MINUTES,
+    blockMinutes: ACCOUNT_BLOCK_MINUTES,
+  });
 }
 
 /**

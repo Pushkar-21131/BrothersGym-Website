@@ -16,10 +16,13 @@
  *
  * Staff are allowed as well as the owner: the join-requests page is where a
  * front-desk person confirms payments, and there is no point letting them press
- * Confirm while hiding the evidence they are confirming against. A staff member
- * is held to their own branch, though — the id is sequential, so without that
- * check anyone at one branch could count upwards and read every other branch's
- * members' screenshots.
+ * Confirm while hiding the evidence they are confirming against. Everyone but
+ * the super-admin is held to their own branch, though — the id is sequential, so
+ * without that check anyone at one branch could count upwards and read every
+ * other branch's members' screenshots. That applies to a branch owner exactly as
+ * it does to staff: `role === "owner"` is true for both owners as well as the
+ * super-admin, so it cannot be used as a proxy for "sees everything". Scope is
+ * decided by isBranchInScope() below.
  *
  * DOWNLOAD
  * ?download=1 returns the same bytes under the same checks with an "attachment"
@@ -33,6 +36,7 @@ import { db } from "@/db";
 import { onlineJoins } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { getCurrentUser } from "@/lib/auth-check";
+import { isBranchInScope } from "@/lib/branch";
 import { ALLOWED_PROOF_MIMES, type ProofMime } from "@/lib/join-proof";
 
 export const dynamic = "force-dynamic";
@@ -91,10 +95,18 @@ export async function GET(
     const row = rows[0];
     if (!row?.proofImage) return new Response("Not found", { status: 404 });
 
-    // Staff see their own branch only; the owner sees every branch. 404 rather
-    // than 403 so the response is identical to "no such request" — a staff
-    // member shouldn't be able to map which ids exist elsewhere either.
-    if (user.role !== "owner" && row.branchId !== user.branchId) {
+    // Scoped to the caller's branch — via the shared helper, not a hand-rolled
+    // comparison. The previous check was `user.role !== "owner" && ...`, which
+    // was written when "owner" meant one person. It now means two: the
+    // super-admin AND each branch owner, so the role test short-circuited for
+    // both owners and the branch comparison never ran. Any branch owner could
+    // count ids upward and read the other gym's members' payment screenshots.
+    //
+    // isBranchInScope answers the question that was actually intended: the
+    // super-admin sees every branch, a branch owner and staff see only their
+    // own. 404 rather than 403 so the response is identical to "no such
+    // request" — nobody can map which ids exist in the other branch.
+    if (!(await isBranchInScope(row.branchId))) {
       return new Response("Not found", { status: 404 });
     }
 

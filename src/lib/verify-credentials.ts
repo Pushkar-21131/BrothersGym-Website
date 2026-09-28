@@ -2,6 +2,7 @@ import { db } from "@/db";
 import { appUsers } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
 import bcrypt from "bcryptjs";
+import { createHash, timingSafeEqual } from "crypto";
 
 export type OwnerIdentity = {
   /** "owner" for the env-based owner, or the appUsers id as a string. */
@@ -9,6 +10,28 @@ export type OwnerIdentity = {
   name: string;
   branchId: number | null;
 };
+
+/**
+ * Constant-time comparison of two strings.
+ *
+ * `a === b` stops at the first differing character, so the time it takes to
+ * reject leaks how many leading characters were right — enough, over many
+ * attempts, to walk a value out one character at a time. That matters here
+ * because `adminPassword` is compared directly.
+ *
+ * Both sides are hashed to a fixed 32 bytes rather than length-checked first.
+ * The webhook's `signatureMatches` (api/webhooks/razorpay/[branch]/route.ts)
+ * does check length first, because both sides there are hex digests of known
+ * size so there is no length to hide. A password has no fixed size, and a
+ * "return false if the lengths differ" guard leaks its exact length — which is
+ * most of the work in a brute force. Hashing first removes that, and it also
+ * means timingSafeEqual is never handed mismatched buffers (it throws on them).
+ */
+function safeEqual(a: string, b: string): boolean {
+  const ah = createHash("sha256").update(a, "utf8").digest();
+  const bh = createHash("sha256").update(b, "utf8").digest();
+  return timingSafeEqual(ah, bh);
+}
 
 /**
  * Check an owner email + password pair.
@@ -56,7 +79,14 @@ export async function verifyOwnerCredentials(
   const adminPassword = process.env.ADMIN_PASSWORD;
   if (!adminEmail || !adminPassword) return null;
 
-  if (email === adminEmail && password === adminPassword) {
+  // Both halves are evaluated up front so the `&&` cannot short-circuit on the
+  // email: otherwise a caller could tell "email matched, password didn't" from
+  // "email didn't match" by response time alone. The admin address is not
+  // secret, but there is no reason to answer the question.
+  const emailMatches = safeEqual(email, adminEmail);
+  const passwordMatches = safeEqual(password, adminPassword);
+
+  if (emailMatches && passwordMatches) {
     return { subject: "owner", name: "Owner", branchId: null };
   }
 

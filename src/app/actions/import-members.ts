@@ -1,7 +1,7 @@
 "use server";
 
 import { db } from "@/db";
-import { members, payments } from "@/db/schema";
+import { members } from "@/db/schema";
 import { revalidatePath } from "next/cache";
 import { requireSingleBranch } from "@/lib/branch";
 import { sanitizeError } from "@/lib/errors";
@@ -63,33 +63,35 @@ export async function importMembersAction(
 
       const joiningDate = row.joiningDate || today;
 
-      const inserted = await db
-        .insert(members)
-        .values({
-          branchId: branch.branchId,
-          gymId: Number(row.gymId),
-          name: String(row.name),
-          email: row.email || null,
-          contactNumber: String(row.contactNumber),
-          address: row.address || null,
-          parentName: row.parentName || null,
-          emergencyContact: String(row.emergencyContact),
-          feeAmount: Number(row.feeAmount),
-          joiningDate,
-          membershipExpiry: String(row.membershipExpiry),
-          planType: "offline",
-        })
-        .returning();
+      // ===== NO PAYMENT ROW ON IMPORT =====
+      // This used to insert a `payments` row for the member's full fee, dated
+      // their joining date, right after the member row — two independent
+      // statements, so a failure between them left a member with no payment
+      // recorded. The row itself was the bigger problem: for a bulk import of
+      // existing members that money was collected long ago, often before this
+      // system existed, and the row lands in the CURRENT dashboard totals as if
+      // it were taken today. The revenue figure the owner makes decisions from
+      // was inflated by the whole imported book.
+      //
+      // The fee and the expiry live on the member row, which is where the members
+      // list and the renew flow read them, so nothing needs the payment row.
+      // There is now a single write per row, which is why no transaction is
+      // needed here either.
+      await db.insert(members).values({
+        branchId: branch.branchId,
+        gymId: Number(row.gymId),
+        name: String(row.name),
+        email: row.email || null,
+        contactNumber: String(row.contactNumber),
+        address: row.address || null,
+        parentName: row.parentName || null,
+        emergencyContact: String(row.emergencyContact),
+        feeAmount: Number(row.feeAmount),
+        joiningDate,
+        membershipExpiry: String(row.membershipExpiry),
+        planType: "offline",
+      });
 
-      if (inserted[0]) {
-        await db.insert(payments).values({
-          branchId: branch.branchId,
-          memberId: inserted[0].id,
-          amount: Number(row.feeAmount),
-          date: joiningDate,
-          method: "cash",
-        });
-      }
       success++;
     } catch (e) {
       errors.push(`${row.name || row.gymId}: ${sanitizeError(e, "failed")}`);

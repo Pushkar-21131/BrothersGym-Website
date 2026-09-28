@@ -3,12 +3,21 @@
  * Runs at app startup — refuses to start if critical vars missing
  */
 
+import { isPlaceholder } from "./env-placeholder";
+
 const requiredInProduction = [
   "DATABASE_URL",
   "ADMIN_EMAIL",
   "ADMIN_PASSWORD",
   "OWNER_EMAIL",
   "SESSION_SECRET",
+  // Required, not recommended. Owner login, staff login and the join flow all
+  // send an email before they succeed, and the Resend SDK's constructor throws
+  // when the key is absent — so without this the failure is "login is broken",
+  // discovered by an owner who cannot get into their own dashboard. It used to
+  // sit in recommendedInProduction under a comment claiming the site runs fine
+  // without it. It does not.
+  "RESEND_API_KEY",
 ];
 
 /**
@@ -27,11 +36,15 @@ const razorpayMode = process.env.PAYMENT_MODE !== "contact";
  *
  * Inlined rather than imported from razorpay-account.ts to keep this file
  * dependency-free — it runs at module load, before anything else is guaranteed
- * to be initialised.
+ * to be initialised. `isPlaceholder` comes from its own dependency-free module
+ * for the same reason: without it, a branch left at the masked
+ * `rzp_test_xxxxxxxxxx` placeholder counted as configured here while
+ * razorpay-account.ts treated it as unset, and the two disagreed about whether
+ * the global key was in use.
  */
 const perBranchCodes = Object.keys(process.env)
   .map((k) => /^RAZORPAY_KEY_ID_([A-Z0-9_]+)$/.exec(k))
-  .filter((m): m is RegExpExecArray => Boolean(m) && Boolean(process.env[m![0]]?.trim()))
+  .filter((m): m is RegExpExecArray => Boolean(m) && !isPlaceholder(process.env[m![0]]))
   .map((m) => m[1]);
 
 /**
@@ -43,7 +56,6 @@ const perBranchCodes = Object.keys(process.env)
 const isMultiAccount = perBranchCodes.length > 0;
 
 const recommendedInProduction = [
-  "RESEND_API_KEY",
   // No DSN in production means errors are invisible — they reach console.error
   // and nothing else. Not fatal (the site runs fine), but it is the difference
   // between finding out about a broken payment from a dashboard and finding out

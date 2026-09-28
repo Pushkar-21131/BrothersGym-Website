@@ -3,15 +3,19 @@
 import { Resend } from "resend";
 import { getClientInfo, checkDailyEmailCap } from "@/lib/security";
 import { escapeHtml, fromHeader } from "@/lib/email-templates";
-
-const resend = new Resend(process.env.RESEND_API_KEY);
+import { isPlaceholder } from "@/lib/env-placeholder";
 
 export async function sendSecurityAlert(data: {
   type: "failed-owner-login" | "new-login-success" | "suspicious";
   email: string;
   attempts?: number;
 }) {
-  if (!process.env.RESEND_API_KEY || !process.env.OWNER_EMAIL) return;
+  // This guard used to be unreachable. It sits in the same module as a
+  // module-scope `new Resend(...)`, which throws at import when the key is
+  // absent — so the module never finished evaluating and this line never ran.
+  // Now that the client is built at the call site below, this is what actually
+  // short-circuits a send that could not work.
+  if (isPlaceholder(process.env.RESEND_API_KEY) || !process.env.OWNER_EMAIL) return;
 
   try {
     const { ip, userAgent } = await getClientInfo();
@@ -69,7 +73,7 @@ export async function sendSecurityAlert(data: {
     const cap = await checkDailyEmailCap(`security-alert:${data.type}`, 20);
     if (!cap.allowed) return;
 
-    await resend.emails.send({
+    await new Resend(process.env.RESEND_API_KEY).emails.send({
       from: fromHeader(),
       to: process.env.OWNER_EMAIL,
       subject,

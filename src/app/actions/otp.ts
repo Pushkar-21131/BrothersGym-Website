@@ -8,8 +8,7 @@ import { checkRateLimit, checkDailyEmailCap, getClientInfo, logLoginAttempt } fr
 import { verifyTurnstile } from "@/lib/turnstile";
 import { verifyOwnerCredentials } from "@/lib/verify-credentials";
 import { fromHeader, otpEmail } from "@/lib/email-templates";
-
-const resend = new Resend(process.env.RESEND_API_KEY);
+import { isPlaceholder } from "@/lib/env-placeholder";
 
 function generateOTP(): string {
   return Math.floor(100000 + Math.random() * 900000).toString();
@@ -175,7 +174,18 @@ export async function sendLoginOTP(
       expiresMinutes: 5,
     });
 
-    const result = await resend.emails.send({
+    // Constructed here rather than at module scope. The SDK's constructor throws
+    // "Missing API key" when the key is absent, so a module-scope `new Resend()`
+    // took the whole module down at import — and this module is what owner login,
+    // staff login and the join flow all reach. A missing key became "login is
+    // broken" instead of "email is not set up". It is also required at build time
+    // now (see env-check.ts), so this is the second line of defence.
+    if (isPlaceholder(process.env.RESEND_API_KEY)) {
+      console.error("[OTP] RESEND_API_KEY is not set — cannot send a login code.");
+      return { error: "Email is not configured. Contact administrator." };
+    }
+
+    const result = await new Resend(process.env.RESEND_API_KEY).emails.send({
       from: fromHeader(),
       to: recipientEmail,
       subject: mail.subject,
@@ -263,7 +273,14 @@ export async function sendPasswordResetEmail(
       expiresMinutes: 10,
     });
 
-    const result = await resend.emails.send({
+    if (isPlaceholder(process.env.RESEND_API_KEY)) {
+      console.error(
+        "[OTP] RESEND_API_KEY is not set — cannot send a password reset code."
+      );
+      return { error: "Email is not configured. Contact administrator." };
+    }
+
+    const result = await new Resend(process.env.RESEND_API_KEY).emails.send({
       from: fromHeader(),
       to: toEmail,
       subject: mail.subject,

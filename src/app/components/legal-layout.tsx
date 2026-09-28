@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ArrowLeft, MapPin, Phone, Mail, Building2 } from "lucide-react";
+import { ArrowLeft, ChevronDown, MapPin, Phone, Mail, Building2 } from "lucide-react";
 import { db } from "@/db";
 import { branches } from "@/db/schema";
 import { eq } from "drizzle-orm";
@@ -17,18 +17,40 @@ async function getBranchInfo() {
   }
 }
 
+export type LegalSectionLink = { id: string; label: string };
+
 type Props = {
   title: string;
   subtitle?: string;
   children: React.ReactNode;
   lastUpdated?: string;
+  /** Eyebrow above the title. Defaults to the legal-document wording. */
+  eyebrow?: string;
+  /**
+   * Drives the "On this page" rail. Each `id` must match a `LegalSection` id in
+   * `children` — the rail is server-rendered from this list rather than read out
+   * of the DOM, so a mismatch is a dead link, not a missing one.
+   */
+  sections?: LegalSectionLink[];
+  /** Suppresses this page's own card in the "Related pages" row. */
+  currentPath?: string;
 };
+
+const RELATED_PAGES = [
+  { href: "/privacy", label: "Privacy Policy" },
+  { href: "/terms", label: "Terms & Conditions" },
+  { href: "/refund", label: "Refund Policy" },
+  { href: "/contact", label: "Contact Us" },
+];
 
 export default async function LegalLayout({
   title,
   subtitle,
   children,
   lastUpdated,
+  eyebrow = "Legal Information",
+  sections = [],
+  currentPath,
 }: Props) {
   const allBranches = await getBranchInfo();
   const updateDate =
@@ -38,6 +60,13 @@ export default async function LegalLayout({
       month: "long",
       day: "numeric",
     });
+
+  const related = RELATED_PAGES.filter((p) => p.href !== currentPath);
+
+  // The rail only exists for a document with several sections. Gate the grid on
+  // the same condition: with `lg:grid` but no <aside>, the content would be
+  // placed in the first (13rem) column and squeezed to a sliver on desktop.
+  const hasToc = sections.length > 1;
 
   return (
     <div className="min-h-screen bg-zinc-950 text-white">
@@ -65,54 +94,136 @@ export default async function LegalLayout({
         </div>
       </nav>
 
-      {/* ============ HERO ============ */}
-      <section className="relative py-16 md:py-24 px-4 md:px-6 border-b border-zinc-800 overflow-hidden">
+      {/* ============ HEADER ============ */}
+      {/* Deliberately compact. These are documents, not landing pages — a 24rem
+          marketing hero pushed the first line of actual policy below the fold on
+          a phone, which is most of why the pages read as promotional rather than
+          official. */}
+      <header className="relative border-b border-zinc-800 px-4 md:px-6 py-10 md:py-14 overflow-hidden">
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,var(--tw-gradient-stops))] from-yellow-500/10 via-transparent to-transparent"></div>
 
         <div className="max-w-4xl mx-auto relative z-10 text-center">
-          <p className="text-yellow-500 text-xs md:text-sm font-black tracking-[0.4em] uppercase mb-3">
-            — Legal Information —
+          <p className="text-yellow-500 text-[10px] md:text-xs font-black tracking-[0.4em] uppercase mb-3">
+            {eyebrow}
           </p>
-          <h1 className="text-4xl md:text-6xl font-black uppercase tracking-tight mb-4">
+          <h1 className="text-3xl md:text-5xl font-black uppercase tracking-tight mb-3 text-balance">
             {title}
           </h1>
           {subtitle && (
-            <p className="text-base md:text-lg text-zinc-400 max-w-2xl mx-auto">
+            <p className="text-sm md:text-base text-zinc-400 max-w-2xl mx-auto text-pretty">
               {subtitle}
             </p>
           )}
-          <p className="text-xs text-zinc-500 mt-6">
-            Last updated: <span className="text-zinc-300 font-medium">{updateDate}</span>
-          </p>
+
+          {/* Document metadata. `Applies to` is derived from the branch rows so a
+              third branch can never be added without it showing up here. */}
+          <div className="mt-5 flex flex-wrap items-center justify-center gap-x-2.5 gap-y-1 text-[11px] text-zinc-500">
+            <span>
+              Last updated <span className="text-zinc-300">{updateDate}</span>
+            </span>
+            {allBranches.length > 0 && (
+              <>
+                <span aria-hidden className="text-zinc-700">
+                  &bull;
+                </span>
+                <span>
+                  Applies to{" "}
+                  <span className="text-zinc-300">
+                    {allBranches.map((b) => b.name).join(" & ")}
+                  </span>
+                </span>
+              </>
+            )}
+          </div>
         </div>
-      </section>
+      </header>
 
       {/* ============ CONTENT ============ */}
-      <section className="py-12 md:py-16 px-4 md:px-6">
-        <div className="max-w-4xl mx-auto">
-          <div className="prose prose-invert max-w-none">{children}</div>
+      <section className="py-10 md:py-14 px-4 md:px-6">
+        <div
+          className={`max-w-5xl mx-auto ${
+            hasToc ? "lg:grid lg:grid-cols-[13rem_minmax(0,1fr)] lg:gap-10 lg:items-start" : ""
+          }`}
+        >
+          {/* Contents rail. Desktop only — on a phone it collapses to the
+              disclosure below, so the first section is still the first thing
+              under the header. */}
+          {hasToc && (
+            <aside className="hidden lg:block">
+              <nav aria-label="On this page" className="sticky top-28">
+                <p className="mb-3 text-[10px] font-black uppercase tracking-[0.2em] text-zinc-500">
+                  On this page
+                </p>
+                <ul className="border-l border-zinc-800">
+                  {sections.map((s) => (
+                    <li key={s.id}>
+                      <a
+                        href={`#${s.id}`}
+                        className="-ml-px block border-l border-transparent py-1.5 pl-3 text-[13px] leading-snug text-zinc-500 transition-colors hover:border-yellow-500 hover:text-yellow-500"
+                      >
+                        {s.label}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </nav>
+            </aside>
+          )}
 
-          {/* Legal Nav Between Pages */}
-          <div className="mt-16 pt-8 border-t border-zinc-800">
-            <p className="text-xs text-zinc-500 uppercase tracking-widest font-bold mb-4 text-center">
-              Related Legal Pages
-            </p>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              <LegalNavCard href="/privacy" label="Privacy Policy" />
-              <LegalNavCard href="/terms" label="Terms & Conditions" />
-              <LegalNavCard href="/refund" label="Refund Policy" />
-              <LegalNavCard href="/contact" label="Contact Us" />
+          <div className="min-w-0">
+            {hasToc && (
+              <details className="lg:hidden not-prose mb-8 overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/60 group">
+                <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-[11px] font-black uppercase tracking-[0.2em] text-zinc-400 [&::-webkit-details-marker]:hidden">
+                  On this page
+                  <ChevronDown
+                    size={16}
+                    className="text-zinc-500 transition-transform group-open:rotate-180"
+                  />
+                </summary>
+                <ul className="border-t border-zinc-800 px-4 py-3 space-y-0.5">
+                  {sections.map((s) => (
+                    <li key={s.id}>
+                      <a
+                        href={`#${s.id}`}
+                        className="block py-1 text-sm text-zinc-400 hover:text-yellow-500 transition-colors"
+                      >
+                        {s.label}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            )}
+
+            <div className="prose prose-invert max-w-none">{children}</div>
+
+            {/* Legal Nav Between Pages */}
+            <div className="mt-14 pt-6 border-t border-zinc-800">
+              <p className="text-[10px] text-zinc-500 uppercase tracking-[0.2em] font-bold mb-3">
+                Related pages
+              </p>
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+                {related.map((p) => (
+                  <Link
+                    key={p.href}
+                    href={p.href}
+                    className="rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2.5 text-xs font-bold text-zinc-300 transition-colors hover:border-yellow-500/40 hover:text-yellow-500"
+                  >
+                    {p.label}
+                  </Link>
+                ))}
+              </div>
             </div>
           </div>
         </div>
       </section>
 
       {/* ============ OWNER CONTACT SECTION ============ */}
-      <section className="py-16 px-4 md:px-6 border-t border-zinc-900 bg-zinc-900/30">
+      <section className="py-14 px-4 md:px-6 border-t border-zinc-900 bg-zinc-900/30">
         <div className="max-w-4xl mx-auto">
-          <div className="text-center mb-10">
+          <div className="text-center mb-8">
             <p className="text-yellow-500 text-xs font-black tracking-[0.4em] uppercase mb-3">
-              — Contact The Owners —
+              Contact The Owners
             </p>
             <h2 className="text-2xl md:text-3xl font-black uppercase tracking-tight">
               Questions? <span className="text-yellow-500">Talk to us directly.</span>
@@ -138,7 +249,7 @@ export default async function LegalLayout({
                       {branch.name}
                     </h3>
                     <span className="text-[10px] font-black text-yellow-500 uppercase tracking-widest">
-                      Branch · {branch.code}
+                      Branch &middot; {branch.code}
                     </span>
                   </div>
                 </div>
@@ -197,32 +308,14 @@ export default async function LegalLayout({
             &copy; {new Date().getFullYear()} Brothers Gym. All rights reserved.
           </p>
           <div className="flex flex-wrap justify-center gap-4 text-xs text-zinc-500">
-            <Link href="/privacy" className="hover:text-yellow-500 transition-colors">
-              Privacy
-            </Link>
-            <Link href="/terms" className="hover:text-yellow-500 transition-colors">
-              Terms
-            </Link>
-            <Link href="/refund" className="hover:text-yellow-500 transition-colors">
-              Refund
-            </Link>
-            <Link href="/contact" className="hover:text-yellow-500 transition-colors">
-              Contact
-            </Link>
+            {RELATED_PAGES.map((p) => (
+              <Link key={p.href} href={p.href} className="hover:text-yellow-500 transition-colors">
+                {p.label.split(" ")[0]}
+              </Link>
+            ))}
           </div>
         </div>
       </footer>
     </div>
-  );
-}
-
-function LegalNavCard({ href, label }: { href: string; label: string }) {
-  return (
-    <Link
-      href={href}
-      className="bg-zinc-900 border border-zinc-800 hover:border-yellow-500/40 hover:bg-yellow-500/5 rounded-lg p-3 text-center text-xs font-bold text-zinc-300 hover:text-yellow-500 transition-all"
-    >
-      {label}
-    </Link>
   );
 }

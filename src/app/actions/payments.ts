@@ -9,6 +9,7 @@ import { and, eq, desc, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { checkRateLimit, checkDailyEmailCap, getClientInfo } from "@/lib/security";
 import { sanitizeError } from "@/lib/errors";
+import { isPlaceholder } from "@/lib/env-placeholder";
 import { verifyTurnstile } from "@/lib/turnstile";
 import { fulfilPaidJoin } from "@/lib/fulfil-join";
 import { notifyJoinConfirmed } from "@/lib/join-notify";
@@ -923,7 +924,7 @@ async function notifyOwnerOfLead(join: typeof onlineJoins.$inferSelect) {
   if (!branch || !ownerEmail) return;
 
   const apiKey = process.env.RESEND_API_KEY;
-  if (!apiKey || /x{4,}/i.test(apiKey)) return; // unset or still a placeholder
+  if (isPlaceholder(apiKey)) return; // unset or still a placeholder
 
   // ===== DAILY CAP =====
   // Resend's allowance is shared with the owner's login OTP, so an unbounded
@@ -1000,7 +1001,7 @@ async function notifyMemberOfLead(
   if (!join.email) return;
 
   const apiKey = process.env.RESEND_API_KEY;
-  if (!apiKey || /x{4,}/i.test(apiKey)) return;
+  if (isPlaceholder(apiKey)) return;
 
   // Per-address cap, the same one login uses. This is the relay leg: without
   // it, someone submitting the form repeatedly with a third party's address

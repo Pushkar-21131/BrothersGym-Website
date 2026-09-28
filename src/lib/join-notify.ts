@@ -37,6 +37,7 @@ import { branches } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { Resend } from "resend";
 import { fromHeader, joinConfirmedEmail } from "@/lib/email-templates";
+import { isPlaceholder } from "@/lib/env-placeholder";
 import { buildWhatsAppLink } from "@/lib/whatsapp";
 import { formatDayIST } from "@/lib/manual-join";
 
@@ -68,11 +69,13 @@ export type JoinNotifyResult = {
  * Is the Resend key a real key rather than the masked placeholder that ships in
  * .env.example? Sending with a placeholder throws on every request and fills the
  * logs, so the send is skipped instead.
+ *
+ * The "is it a placeholder" question itself lives in lib/env-placeholder.ts, so
+ * this file, env-check.ts and razorpay-account.ts cannot drift apart on it.
  */
 function resendKey(): string | null {
   const apiKey = process.env.RESEND_API_KEY;
-  if (!apiKey || /x{4,}/i.test(apiKey)) return null;
-  return apiKey;
+  return isPlaceholder(apiKey) ? null : apiKey!;
 }
 
 /** The message the owner sends. Plain text — it goes through a wa.me URL. */

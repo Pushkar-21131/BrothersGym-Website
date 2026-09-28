@@ -24,13 +24,13 @@
  */
 
 /**
- * A placeholder counts as unset.
- *
- * Left as-is, "rzp_test_xxxxxxxxxx" is a non-empty string, so `||` treats it as
- * a real value and Razorpay answers with a bare 401 "Authentication failed" that
- * says nothing about which variable is wrong.
+ * A placeholder counts as unset — see lib/env-placeholder.ts, which owns that
+ * definition. It lives there rather than here because env-check.ts needs the
+ * same answer at startup, and when the two computed it separately they
+ * disagreed: env-check warned that the global key "is being IGNORED" while this
+ * file fell back to charging every branch with it.
  */
-const isPlaceholder = (v?: string | null): boolean => !v || /x{4,}/i.test(v);
+import { isPlaceholder } from "./env-placeholder";
 
 /** Branch `code` → env var suffix. "nr" and "NR" must resolve identically. */
 export function normaliseBranchCode(branchCode: string): string {

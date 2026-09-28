@@ -11,6 +11,16 @@ const requiredInProduction = [
   "ADMIN_PASSWORD",
   "OWNER_EMAIL",
   "SESSION_SECRET",
+  // Required, not recommended. verifyTurnstile fails CLOSED when the secret is
+  // unset (correct — an unverifiable captcha must not pass), so a missing key
+  // does not degrade one feature: owner login, staff login, password reset and
+  // the public join form all reject with "Captcha service not configured" while
+  // the rest of the site looks perfectly healthy.
+  "TURNSTILE_SECRET_KEY",
+  // Build-time: NEXT_PUBLIC_* is inlined into the client bundle, so this must be
+  // present when `next build` runs, not merely at runtime. Without it the widget
+  // renders an error box instead of a challenge.
+  "NEXT_PUBLIC_TURNSTILE_SITE_KEY",
   // Required, not recommended. Owner login, staff login and the join flow all
   // send an email before they succeed, and the Resend SDK's constructor throws
   // when the key is absent — so without this the failure is "login is broken",

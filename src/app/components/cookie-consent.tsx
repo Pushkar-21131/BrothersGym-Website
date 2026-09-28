@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Cookie, X } from "lucide-react";
 
@@ -20,6 +20,39 @@ export default function CookieConsent() {
     }
   }, []);
 
+  // Publish this banner's height as `--cookie-banner-h` so anything else pinned
+  // to the bottom of the screen can sit above it instead of behind it. The
+  // floating WhatsApp button reads the variable; without it this banner (z-50,
+  // full width, anchored bottom-0) covers that button (z-40) on every phone
+  // until consent is given, which is the only thing on the site that can make
+  // the WhatsApp button unreachable.
+  //
+  // Measured rather than hardcoded because the height is not a constant: the
+  // two buttons stack below `sm` and sit side by side above it, and the
+  // paragraph wraps differently again at narrow widths.
+  const bannerRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!show) return;
+
+    const el = bannerRef.current;
+    if (!el) return;
+
+    const root = document.documentElement;
+    const publish = () =>
+      root.style.setProperty("--cookie-banner-h", `${el.offsetHeight}px`);
+
+    publish();
+    const observer = new ResizeObserver(publish);
+    observer.observe(el);
+
+    // Reset on dismissal so the button drops back to its normal position. This
+    // also runs on unmount, so a route change cannot strand a stale offset.
+    return () => {
+      observer.disconnect();
+      root.style.setProperty("--cookie-banner-h", "0px");
+    };
+  }, [show]);
+
   function acceptAll() {
     setCookie(CONSENT_COOKIE, CONSENT_VERSION, 365);
     setShow(false);
@@ -33,7 +66,10 @@ export default function CookieConsent() {
   if (!show) return null;
 
   return (
-    <div className="fixed bottom-0 left-0 right-0 z-50 p-4 md:p-6 animate-in slide-in-from-bottom duration-500">
+    <div
+      ref={bannerRef}
+      className="fixed bottom-0 left-0 right-0 z-50 p-4 md:p-6 animate-in slide-in-from-bottom duration-500"
+    >
       <div className="max-w-4xl mx-auto bg-zinc-900 border border-yellow-500/30 rounded-2xl shadow-2xl overflow-hidden">
         {/* Content */}
         <div className="p-5 md:p-6">

@@ -63,7 +63,19 @@ export default function FloatingWhatsApp() {
   }
 
   return (
-    <div ref={popupRef} className="fixed bottom-5 right-5 z-40 flex flex-col items-end gap-3">
+    <div
+      ref={popupRef}
+      // 1.25rem is the old `bottom-5`. The added variable is the cookie banner's
+      // measured height (set in cookie-consent.tsx), so this button rides above
+      // that banner rather than being buried under it — the banner is z-50 and
+      // full width, this is z-40, so the z-index alone cannot win.
+      //
+      // Unset it falls back to 0px, giving exactly `bottom-5` again: that is the
+      // server render and the returning-visitor case, so nothing moves for
+      // anyone who has already dismissed the banner.
+      style={{ bottom: "calc(1.25rem + var(--cookie-banner-h, 0px))" }}
+      className="fixed right-5 z-40 flex flex-col items-end gap-3 transition-[bottom] duration-300 ease-out"
+    >
       {/* Popup with branch options */}
       {open && (
         <div className="bg-zinc-900 border border-zinc-700 rounded-2xl shadow-2xl overflow-hidden animate-in slide-in-from-bottom-2 fade-in duration-200 w-72">

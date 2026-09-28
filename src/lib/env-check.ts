@@ -88,6 +88,15 @@ function validateEnv() {
   const missing: string[] = [];
   const warnings: string[] = [];
 
+  // Deliberately checks only for empty/absent, NOT isPlaceholder().
+  //
+  // A masked value in a required variable therefore passes this check and fails
+  // later, at the point of use. That is the lesser evil: isPlaceholder looks for
+  // four consecutive x's, and a real secret can contain them — a false positive
+  // here blocks the whole deploy, which is worse than the case it would catch,
+  // and the case it would catch (someone pasting `rzp_test_xxxx` into
+  // RAZORPAY_KEY_ID) is already handled where it matters, in razorpay-account.ts,
+  // which treats such a key as unset rather than using it.
   for (const key of requiredInProduction) {
     if (!process.env[key] || process.env[key]?.trim() === "") {
       missing.push(key);

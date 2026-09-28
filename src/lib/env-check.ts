@@ -109,12 +109,27 @@ function validateEnv() {
     missing.push("ADMIN_PASSWORD is a common weak password. Change it immediately.");
   }
 
-  // Session signing secret check
+  // ===== SESSION SIGNING SECRET =====
+  // The length floor is a `missing` entry, not a warning. This one value is the
+  // entire integrity of the session cookie: the payload carries `role` and
+  // `branchId`, and the HS256 signature over it is the only thing standing
+  // between an attacker and a forged super-admin token that sees every branch.
+  // A short secret is brute-forceable offline against a cookie the attacker can
+  // obtain for free — their own — and nothing in the running site would look
+  // wrong while it happened.
+  //
+  // Warning about that and starting anyway is the wrong trade, and it is the
+  // same class of failure as a missing key, so it fails the same way.
   const sessionSecret = process.env.SESSION_SECRET;
   if (!sessionSecret) {
     missing.push("SESSION_SECRET (signs the admin session cookie — generate with node -e \"console.log(require('crypto').randomBytes(48).toString('base64url'))\")");
   } else if (sessionSecret.trim().length < 32) {
-    warnings.push("SESSION_SECRET is very short (<32 chars). Use a longer random value.");
+    missing.push(
+      `SESSION_SECRET is only ${sessionSecret.trim().length} characters. It signs the ` +
+        `admin session cookie, so a guessable value lets anyone mint a super-admin ` +
+        `session for any branch. Use at least 32 random characters — ` +
+        `node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"`
+    );
   }
 
   // ===== PAYMENT_MODE SANITY =====

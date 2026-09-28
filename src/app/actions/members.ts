@@ -82,34 +82,40 @@ export async function addMemberAction(formData: FormData) {
     const branch = await requireSingleBranch(formBranchId);
     const today = istDateString();
 
-    const newMember = await db
-      .insert(members)
-      .values({
-        branchId: branch.branchId,
-        gymId,
-        name,
-        email: email || null,
-        contactNumber,
-        address: address || null,
-        parentName: parentName || null,
-        emergencyContact,
-        feeAmount: resolvedFee,
-        joiningDate: joiningDate || today,
-        membershipExpiry,
-      })
-      .returning();
+    // Both writes in one transaction. As two independent statements, a failure
+    // between them left a member row with no payment for the fee that was taken
+    // at the desk — the member exists, the money is missing from every revenue
+    // total, and nothing reports it.
+    await db.transaction(async (tx) => {
+      const newMember = await tx
+        .insert(members)
+        .values({
+          branchId: branch.branchId,
+          gymId,
+          name,
+          email: email || null,
+          contactNumber,
+          address: address || null,
+          parentName: parentName || null,
+          emergencyContact,
+          feeAmount: resolvedFee,
+          joiningDate: joiningDate || today,
+          membershipExpiry,
+        })
+        .returning();
 
-    // No payment row when there is no amount: a ₹0 payment would sit in the
-    // history and in every revenue total as a real collection that never
-    // happened. The owner records the payment when they fill the fee in.
-    if (newMember.length > 0 && resolvedFee > 0) {
-      await db.insert(payments).values({
-        branchId: branch.branchId,
-        memberId: newMember[0].id,
-        amount: resolvedFee,
-        date: joiningDate || today,
-      });
-    }
+      // No payment row when there is no amount: a ₹0 payment would sit in the
+      // history and in every revenue total as a real collection that never
+      // happened. The owner records the payment when they fill the fee in.
+      if (newMember.length > 0 && resolvedFee > 0) {
+        await tx.insert(payments).values({
+          branchId: branch.branchId,
+          memberId: newMember[0].id,
+          amount: resolvedFee,
+          date: joiningDate || today,
+        });
+      }
+    });
 
     revalidatePath("/admin/members");
     revalidatePath("/admin");
@@ -311,52 +317,80 @@ export async function renewMemberAction(
 
   try {
     const scope = await getBranchScope();
-    const existing = await db
-      .select()
-      .from(members)
-      .where(eq(members.id, memberId))
-      .limit(1);
-    if (existing.length === 0) return { error: "Member not found" };
 
-    const member = existing[0];
+    // ===== ONE TRANSACTION, AND THE ROW LOCKED =====
+    // This was a plain read, then an update, then an insert as three independent
+    // statements. Two problems, both silent:
+    //
+    //   LOST UPDATE — press Renew twice (or twice from two tabs, or once here
+    //   while a member pays online) and both calls read the same starting expiry
+    //   and compute the same +N days, so two payments are taken and the
+    //   membership is extended once.
+    //
+    //   TORN WRITE — if the payment insert failed after the update committed,
+    //   the membership was extended with no payment recorded, and revenue
+    //   understated it forever.
+    //
+    // FOR UPDATE makes the row itself the unit of serialisation, so this
+    // serialises against the online/UPI renewal paths in fulfil-join.ts too —
+    // they lock the same row. The second caller blocks, then re-reads and sees
+    // the first caller's expiry, which is what makes the extension cumulative.
+    type RenewOutcome = { error: string } | { success: true; newExpiry: string };
 
-    const canAccess =
-      scope.type === "all"
-        ? scope.branchIds.includes(member.branchId)
-        : scope.branchId === member.branchId;
+    const outcome: RenewOutcome = await db.transaction(async (tx) => {
+      const existing = await tx
+        .select()
+        .from(members)
+        .where(eq(members.id, memberId))
+        .limit(1)
+        .for("update");
+      if (existing.length === 0) return { error: "Member not found" };
 
-    if (!canAccess) return { error: "You don't have access to this member" };
+      const member = existing[0];
 
-    // Calendar arithmetic on "YYYY-MM-DD" strings — see lib/utils. An
-    // unexpired membership extends from its own expiry, a lapsed one from
-    // today.
-    const todayStr = istDateString();
-    const base =
-      member.membershipExpiry > todayStr ? member.membershipExpiry : todayStr;
-    const newExpiry = addDaysIso(base, durationDays);
+      const canAccess =
+        scope.type === "all"
+          ? scope.branchIds.includes(member.branchId)
+          : scope.branchId === member.branchId;
 
-    await db
-      .update(members)
-      .set({
-        membershipExpiry: newExpiry,
-        feeAmount: amount,
-        planType: planType || member.planType,
-        leftGym: false,
-        wonBackAt: member.leftGym ? new Date() : member.wonBackAt,
-      })
-      .where(eq(members.id, memberId));
+      if (!canAccess) return { error: "You don't have access to this member" };
 
-    await db.insert(payments).values({
-      branchId: member.branchId,
-      memberId: member.id,
-      amount,
-      date: todayStr,
-      method: paymentMethod,
+      // Calendar arithmetic on "YYYY-MM-DD" strings — see lib/utils. An
+      // unexpired membership extends from its own expiry, a lapsed one from
+      // today.
+      const todayStr = istDateString();
+      const base =
+        member.membershipExpiry > todayStr ? member.membershipExpiry : todayStr;
+      const newExpiry = addDaysIso(base, durationDays);
+
+      await tx
+        .update(members)
+        .set({
+          membershipExpiry: newExpiry,
+          feeAmount: amount,
+          planType: planType || member.planType,
+          leftGym: false,
+          wonBackAt: member.leftGym ? new Date() : member.wonBackAt,
+        })
+        .where(eq(members.id, memberId));
+
+      await tx.insert(payments).values({
+        branchId: member.branchId,
+        memberId: member.id,
+        amount,
+        date: todayStr,
+        method: paymentMethod,
+      });
+
+      return { success: true as const, newExpiry };
     });
 
+    if ("error" in outcome) return outcome;
+
+    // After the transaction commits, so a re-render can never read the old row.
     revalidatePath("/admin/members");
     revalidatePath("/admin");
-    return { success: true, newExpiry };
+    return outcome;
   } catch (error) {
     return { error: sanitizeError(error, "Failed to renew membership") };
   }

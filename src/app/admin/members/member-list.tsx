@@ -253,8 +253,11 @@ export default function MemberList({
     );
     setLoading(false);
 
-    if (r.error) toast.error(r.error);
-    else {
+    // Narrowed rather than read optimistically: renewMemberAction returns a
+    // real union now that its body is a transaction, so `r.error` is not
+    // guaranteed to exist on the success branch.
+    if ("error" in r && r.error) toast.error(r.error);
+    else if ("newExpiry" in r) {
       toast.success(`Renewed till ${r.newExpiry}`);
       setShowRenewModal(null);
       router.refresh();

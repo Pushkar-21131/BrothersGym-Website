@@ -198,6 +198,12 @@ export async function fulfilPaidJoin(params: {
       // branch is re-asserted here as a second barrier in case a join row is ever
       // created by another path.
       if (join.memberId) {
+        // FOR UPDATE: the claim above already serialises this join against its
+        // own duplicate (browser callback vs webhook), but it says nothing about
+        // a DIFFERENT path renewing the same member at the same moment — the
+        // owner pressing Renew in the admin panel locks this same row. Without
+        // the lock both read the same starting expiry, both compute the same
+        // +N days, and two payments are taken for one extension.
         const existing = await tx
           .select()
           .from(members)
@@ -207,7 +213,8 @@ export async function fulfilPaidJoin(params: {
               eq(members.branchId, join.branchId)
             )
           )
-          .limit(1);
+          .limit(1)
+          .for("update");
         if (!existing.length) throw new Error("Existing member not found");
         const m = existing[0];
 
@@ -414,6 +421,12 @@ export async function fulfilManualJoin(params: {
 
       // ===== EXISTING MEMBER (renewal) =====
       if (join.memberId) {
+        // FOR UPDATE: the claim above already serialises this join against its
+        // own duplicate (browser callback vs webhook), but it says nothing about
+        // a DIFFERENT path renewing the same member at the same moment — the
+        // owner pressing Renew in the admin panel locks this same row. Without
+        // the lock both read the same starting expiry, both compute the same
+        // +N days, and two payments are taken for one extension.
         const existing = await tx
           .select()
           .from(members)
@@ -423,7 +436,8 @@ export async function fulfilManualJoin(params: {
               eq(members.branchId, join.branchId)
             )
           )
-          .limit(1);
+          .limit(1)
+          .for("update");
         if (!existing.length) throw new Error("Existing member not found");
         const m = existing[0];
 

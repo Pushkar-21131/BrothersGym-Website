@@ -1,5 +1,6 @@
 "use server";
 
+import { randomInt } from "crypto";
 import { db } from "@/db";
 import { loginOtps, appUsers } from "@/db/schema";
 import { eq, and, gt } from "drizzle-orm";
@@ -10,8 +11,20 @@ import { verifyOwnerCredentials } from "@/lib/verify-credentials";
 import { fromHeader, otpEmail } from "@/lib/email-templates";
 import { isPlaceholder } from "@/lib/env-placeholder";
 
+/**
+ * A 6-digit login code.
+ *
+ * crypto.randomInt, not Math.random. Math.random is a fast non-cryptographic PRNG
+ * whose internal state can be recovered from a handful of outputs — and the
+ * outputs here are OTPs, so an attacker who can request a few codes of their own
+ * has samples of the same stream the owner's next code will come from. That is
+ * the whole secret this function exists to generate.
+ *
+ * randomInt's upper bound is exclusive, so 1000000 gives 100000–999999: six
+ * digits, never a leading zero.
+ */
 function generateOTP(): string {
-  return Math.floor(100000 + Math.random() * 900000).toString();
+  return randomInt(100000, 1000000).toString();
 }
 
 /**

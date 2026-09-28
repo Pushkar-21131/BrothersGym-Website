@@ -1,5 +1,7 @@
 "use server";
 
+import { randomInt } from "crypto";
+
 import { db } from "@/db";
 import { appUsers, loginOtps } from "@/db/schema";
 import { eq, and, gt } from "drizzle-orm";
@@ -138,8 +140,10 @@ export async function requestPasswordReset(formData: FormData) {
       return GENERIC_SENT;
     }
 
-    // Generate 6-digit OTP
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    // Generate a 6-digit OTP from a CSPRNG — see the note on generateOTP in
+    // otp.ts for why Math.random is the wrong source for this value. Bounds are
+    // inclusive/exclusive respectively, so this is 100000–999999.
+    const otp = randomInt(100000, 1000000).toString();
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
 
     // Invalidate any previous unused OTPs for this email

@@ -146,7 +146,9 @@ export async function requestPasswordReset(formData: FormData) {
     const otp = randomInt(100000, 1000000).toString();
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
 
-    // Invalidate any previous unused OTPs for this email
+    // Invalidate any previous unused OTPs for this email. Unscoped by purpose on
+    // purpose — see the note in otp.ts: at most one code is live per address at a
+    // time, so the newest email is always the only one that works.
     await db
       .update(loginOtps)
       .set({ used: true })
@@ -158,6 +160,10 @@ export async function requestPasswordReset(formData: FormData) {
       otp,
       expiresAt,
       used: false,
+      // `purpose` is the machine-readable flow marker the verifier filters on.
+      // `deviceInfo` keeps the same word as a human label in the table, for
+      // anyone reading the rows directly.
+      purpose: "password-reset",
       deviceInfo: "password-reset",
       ipAddress: ip,
     });
@@ -272,6 +278,10 @@ export async function resetPasswordWithOTP(formData: FormData) {
         and(
           eq(loginOtps.email, email),
           eq(loginOtps.otp, otp),
+          // A login code must not be redeemable as a reset code: that is the
+          // half of the crossing that would let a code phished out of the login
+          // screen be spent on a password change.
+          eq(loginOtps.purpose, "password-reset"),
           eq(loginOtps.used, false),
           gt(loginOtps.expiresAt, now)
         )

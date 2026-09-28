@@ -313,7 +313,7 @@ npm run dev               # http://localhost:3000
 Use `migrate`, not `push`. `push` diffs `src/db/schema.ts` straight against the
 database and writes the difference — it drops columns it does not recognise, and
 it records nothing, so there is no history of what it did. `migrate` replays the
-journaled files in `drizzle/` (`0000_`–`0012_`) in order, which is reproducible
+journaled files in `drizzle/` (`0000_`–`0013_`) in order, which is reproducible
 and is what the deployed database was built from. `scripts/BACKUP.md` covers
 taking a dump first.
 

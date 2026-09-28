@@ -369,12 +369,31 @@ export const reviews = pgTable("reviews", {
 });
 
 // ========== LOGIN OTPs ==========
+/**
+ * One-time codes, for both owner/staff login and password reset.
+ *
+ * `purpose` is what stops a code minted for one flow being redeemed in the
+ * other. Both verifiers used to filter on email + otp + used + expiry and
+ * nothing else, so a reset code was also a valid login code and a login code
+ * was also a valid reset code — the "different flow, different code" property
+ * simply did not hold. `device_info` recorded which flow wrote a row, but
+ * neither verifier ever read it.
+ *
+ * The default is 'login' so rows written before this column existed stay usable
+ * for login, the more critical of the two flows. The one-time cost is that a
+ * reset code issued just before a deploy and redeemed just after it stops
+ * working and has to be re-requested.
+ */
 export const loginOtps = pgTable("login_otps", {
   id: serial("id").primaryKey(),
   email: text("email").notNull(),
   otp: text("otp").notNull(),
   expiresAt: timestamp("expires_at").notNull(),
   used: boolean("used").default(false).notNull(),
+  purpose: text("purpose")
+    .$type<"login" | "password-reset">()
+    .default("login")
+    .notNull(),
   deviceInfo: text("device_info"),
   ipAddress: text("ip_address"),
   createdAt: timestamp("created_at").defaultNow(),

@@ -164,6 +164,13 @@ export async function sendLoginOTP(
 
   try {
     // Invalidate any earlier unused codes so only the newest one works.
+    //
+    // Deliberately NOT scoped to purpose. Requesting a reset therefore also
+    // cancels a pending login code for the same address, which is the point: at
+    // most one code is live per address at a time, so "the newest email is the
+    // only one that works" stays true and there is never a second guessable
+    // value sitting in the table. The purpose filter below is what stops a code
+    // crossing between flows; this is a separate property.
     await db
       .update(loginOtps)
       .set({ used: true })
@@ -175,6 +182,7 @@ export async function sendLoginOTP(
       otp,
       expiresAt,
       used: false,
+      purpose: "login",
       deviceInfo,
     });
 
@@ -252,6 +260,10 @@ export async function verifyLoginOTP(email: string, otpInput: string) {
         and(
           eq(loginOtps.email, email.toLowerCase()),
           eq(loginOtps.otp, otpInput),
+          // A code minted by the password-reset flow must not be redeemable
+          // here. Without this the two flows share one pool of codes and a
+          // reset code is a login code.
+          eq(loginOtps.purpose, "login"),
           eq(loginOtps.used, false),
           gt(loginOtps.expiresAt, now)
         )

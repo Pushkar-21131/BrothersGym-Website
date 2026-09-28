@@ -27,7 +27,7 @@
 
 import { db } from "@/db";
 import { appUsers } from "@/db/schema";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { getCurrentUser } from "./auth-check";
 import { getBranchScope, isSuperAdmin } from "./branch";
 
@@ -124,4 +124,79 @@ export async function forcedBranchIdForCaller(): Promise<number | null> {
   if (await isSuperAdmin()) return null;
   const scope = await getBranchScope();
   return scope.type === "single" ? scope.branchId : null;
+}
+
+/**
+ * Guard against a change that would leave nobody able to administer logins.
+ *
+ * `assertCanAdministerUser` answers "is this login yours to touch". This answers
+ * a different question: "if you touch it, can anyone still get back in".
+ *
+ * Owner logins are the only way into /admin/users, so removing the last one
+ * removes the ability to create logins at all — there is no screen to undo it
+ * from. The env bootstrap owner (ADMIN_EMAIL/ADMIN_PASSWORD) is the one way
+ * back in, but the password-reset flow explicitly tells the operator to remove
+ * ADMIN_PASSWORD once a row exists for that address, so it is not something to
+ * design around.
+ *
+ * Only ACTIVE owner logins count. An inactive row cannot be signed into
+ * (verifyOwnerCredentials filters on isActive), so it is not a way back in.
+ *
+ * `targetStaysActiveOwner` is the state the caller intends for the target after
+ * their change: false when deleting, and the submitted `isActive` when editing.
+ * When it is true nothing is being removed and the check is skipped — which is
+ * what keeps an unrelated edit of an already-inactive owner login from being
+ * refused.
+ */
+export async function assertOwnerRemains(
+  targetUserId: number,
+  targetStaysActiveOwner: boolean
+): Promise<Denial | null> {
+  if (targetStaysActiveOwner) return null;
+
+  const rows = await db
+    .select({ role: appUsers.role })
+    .from(appUsers)
+    .where(eq(appUsers.id, targetUserId))
+    .limit(1);
+
+  // Not an owner, or already gone. Nothing to protect.
+  if (rows.length === 0 || rows[0].role !== "owner") return null;
+
+  const owners = await db
+    .select({ id: appUsers.id })
+    .from(appUsers)
+    .where(and(eq(appUsers.role, "owner"), eq(appUsers.isActive, true)));
+
+  if (owners.filter((o) => o.id !== targetUserId).length === 0) {
+    return {
+      error:
+        "This is the only active owner login. Removing it would leave nobody able to manage logins, and there is no way back in from this site. Create or activate another owner login first.",
+    };
+  }
+
+  return null;
+}
+
+/**
+ * Guard against a caller removing their own access by accident.
+ *
+ * getVerifiedRole() re-reads app_users on every request and returns null once
+ * the row is gone or inactive, so this does not need to sign anyone out — the
+ * very next page load does it. The problem is that it happens with no warning,
+ * mid-session, from a button that looks like it is about someone else.
+ */
+export async function assertNotSelf(targetUserId: number): Promise<Denial | null> {
+  const me = await getCurrentUser();
+
+  // me.id is null for the env bootstrap owner, who has no row and therefore
+  // cannot be the target of a delete or an update here.
+  if (me && me.id !== null && me.id === targetUserId) {
+    return {
+      error:
+        "You cannot remove the login you are signed in with. Sign in as another owner first.",
+    };
+  }
+
+  return null;
 }

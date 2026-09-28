@@ -19,6 +19,8 @@ import { isSuperAdmin } from "@/lib/branch";
 import {
   assertCanAdministerUser,
   assertCanAssignRoleAndBranch,
+  assertNotSelf,
+  assertOwnerRemains,
   forcedBranchIdForCaller,
 } from "@/lib/user-admin";
 import { sanitizeError } from "@/lib/errors";
@@ -453,6 +455,17 @@ export async function updateStaffUserAction(
   const denied = await assertCanAdministerUser(id);
   if (denied) return denied;
 
+  // Switching a login OFF is the same loss of access as deleting it, so it gets
+  // the same two guards. Without them the delete guards below would be trivially
+  // bypassed by unticking this box instead of pressing Delete — the users screen
+  // offers both, and the outcome is identical.
+  if (!isActive) {
+    const self = await assertNotSelf(id);
+    if (self) return self;
+    const lastOwner = await assertOwnerRemains(id, false);
+    if (lastOwner) return lastOwner;
+  }
+
   // A branch owner cannot move a login into the other gym, and cannot clear a
   // branch (which would promote that account to super-admin).
   const forced = await forcedBranchIdForCaller();
@@ -495,6 +508,15 @@ export async function deleteStaffUserAction(
   try {
     const denied = await assertCanAdministerUser(id);
     if (denied) return denied;
+
+    // Two ways this action can lock the gym out of its own admin panel. Both are
+    // silent from the UI — the button looks like it acts on someone else — and
+    // neither is recoverable from a screen inside the site.
+    const self = await assertNotSelf(id);
+    if (self) return self;
+
+    const lastOwner = await assertOwnerRemains(id, false);
+    if (lastOwner) return lastOwner;
 
     await db.delete(appUsers).where(eq(appUsers.id, id));
     return { success: true };

@@ -52,8 +52,24 @@ export const revalidate = 3600;
 async function getHomeData() {
   const fetchAll = () =>
     Promise.all([
+      // Named columns, not select(). The branches table also holds owner_email,
+      // upi_id and upi_name — the owner's private address and the payee VPA his
+      // UPI app shows a payer before they confirm. Nothing on this page reads
+      // them, so nothing leaks today, but select() pulled all three into a
+      // statically cached public render: the day anyone spreads a branch object
+      // into a client component or a JSON-LD block, those publish with it.
+      //
+      // Listing exactly what the page uses makes that impossible rather than
+      // merely unlikely, and it shrinks the ISR payload on the most-visited page.
       db
-        .select()
+        .select({
+          id: branches.id,
+          code: branches.code,
+          name: branches.name,
+          address: branches.address,
+          phone: branches.phone,
+          ownerName: branches.ownerName,
+        })
         .from(branches)
         .where(eq(branches.isActive, true))
         .orderBy(branches.id),

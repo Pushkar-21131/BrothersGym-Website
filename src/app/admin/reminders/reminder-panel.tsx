@@ -196,12 +196,7 @@ export default function ReminderPanel({
         feeAmount: member.feeAmount,
       });
 
-      const result = await sendSMSReminder(
-        member.id,
-        member.contactNumber,
-        variables,
-        smsText
-      );
+      const result = await sendSMSReminder(member.id, variables, smsText);
 
       if (result.error) toast.error(result.error);
       else toast.success(`SMS sent to ${member.name}.`);
@@ -252,12 +247,7 @@ export default function ReminderPanel({
           feeAmount: m.feeAmount,
         });
 
-        const r = await sendSMSReminder(
-          m.id,
-          m.contactNumber,
-          variables,
-          smsText
-        );
+        const r = await sendSMSReminder(m.id, variables, smsText);
 
         if (r.error) failed++;
         else sent++;

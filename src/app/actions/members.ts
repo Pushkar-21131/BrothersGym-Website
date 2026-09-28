@@ -239,13 +239,24 @@ export async function deleteMemberAction(id: number) {
     if (!canAccess) return { error: "You don't have access to this member" };
 
     // A member can be referenced by three tables. Every one of them must be
-    // cleared before the member row will delete, or Postgres blocks it with a
+    // released before the member row will delete, or Postgres blocks it with a
     // foreign-key violation ("delete from members ... $1" failing is exactly
     // that). All in one transaction so a mid-way failure leaves nothing behind.
-    //   - payments:     history for THIS member only → delete outright.
-    //   - online_joins: the Razorpay order/payment record. Detach (memberId is
-    //                   nullable) so the financial record survives the member.
-    //   - sms_logs:     delivery audit trail. Detach for the same reason.
+    //
+    // All three are DETACHED (memberId → NULL), never deleted:
+    //   - payments:     money actually taken. The Privacy Policy tells members
+    //                   these are kept 8 years for Indian tax law, so deleting
+    //                   the member must not destroy the record. `member_id` is
+    //                   nullable and no query INNER JOINs payments→members, so
+    //                   detaching hides these rows from nothing and the revenue
+    //                   sum (which filters on branch_id) is unchanged.
+    //   - online_joins: the Razorpay order/payment record.
+    //   - sms_logs:     delivery audit trail.
+    //
+    // The consequence to be aware of: a deleted member's payments survive as
+    // rows with no member, so "delete" no longer erases a member's money
+    // history. Deactivate (isActive) rather than delete if the intent is to
+    // stop them appearing in the list.
     await db.transaction(async (tx) => {
       await tx
         .update(onlineJoins)
@@ -255,7 +266,10 @@ export async function deleteMemberAction(id: number) {
         .update(smsLogs)
         .set({ memberId: null })
         .where(eq(smsLogs.memberId, id));
-      await tx.delete(payments).where(eq(payments.memberId, id));
+      await tx
+        .update(payments)
+        .set({ memberId: null })
+        .where(eq(payments.memberId, id));
       await tx.delete(members).where(eq(members.id, id));
     });
 

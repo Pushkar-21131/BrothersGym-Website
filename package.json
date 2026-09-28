@@ -8,7 +8,9 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "audit:check": "npm audit --audit-level=high",
-    "audit:full": "npm audit"
+    "audit:full": "npm audit",
+    "db:backup": "node scripts/backup-db.mjs",
+    "db:restore": "node scripts/restore-db.mjs"
   },
   "dependencies": {
     "@sentry/nextjs": "^10.65.0",

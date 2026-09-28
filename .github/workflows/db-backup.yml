@@ -1,0 +1,96 @@
+name: Database backup
+
+# Nightly dump of the production database, kept as a downloadable artifact.
+#
+# WHY THIS RUNS IN ACTIONS RATHER THAN ON A MACHINE
+# A backup that depends on someone's PC being switched on is a backup that stops
+# the week they go on holiday. This runs on GitHub's infrastructure on a schedule,
+# so it needs no always-on machine and no cron entry to set up or remember.
+#
+# SETUP (one time, in the GitHub repo — not in the code)
+#   Settings → Secrets and variables → Actions → New repository secret
+#   Name:  DATABASE_URL
+#   Value: the production Postgres connection string (the same one Netlify uses)
+# Until that secret exists this workflow fails at the Dump step, by design: a
+# backup job that quietly does nothing is worse than one that is visibly broken.
+#
+# WHAT IT DOES NOT DO
+# It does not commit dumps to the repository. A dump contains member names,
+# phone numbers, addresses and payment history, and git history is permanent —
+# so the artifact is the safer home. Artifacts are private to repo collaborators
+# and expire (see retention-days below); download anything you need to keep.
+
+on:
+  schedule:
+    # 02:17 UTC = 07:47 IST. Deliberately off the hour: GitHub's scheduler is
+    # busiest at :00, which delays the run and can drop it entirely under load.
+    - cron: "17 2 * * *"
+  # Lets you take a dump on demand before anything risky — a bulk import, a
+  # cleanup script, a schema change.
+  workflow_dispatch:
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # pg_dump refuses to dump a server NEWER than itself, and the runner's
+      # preinstalled client is usually older than the database. Install the
+      # newest client the PGDG repo offers rather than trusting the default.
+      - name: Install a pg_dump new enough for the server
+        run: |
+          set -e
+          sudo sh -c 'echo "deb https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+            | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/pgdg.gpg
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-18 \
+            || sudo apt-get install -y postgresql-client-17
+          # Newest installed wins, so the fallback above is handled without
+          # hardcoding a version here.
+          PG_BIN="$(ls -d /usr/lib/postgresql/*/bin | sort -V | tail -1)"
+          echo "$PG_BIN" >> "$GITHUB_PATH"
+          "$PG_BIN/pg_dump" --version
+
+      - name: Dump the database
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        # --keep 0: the runner is disposable, so there is nothing to prune.
+        run: node scripts/backup-db.mjs --keep 0
+
+      - name: Upload the dump
+        uses: actions/upload-artifact@v4
+        with:
+          name: db-backup-${{ github.run_number }}
+          path: backups/*.sql.gz
+          # 90 days is the maximum on this plan. If a loss is discovered later
+          # than that, this artifact is no longer there to help — which is the
+          # argument for also keeping periodic offline copies.
+          retention-days: 90
+          # Fail loudly rather than reporting a green run that produced nothing.
+          if-no-files-found: error
+
+      - name: Summarise
+        if: always()
+        run: |
+          {
+            echo "### Database backup"
+            echo ""
+            if [ -d backups ] && [ -n "$(ls -A backups 2>/dev/null)" ]; then
+              echo "| file | size |"
+              echo "|---|---|"
+              for f in backups/*.sql.gz; do
+                echo "| $(basename "$f") | $(du -h "$f" | cut -f1) |"
+              done
+            else
+              echo "**No dump was produced.** Check the Dump step above — the usual"
+              echo "cause is a missing or unreachable \`DATABASE_URL\` secret."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

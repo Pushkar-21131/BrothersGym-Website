@@ -306,9 +306,16 @@ npm install
 
 cp .env.example .env      # then fill in real values
 
-npx drizzle-kit push      # create the schema
+npx drizzle-kit migrate   # create the schema by replaying drizzle/*.sql
 npm run dev               # http://localhost:3000
 ```
+
+Use `migrate`, not `push`. `push` diffs `src/db/schema.ts` straight against the
+database and writes the difference — it drops columns it does not recognise, and
+it records nothing, so there is no history of what it did. `migrate` replays the
+journaled files in `drizzle/` (`0000_`–`0012_`) in order, which is reproducible
+and is what the deployed database was built from. `scripts/BACKUP.md` covers
+taking a dump first.
 
 `.env.example` documents every variable the app reads, including which are
 required and which are optional. With no secret login paths configured, the admin
@@ -325,6 +332,8 @@ login is served directly at `/login` (staff) and `/owner-login` (owner).
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run audit:check` | `npm audit` at high severity and above |
 | `npm run audit:full` | Full `npm audit` |
+| `npm run db:backup` | Dump the database to `backups/` (gitignored). `-- --keep N`, `-- --label NAME` |
+| `npm run db:restore` | Restore a dump. **Drops and recreates every table** — see `scripts/BACKUP.md` |
 
 ---
 

@@ -554,17 +554,29 @@ export default async function Home() {
               scroll-mt would stack on top of it and land this grid ~96px lower
               than the rest. See the note in globals.css. */}
           <div id="locations" className="grid grid-cols-2 md:grid-cols-3 gap-3 md:gap-6 mb-6 md:mb-12">
+            {/* MOBILE DENSITY — every change below is `max-md:` scoped, so the
+                md: layout keeps its exact previous classes.
+
+                The card is ~140px of content wide on a phone, and the 44px boxed
+                icon plus a 12px gap was eating 56px of that — 40%. The title,
+                the owner name and a 90-character address were all fighting over
+                what was left, which is why "NANGAL RAYA" broke onto two lines and
+                the address onto seven.
+
+                So the icon shrinks to 16px inline, the type steps down one notch,
+                and the phone number becomes a full-width pill — it is the card's
+                only action and a plain text row did not read as tappable. */}
             {allBranches.map((branch) => (
               <div
                 key={branch.id}
-                className="bg-zinc-900/60 border border-zinc-800 hover:border-yellow-500/40 p-4 md:p-6 rounded-2xl transition-colors group"
+                className="bg-zinc-900/60 border border-zinc-800 hover:border-yellow-500/40 p-4 md:p-6 rounded-2xl transition-colors group max-md:p-3 max-md:rounded-xl"
               >
-                <div className="flex items-center gap-3 mb-4 md:mb-5">
-                  <div className="w-11 h-11 bg-yellow-500/10 border border-yellow-500/30 rounded-lg flex items-center justify-center group-hover:bg-yellow-500 group-hover:border-yellow-500 transition-colors">
-                    <Building2 size={20} className="text-yellow-500 group-hover:text-black transition-colors" />
+                <div className="flex items-center gap-3 mb-4 md:mb-5 max-md:gap-2 max-md:mb-2.5">
+                  <div className="w-11 h-11 bg-yellow-500/10 border border-yellow-500/30 rounded-lg flex items-center justify-center group-hover:bg-yellow-500 group-hover:border-yellow-500 transition-colors max-md:shrink-0 max-md:w-7 max-md:h-7 max-md:rounded-md">
+                    <Building2 size={20} className="text-yellow-500 group-hover:text-black transition-colors max-md:w-4 max-md:h-4" />
                   </div>
-                  <div>
-                    <h4 className="font-black text-white uppercase tracking-wide text-sm md:text-base">
+                  <div className="max-md:min-w-0">
+                    <h4 className="font-black text-white uppercase tracking-wide text-sm md:text-base max-md:text-[13px] max-md:leading-tight">
                       {branch.name}
                     </h4>
                     <span className="text-[10px] font-black text-yellow-500 uppercase tracking-widest">
@@ -578,23 +590,23 @@ export default async function Home() {
                   </div>
                 </div>
 
-                <div className="space-y-3 text-sm">
+                <div className="space-y-3 text-sm max-md:space-y-2 max-md:text-[11px]">
                   <a
                     href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(branch.address)}`}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="flex items-start gap-2 text-zinc-300 hover:text-yellow-500 transition-colors"
                   >
-                    <MapPin size={16} className="text-yellow-500 shrink-0 mt-0.5" />
-                    <span className="leading-relaxed">{branch.address}</span>
+                    <MapPin size={16} className="text-yellow-500 shrink-0 mt-0.5 max-md:w-3.5 max-md:h-3.5" />
+                    <span className="leading-relaxed max-md:leading-snug">{branch.address}</span>
                   </a>
                   {branch.phone && (
                     <a
                       href={`tel:${branch.phone}`}
-                      className="flex items-center gap-2 text-zinc-300 hover:text-yellow-500 transition-colors"
+                      className="flex items-center gap-2 text-zinc-300 hover:text-yellow-500 transition-colors max-md:w-full max-md:justify-center max-md:gap-1.5 max-md:rounded-lg max-md:border max-md:border-zinc-800 max-md:bg-zinc-800/40 max-md:py-1.5 max-md:text-yellow-500"
                     >
-                      <Phone size={16} className="text-yellow-500" />
-                      <span className="font-medium">{branch.phone}</span>
+                      <Phone size={16} className="text-yellow-500 max-md:w-3.5 max-md:h-3.5" />
+                      <span className="font-medium max-md:font-semibold">{branch.phone}</span>
                     </a>
                   )}
                 </div>
@@ -602,14 +614,18 @@ export default async function Home() {
             ))}
 
             {/* Spans both phone columns: the split-timings rows below use
-                justify-between, which collides in a half-width card. */}
-            <div className="col-span-2 md:col-span-1 bg-zinc-900/60 border border-zinc-800 p-4 md:p-6 rounded-2xl">
-              <div className="flex items-center gap-3 mb-5">
-                <div className="w-11 h-11 bg-yellow-500/10 border border-yellow-500/30 rounded-lg flex items-center justify-center">
-                  <Clock size={20} className="text-yellow-500" />
+                justify-between, which collides in a half-width card.
+
+                Its header is matched to the branch cards above (max-md: only) so
+                the three cards stacked in this grid read as one design. The body
+                is left alone — it is full-width here and already runs at text-xs. */}
+            <div className="col-span-2 md:col-span-1 bg-zinc-900/60 border border-zinc-800 p-4 md:p-6 rounded-2xl max-md:p-3 max-md:rounded-xl">
+              <div className="flex items-center gap-3 mb-5 max-md:gap-2 max-md:mb-2.5">
+                <div className="w-11 h-11 bg-yellow-500/10 border border-yellow-500/30 rounded-lg flex items-center justify-center max-md:shrink-0 max-md:w-7 max-md:h-7 max-md:rounded-md">
+                  <Clock size={20} className="text-yellow-500 max-md:w-4 max-md:h-4" />
                 </div>
-                <div>
-                  <h4 className="font-black text-white uppercase tracking-wide text-sm md:text-base">
+                <div className="max-md:min-w-0">
+                  <h4 className="font-black text-white uppercase tracking-wide text-sm md:text-base max-md:text-[13px] max-md:leading-tight">
                     Opening Hours
                   </h4>
                   <span className="text-[10px] font-black text-yellow-500 uppercase tracking-widest">

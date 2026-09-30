@@ -4,7 +4,6 @@ import "@/lib/env-check";
 import { Inter, Outfit } from "next/font/google";
 import { Toaster } from "react-hot-toast";
 import "./globals.css";
-import CookieConsent from "@/app/components/cookie-consent";
 
 // Self-hosted via next/font so the first paint no longer waits on a
 // render-blocking stylesheet from Google's font CDN. Only the /join page uses
@@ -30,30 +29,26 @@ const SITE_URL = "https://brothersgym.in";
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
   title: {
-    default:
-      "Brothers Gym - Best Gym in Nangal Raya & Sagar Pur, Delhi | Fitness & Personal Training",
+    // 58 characters. Google renders roughly 50-60 before it truncates, and the
+    // previous default ran to 94 -- so the two things that decide whether this
+    // result is the right one, the brand and the two neighbourhoods, were the
+    // parts most likely to be cut. The homepage has no title of its own and
+    // inherits this one, which makes it the single most valuable line in the
+    // file; it is also the only title here that is not run through `template`.
+    default: "Brothers Gym | Best Gym in Nangal Raya & Sagar Pur, Delhi",
     template: "%s | Brothers Gym",
   },
+  // 154 characters. Same reasoning: the old one ran to 227, so a searcher saw
+  // it clipped mid-clause. Every page that does not override this inherits it,
+  // and the homepage overrides it with the live price (see page.tsx).
   description:
-    "Brothers Gym offers premium fitness training, expert personal coaching, and modern equipment at 2 locations in Delhi — Nangal Raya (Janakpuri) & Sagar Pur. Monthly, quarterly, half-yearly and annual plans with cardio & strength training options.",
-  keywords: [
-    "gym in nangal raya",
-    "gym in sagar pur",
-    "gym in janakpuri",
-    "gym in west delhi",
-    "brothers gym delhi",
-    "personal training delhi",
-    "fitness center janakpuri",
-    "best gym near me",
-    "affordable gym delhi",
-    "bodybuilding gym delhi",
-    "weight loss gym delhi",
-    "gym membership online",
-    "cardio gym delhi",
-    "strength training gym",
-    "gym near sagarpur",
-    "gym near janakpuri",
-  ],
+    "Brothers Gym: strength training, cardio and personal coaching at 2 gyms in West Delhi — Nangal Raya (Janakpuri) and Sagar Pur. Monthly to annual plans.",
+  // No `keywords`. Google has ignored the meta keywords tag since around 2009
+  // and it was never a ranking signal worth having. It was also inherited onto
+  // /privacy, /terms and /refund, where sixteen locality terms on a refund
+  // policy is nonsense, and it advertised an outdated practice to anyone
+  // auditing the site. Removing it changes no ranking -- and that is the point:
+  // it was doing nothing while looking like it did.
   authors: [{ name: "Brothers Gym", url: SITE_URL }],
   creator: "Brothers Gym",
   publisher: "Brothers Gym",
@@ -62,9 +57,9 @@ export const metadata: Metadata = {
   classification: "Gym, Fitness Center, Health Club",
 
   openGraph: {
-    title: "Brothers Gym - Premier Fitness Center in Delhi (2 Locations)",
+    title: "Brothers Gym | Best Gym in Nangal Raya & Sagar Pur, Delhi",
     description:
-      "Transform your body at Brothers Gym. Expert trainers, modern equipment, affordable memberships on flexible monthly plans. Two convenient locations in Delhi.",
+      "Transform your body at Brothers Gym. Expert trainers, modern equipment, affordable memberships on flexible monthly plans. Two locations in West Delhi.",
     url: SITE_URL,
     siteName: "Brothers Gym",
     // No `images` here on purpose: src/app/opengraph-image.tsx generates the card
@@ -97,9 +92,19 @@ export const metadata: Metadata = {
     },
   },
 
-  alternates: {
-    canonical: SITE_URL,
-  },
+  // NO `alternates.canonical` HERE, AND IT MUST NOT COME BACK.
+  //
+  // This is the root layout, so every segment inherits what is set here. A
+  // canonical of SITE_URL therefore told Google that /join, /contact, /privacy,
+  // /terms, /refund and /join/status -- six of the seven URLs in sitemap.ts --
+  // were duplicates of the homepage. All six were submitted for indexing and
+  // all six declared themselves copies of the seventh, so the site had exactly
+  // one indexable URL. /join is the online join funnel and /contact is the only
+  // page carrying both branches' full NAP, so the two most commercially useful
+  // pages were the ones silencing themselves.
+  //
+  // A canonical belongs on a page, where it can be true. Every page under
+  // src/app/ sets its own.
 
   // Only emitted once GOOGLE_SITE_VERIFICATION is set. The previous hardcoded
   // "your-google-verification-code" placeholder shipped a meta tag that could
@@ -108,12 +113,15 @@ export const metadata: Metadata = {
     ? { verification: { google: process.env.GOOGLE_SITE_VERIFICATION } }
     : {}),
 
-  other: {
-    "geo.region": "IN-DL",
-    "geo.placename": "New Delhi",
-    "geo.position": "28.6104029;77.1077599",
-    ICBM: "28.6104029, 77.1077599",
-  },
+  // No geo.region / geo.placename / geo.position / ICBM.
+  //
+  // Google does not read them and Bing deprecated them, so they bought nothing.
+  // What they cost was accuracy: this is the ROOT layout, so a single Nangal
+  // Raya coordinate was asserted on every page of the site -- including
+  // /privacy, /terms and /refund -- for a business with two branches three
+  // kilometres apart, and it contradicted the `geo` in the homepage's own
+  // structured data. Coordinates now live with their branch in the JSON-LD on
+  // page.tsx, where each one is attached to the address it belongs to.
 };
 
 export const viewport = {
@@ -156,7 +164,6 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       <body className="bg-zinc-950 text-zinc-100 antialiased">
         {children}
         <Toaster position="bottom-right" />
-        <CookieConsent />
       </body>
     </html>
   );

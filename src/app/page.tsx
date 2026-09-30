@@ -1,8 +1,8 @@
 import type { Metadata } from "next";
-import { cache } from "react";
 import { db } from "@/db";
-import { trainers, branches, membershipPlans } from "@/db/schema";
+import { trainers, branches } from "@/db/schema";
 import { eq } from "drizzle-orm";
+import { getPlanPricing } from "@/lib/plan-pricing";
 import { getVisibleReviews } from "@/app/actions/reviews";
 import Link from "next/link";
 import BMICalculator from "./components/bmi-calculator";
@@ -35,6 +35,83 @@ const bebas = Bebas_Neue({
 // backstop. (Under the old force-dynamic every visit hit the database and those
 // revalidatePath calls did nothing.)
 export const revalidate = 3600;
+
+const SITE_URL = "https://brothersgym.in";
+
+/**
+ * The branch facts the `branches` table has nowhere to put.
+ *
+ * A gym branch has a location, opening hours and a set of neighbourhoods it
+ * serves. The table has columns for none of the three — it holds an address
+ * string, a phone and a map URL — so every coordinate and every opening time in
+ * this file used to be a bare literal sitting inline in the JSON-LD. Worse, the
+ * two addresses and the two coordinates lived in two *parallel arrays*, which
+ * meant nothing in the markup actually said which coordinate belonged to which
+ * door. A consumer reading `geo[1]` had only the order of a list to go on.
+ *
+ * Keyed by branch code so each value is attached to the branch it describes,
+ * and so a branch missing from this map degrades to "we don't know this
+ * branch's hours" rather than silently inheriting the other gym's.
+ *
+ * The real fix is columns on `branches` (latitude, longitude, postal code, an
+ * hours shape) so an owner can correct his own address without a deploy. That
+ * is a migration, and it is deliberately NOT part of this change: it would make
+ * the code depend on columns production does not have until someone runs the
+ * migration by hand, and a deploy landing before that migration is how the
+ * whole site 500s on every page that reads a branch.
+ */
+type BranchDetail = {
+  /** Matches the planned /gym-in-<slug> page, and the JSON-LD `@id` fragment. */
+  slug: string;
+  latitude: number;
+  longitude: number;
+  postalCode: string;
+  /** Local 24h ranges. A split shift is two entries, which is correct schema. */
+  hours: { opens: string; closes: string }[];
+  /** Neighbourhoods this door actually serves. Feeds `areaServed`. */
+  areaServed: string[];
+};
+
+// `| undefined` is not decoration. A branch row can carry any code at all, and
+// one that is not in this map must produce "unknown" in the markup rather than
+// the other gym's address.
+const BRANCH_DETAILS: Record<string, BranchDetail | undefined> = {
+  NR: {
+    slug: "nangal-raya",
+    latitude: 28.6104029,
+    longitude: 77.1077599,
+    postalCode: "110046",
+    hours: [{ opens: "05:30", closes: "22:00" }],
+    areaServed: ["Nangal Raya", "Janakpuri", "Vashisht Park", "Sitapuri", "Mohan Nagar"],
+  },
+  SP: {
+    slug: "sagar-pur",
+    latitude: 28.6071105,
+    longitude: 77.1037377,
+    postalCode: "110046",
+    hours: [
+      { opens: "05:30", closes: "12:00" },
+      { opens: "16:00", closes: "22:00" },
+    ],
+    areaServed: ["Sagar Pur", "Dabri", "Nasirpur", "Mahavir Enclave", "Manglapuri"],
+  },
+};
+
+/**
+ * Both branches are shut on Sunday and the page has always said so — the FAQ
+ * answers it directly. The markup did not: it listed Monday to Saturday and
+ * omitted Sunday entirely, and an omitted day in `openingHoursSpecification`
+ * reads as *unknown*, not *closed*. Google's guidance is that a closed day is
+ * declared explicitly as 00:00–00:00, which is what this does.
+ */
+const CLOSED_SUNDAY = {
+  "@type": "OpeningHoursSpecification",
+  dayOfWeek: ["Sunday"],
+  opens: "00:00",
+  closes: "00:00",
+};
+
+const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
 // One parallel round-trip instead of three sequential awaits.
 //
@@ -69,6 +146,13 @@ async function getHomeData() {
           address: branches.address,
           phone: branches.phone,
           ownerName: branches.ownerName,
+          // Safe to expose, and already is: /contact renders this as the "Get
+          // Directions" href. The homepage needs it for the same job -- the
+          // structured data's `hasMap` and `sameAs`, which are how the site
+          // entity gets bound to the Google Maps listing for each branch. That
+          // binding is what lets an assistant resolve "Brothers Gym, Sagar Pur"
+          // to the listing the owner actually controls.
+          mapUrl: branches.mapUrl,
         })
         .from(branches)
         .where(eq(branches.isActive, true))
@@ -114,65 +198,6 @@ async function getHomeData() {
  */
 const inr = (n: number) => new Intl.NumberFormat("en-IN").format(n);
 
-/**
- * Live prices, read from the same membership_plans rows the join page sells
- * from and the owner edits in the admin panel.
- *
- * Five places on this site used to quote a price from memory, and no two of them
- * agreed: priceRange said "₹900 - ₹14000", the offer catalog said 1500 and 1200,
- * the FAQ markup said "₹900 to ₹1500", and layout.tsx said "from ₹900" three
- * times. None of them was still true — the cheapest plan is now ₹1000 — because
- * nobody edits a meta tag when they change a price in the admin panel. Deriving
- * them removes that whole class of staleness.
- *
- * cache() so the page body and generateMetadata share one query per render, and
- * the route is ISR-cached for an hour on top of that.
- *
- * The retry-then-throw matches getHomeData above, and for the same reason: a
- * Neon cold start should not fail the build, but a genuine outage must throw so
- * ISR keeps serving the last good snapshot instead of baking a priceless page
- * into the cache for an hour.
- */
-const getPlanPricing = cache(async () => {
-  const fetchPlans = () =>
-    db
-      .select({
-        branchId: membershipPlans.branchId,
-        name: membershipPlans.name,
-        price: membershipPlans.price,
-        durationDays: membershipPlans.durationDays,
-      })
-      .from(membershipPlans)
-      .where(eq(membershipPlans.isActive, true))
-      .orderBy(membershipPlans.branchId, membershipPlans.displayOrder);
-
-  let plans;
-  try {
-    plans = await fetchPlans();
-  } catch (e) {
-    console.error("[Home] plan pricing failed, retrying once:", e);
-    plans = await fetchPlans();
-  }
-
-  // A gym with no active plans is a real state — a new branch mid-setup — and
-  // every caller below falls back to copy that names no figure at all. Quoting
-  // "from ₹0" would be worse than quoting nothing.
-  const priced = plans.filter((p) => p.price > 0);
-  if (priced.length === 0) return null;
-
-  const prices = priced.map((p) => p.price);
-  // "From ₹X/month" has to mean a monthly plan. Without this filter the minimum
-  // would happily be a 12-month plan's total, which is a much bigger number and
-  // not a monthly fee.
-  const monthly = priced.filter((p) => p.durationDays <= 31).map((p) => p.price);
-
-  return {
-    plans: priced,
-    min: Math.min(...prices),
-    max: Math.max(...prices),
-    monthlyMin: monthly.length > 0 ? Math.min(...monthly) : Math.min(...prices),
-  };
-});
 
 /**
  * Homepage metadata. The one price claim it makes comes from the database.
@@ -194,10 +219,19 @@ export async function generateMetadata(): Promise<Metadata> {
     : "on flexible monthly plans";
 
   return {
-    description: `Brothers Gym offers premium fitness training, expert personal coaching, and modern equipment at 2 locations in Delhi — Nangal Raya (Janakpuri) & Sagar Pur. Join ${from} with cardio & strength training options.`,
+    // Explicit rather than inherited. The root layout no longer declares a
+    // canonical -- it used to declare the homepage's, which every other page
+    // inherited and de-indexed itself with. With that gone, each page names
+    // itself and this is the homepage's turn.
+    alternates: { canonical: "/" },
+    // 145 characters plus the price clause. It used to run past 215, and the
+    // price -- the part that makes this snippet different from every other gym
+    // in the area -- sat at the very end, where a truncating engine would drop
+    // it. The brand leads so that a search for "brothers gym" gets it bolded.
+    description: `Brothers Gym: two gyms in West Delhi — Nangal Raya (Janakpuri) and Sagar Pur. Strength training, cardio and personal coaching. Join ${from}.`,
     openGraph: {
-      title: "Brothers Gym - Premier Fitness Center in Delhi (2 Locations)",
-      description: `Transform your body at Brothers Gym. Expert trainers, modern equipment, affordable memberships ${from}. Two convenient locations in Delhi.`,
+      title: "Brothers Gym | Best Gym in Nangal Raya & Sagar Pur, Delhi",
+      description: `Transform your body at Brothers Gym. Expert trainers, modern equipment, affordable memberships ${from}. Two locations in West Delhi.`,
       url: "https://brothersgym.in",
       siteName: "Brothers Gym",
       locale: "en_IN",
@@ -221,19 +255,23 @@ export default async function Home() {
 
   const owners = allTrainers.filter((s) => s.isOwner);
   const gymTrainers = allTrainers.filter((s) => !s.isOwner);
-  const ratingSummary =
-    publicReviews.length > 0
-      ? {
-          "@type": "AggregateRating",
-          ratingValue: (
-            publicReviews.reduce((sum, r) => sum + r.rating, 0) /
-            publicReviews.length
-          ).toFixed(1),
-          reviewCount: String(publicReviews.length),
-          bestRating: "5",
-          worstRating: "1",
-        }
-      : undefined;
+  // NO `aggregateRating` IN THE MARKUP. Deliberate, and it can come back the
+  // day there is a real rating to publish.
+  //
+  // What used to be here averaged the `reviews` table and emitted it as an
+  // AggregateRating: 5.0 from 3 reviews. Those three are testimonials the gym
+  // collected about itself and typed into the admin panel by hand (see
+  // addReviewAction in actions/reviews.ts) -- which makes them "self-serving"
+  // under Google's review-snippet policy, and self-serving reviews are
+  // ineligible to produce stars for a LocalBusiness. So it was buying nothing,
+  // and it was the one piece of markup on the page that asked for something the
+  // guidelines say not to ask for.
+  //
+  // The testimonials stay: they are real members, they are shown further down
+  // this page, and they are worth reading. What is gone is the claim to Google
+  // that they are a rating. If the gym later embeds its Google reviews from a
+  // third party, mark THAT up -- a rating sourced from Google is not
+  // self-serving and will show.
 
   // Cheapest advertised PT rate, from the trainer rows the Trainers section
   // already renders. The FAQ markup used to assert "PT fees start from
@@ -250,14 +288,20 @@ export default async function Home() {
   // answers named no figures at all, and the markup was missing a question the
   // page actually shows.
   //
-  // That is not a cosmetic mismatch. Google's FAQPage policy requires the
-  // marked-up answer to be the answer a visitor can read on the page, so the
-  // drift risked the rich result being dropped for the whole page — and the
-  // numbers it dropped it over were stale anyway.
+  // That is still worth avoiding, but the reason has changed and it is worth
+  // being accurate about what this markup now buys.
+  //
+  // Google retired FAQ rich results on 8 August 2023; they are restricted to
+  // authoritative government and health sites, and this is a gym. So the
+  // mismatch would no longer cost a rich result, because there is none to lose.
+  // What FAQPage is actually for now is machine reading: it is how an assistant
+  // answering "which gyms are near Janakpuri and what do they charge" gets a
+  // clean, attributable answer instead of guessing from prose. That is AEO, not
+  // SEO, and it is the channel the FAQ markup is kept for.
   //
   // Rendering both from this one array makes a future mismatch impossible, and
   // every figure in it comes from the rows the site already sells and staffs
-  // from, so a price change in the admin panel reaches the search result too.
+  // from, so a price change in the admin panel reaches that answer too.
   const faqs = [
     {
       q: "Where are Brothers Gym located?",
@@ -267,10 +311,18 @@ export default async function Home() {
     },
     {
       q: "What are the membership fees?",
+      // Names the actual range rather than sending the reader off to another
+      // page for it. The previous answer deferred to /join, which was the only
+      // place the numbers existed -- and /join only produces them in the browser
+      // after a branch is picked, so this answer described a page that a crawler
+      // sees as priceless. Every figure here comes from the same rows the table
+      // above renders.
       a: pricing
-        ? `Membership fees vary by branch. Monthly plans start from ₹${inr(
-            pricing.monthlyMin
-          )}, and the 3, 6 and 12-month plans work out cheaper per month. Visit our Join Online page and select your preferred branch to see the exact pricing with or without cardio access.`
+        ? `Across both branches, plans run from ₹${inr(
+            pricing.min
+          )} for a single month to ₹${inr(
+            pricing.max
+          )} for a full year, with a cheaper weights-only tier and a cardio tier at every duration. The 3, 6 and 12-month plans work out cheaper per month. Both branches' complete price lists are in the Plans & Pricing section above.`
         : "Membership fees vary by branch. Visit our Join Online page and select your preferred branch to see the exact pricing for 1, 3, 6, or 12-month plans with or without cardio access.",
     },
     {
@@ -294,11 +346,6 @@ export default async function Home() {
       a: "Currently, memberships are branch-specific. If you want to switch or use both, please talk to the owner directly.",
     },
   ];
-
-  // Offers are named per branch below. The same plan costs different money at
-  // the two doors, so one unqualified "1 Month Full Access" offer could only
-  // ever be right about one of them.
-  const branchNameById = new Map(allBranches.map((b) => [b.id, b.name]));
 
   return (
     <div className="min-h-screen bg-zinc-950 font-sans selection:bg-yellow-500 selection:text-black">
@@ -330,14 +377,31 @@ export default async function Home() {
               </div>
 
               {/* Giant stacked headline — flush left, poster weight */}
+              {/* The H1 is the one heading a crawler weights as the page's
+                  subject, and it used to read "Two Brothers One Standard" and
+                  nothing else -- a slogan carrying a brand fragment and not one
+                  word about what the page is, where it is, or what it sells.
+
+                  Both strings are in the DOM; only one is drawn. The slogan
+                  keeps the poster composition and is `aria-hidden` because a
+                  screen reader announcing "Two Brothers One Standard, Brothers
+                  Gym, gym in Nangal Raya..." is reading the same thing twice.
+                  The sr-only line is not hidden from crawlers -- it is the
+                  accessible-name technique, and the phrase in it is the one the
+                  visible page states anyway: "Now at 2 locations" sits directly
+                  above, and both addresses are printed in full under
+                  #locations. */}
               <h1
                 className={`${bebas.className} w-full text-[clamp(3.25rem,9vw,7.75rem)] leading-[0.86] tracking-[0.02em] uppercase`}
               >
-                <span className="block">
+                <span className="sr-only">
+                  Brothers Gym — gym in Nangal Raya (Janakpuri) and Sagar Pur, West Delhi
+                </span>
+                <span aria-hidden="true" className="block">
                   <span className="text-white">Two</span>{" "}
                   <span className="text-yellow-500">Brothers</span>
                 </span>
-                <span className="block">
+                <span aria-hidden="true" className="block">
                   <span className="text-white">One</span>{" "}
                   <span className="text-yellow-500">Standard</span>
                 </span>
@@ -478,6 +542,105 @@ export default async function Home() {
           )}
         </div>
       </section>
+
+      {/* ============ PRICING ============ */}
+      {/* Server-rendered, and that is the whole point of it.
+          Every price on this site was until now reachable only by running
+          JavaScript: /join fetches its plans in a useEffect after you pick a
+          branch, so its HTML has always shipped zero prices, and the homepage
+          quoted a single "from ₹X" figure inside prose. Neither is something a
+          search engine or an assistant can lift an answer out of, and "how much
+          is a membership" is the question that decides whether someone walks in.
+          This table is drawn on the server from the same membership_plans rows
+          the join page sells from, so it is in the HTML on the first byte, and
+          it cannot drift from what the counter charges: an owner editing a price
+          in the admin panel calls revalidatePath("/") and this redraws. */}
+      {pricing && (
+        <section id="pricing" className="py-10 md:py-20 px-4 md:px-6 border-b border-zinc-800">
+          <div className="max-w-5xl mx-auto">
+            <div className="text-center mb-6 md:mb-12">
+              <p className="text-yellow-500 text-xs md:text-sm font-bold tracking-[0.4em] uppercase mb-3">
+                — Membership —
+              </p>
+              <h2 className="text-4xl md:text-6xl font-black uppercase tracking-tight text-white mb-4">
+                Plans &amp; <span className="text-yellow-500">Pricing</span>
+              </h2>
+              <p className="text-base md:text-lg text-zinc-400 max-w-2xl mx-auto">
+                Every duration comes in two tiers — with or without cardio access.
+                The two branches price them separately, so both are listed in full.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6">
+              {allBranches.map((branch) => {
+                const plans = pricing.plans.filter((p) => p.branchId === branch.id);
+                if (plans.length === 0) return null;
+                return (
+                  <div
+                    key={branch.id}
+                    className="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden"
+                  >
+                    <div className="px-5 py-4 border-b border-zinc-800">
+                      <h3 className="text-xl md:text-2xl font-black uppercase tracking-widest text-white">
+                        {branch.name}
+                      </h3>
+                      <p className="text-[11px] text-zinc-500 uppercase tracking-widest mt-1">
+                        {branch.address.split(",").slice(0, 2).join(",")}
+                      </p>
+                    </div>
+
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="text-[10px] uppercase tracking-[0.2em] text-zinc-500">
+                          <th className="text-left font-bold px-5 py-3">Plan</th>
+                          <th className="text-right font-bold px-5 py-3">Price</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {plans.map((p, i) => {
+                          // Shown only for the longer plans, where the yearly
+                          // saving is the actual decision. On a 1-month plan the
+                          // per-month figure is the price again.
+                          const perMonth =
+                            p.durationDays > 31
+                              ? Math.round(p.price / (p.durationDays / 30))
+                              : 0;
+                          return (
+                            <tr key={i} className="border-t border-zinc-800/70">
+                              <td className="px-5 py-3 text-zinc-200 font-semibold">
+                                {p.name}
+                              </td>
+                              <td className="px-5 py-3 text-right whitespace-nowrap">
+                                <span className="text-yellow-500 font-black">
+                                  ₹{inr(p.price)}
+                                </span>
+                                {perMonth > 0 && (
+                                  <span className="block text-[10px] text-zinc-500">
+                                    ₹{inr(perMonth)}/month
+                                  </span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+
+                    <div className="px-5 py-4 border-t border-zinc-800">
+                      <Link
+                        href="/join"
+                        className="text-yellow-500 hover:text-yellow-400 font-bold uppercase tracking-wider text-xs inline-flex items-center gap-2"
+                      >
+                        Join {branch.name} <ArrowRight size={14} />
+                      </Link>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </section>
+      )}
 
       {/* ============ FAQ ============ */}
       <section id="faq" className="py-10 md:py-20 px-4 md:px-6 border-b border-zinc-800">
@@ -708,79 +871,141 @@ export default async function Home() {
         dangerouslySetInnerHTML={{
           __html: JSON.stringify({
             "@context": "https://schema.org",
-            "@type": "HealthClub",
-            name: "Brothers Gym",
-            description:
-              "Premium fitness gym with two locations in Delhi offering strength training, cardio, personal training, and expert coaching.",
-            url: "https://brothersgym.in",
-            logo: "https://brothersgym.in/images/brothers-gym-logo.svg",
-            image: "https://brothersgym.in/images/brothers-gym-logo.svg",
-            telephone: ["+917042061402", "+919818921234"],
-            // Omitted entirely when no plan is priced — see getPlanPricing. A
-            // missing priceRange costs a minor local-business signal; an invented
-            // one misprices the gym in Google's eyes.
-            priceRange: pricing
-              ? `₹${inr(pricing.min)} - ₹${inr(pricing.max)}`
-              : undefined,
-            address: allBranches.map((b) => ({
-              "@type": "PostalAddress",
-              streetAddress: b.address,
-              addressLocality: "New Delhi",
-              addressRegion: "Delhi",
-              postalCode: "110046",
-              addressCountry: "IN",
-            })),
-            geo: [
-              { "@type": "GeoCoordinates", latitude: 28.6104029, longitude: 77.1077599 },
-              { "@type": "GeoCoordinates", latitude: 28.6071105, longitude: 77.1037377 },
-            ],
-            openingHoursSpecification: allBranches
-              .map((b) => {
-                if (b.code === "SP") {
-                  return [
-                    {
-                      "@type": "OpeningHoursSpecification",
-                      dayOfWeek: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"],
-                      opens: "05:30",
-                      closes: "12:00",
-                    },
-                    {
-                      "@type": "OpeningHoursSpecification",
-                      dayOfWeek: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"],
-                      opens: "16:00",
-                      closes: "22:00",
-                    },
-                  ];
-                }
+            // A GRAPH, NOT ONE BUSINESS WITH ARRAYS.
+            //
+            // This was a single HealthClub carrying two addresses, two
+            // coordinates and two phone numbers as three *unpaired* arrays, with
+            // the opening hours flattened into a fourth on top. Nothing in the
+            // markup said which coordinate went with which address, so a
+            // consumer had only the order of a list to go on -- and read
+            // literally it described one gym, at two addresses, with two phone
+            // numbers, open 05:30-22:00 and 05:30-12:00 and 16:00-22:00 at once.
+            //
+            // Two gyms 400 m apart are not one entity with two addresses. They
+            // are two branches of one organisation, which is what
+            // Organization.branch models. Google's local guidance wants one
+            // entity per physical location, each with its own NAP and hours --
+            // which is also exactly what a Google Business Profile is, and
+            // matching those listings is the point of this markup.
+            //
+            // The `@id` fragments let the two nodes state their shared identity
+            // once and reference it, instead of repeating it.
+            //
+            // They are anchors on this page rather than /gym-in-<slug> URLs, and
+            // that is deliberate. Google's guidance is that a location entity's
+            // @id should be the page describing it -- and those pages do not
+            // exist yet. An @id pointing at a URL that 404s is worse than one
+            // pointing at an anchor that resolves. When the two branch pages
+            // ship, these become `${SITE_URL}/gym-in-<slug>` and the `branch`
+            // list above follows them.
+            "@graph": [
+              {
+                "@type": "Organization",
+                "@id": `${SITE_URL}/#organization`,
+                name: "Brothers Gym",
+                url: SITE_URL,
+                description:
+                  "Premium fitness gym with two locations in Delhi offering strength training, cardio, personal training, and expert coaching.",
+                // The PNG, not the SVG that used to be here: `logo` is read by
+                // things that rasterise it (knowledge panels, share cards) and
+                // an SVG is not reliably accepted. The SVG stays the favicon.
+                logo: `${SITE_URL}/images/brothers-gym-logo.png`,
+                // The Maps listings first, one per branch. This is the join
+                // between the website entity and the Google Business Profile --
+                // the thing that actually decides the map pack. The socials are
+                // weaker signals and come after.
+                sameAs: [
+                  ...allBranches
+                    .map((b) => b.mapUrl)
+                    .filter((u): u is string => Boolean(u)),
+                  "https://www.instagram.com/brothersgym12",
+                  "https://www.facebook.com/profile.php?id=100063764862295",
+                ],
+                branch: allBranches.map((b) => ({
+                  "@id": `${SITE_URL}/#${BRANCH_DETAILS[b.code]?.slug ?? b.code}`,
+                })),
+              },
+              ...allBranches.map((b) => {
+                const detail = BRANCH_DETAILS[b.code];
+                const plans = pricing?.plans.filter((p) => p.branchId === b.id) ?? [];
+                const prices = plans.map((p) => p.price);
                 return {
-                  "@type": "OpeningHoursSpecification",
-                  dayOfWeek: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"],
-                  opens: "05:30",
-                  closes: "22:00",
-                };
-              })
-              .flat(),
-            aggregateRating: ratingSummary,
-            sameAs: [
-              "https://www.instagram.com/brothersgym12",
-              "https://www.facebook.com/profile.php?id=100063764862295",
-            ],
-            hasOfferCatalog: pricing
-              ? {
-                  "@type": "OfferCatalog",
-                  name: "Membership Plans",
-                  itemListElement: pricing.plans.map((p) => ({
-                    "@type": "Offer",
-                    name: `${branchNameById.get(p.branchId) ?? "Brothers Gym"} — ${p.name}`,
-                    price: String(p.price),
-                    priceCurrency: "INR",
-                    category:
-                      p.durationDays <= 31
-                        ? "Monthly membership"
-                        : `${Math.round(p.durationDays / 30)}-month membership`,
+                  "@type": "HealthClub",
+                  "@id": `${SITE_URL}/#${detail?.slug ?? b.code}`,
+                  name: `Brothers Gym — ${b.name}`,
+                  parentOrganization: { "@id": `${SITE_URL}/#organization` },
+                  // No `url` here, and its absence is the honest answer: both
+                  // branches used to carry url: SITE_URL, which told a consumer
+                  // that two distinct gyms are the same page. Each gets its own
+                  // url when its own page exists. The Organization above still
+                  // carries the site's.
+                  description: `Brothers Gym ${b.name}: strength training, cardio and personal training in West Delhi.`,
+                  // One number, this branch's. The deployed markup carried an
+                  // SP number that the database and /contact had both since
+                  // changed, because it was typed here as a literal. Reading the
+                  // row is the fix.
+                  telephone: b.phone ?? undefined,
+                  address: {
+                    "@type": "PostalAddress",
+                    streetAddress: b.address,
+                    addressLocality: "New Delhi",
+                    addressRegion: "Delhi",
+                    postalCode: detail?.postalCode,
+                    addressCountry: "IN",
+                  },
+                  geo: detail
+                    ? {
+                        "@type": "GeoCoordinates",
+                        latitude: detail.latitude,
+                        longitude: detail.longitude,
+                      }
+                    : undefined,
+                  hasMap: b.mapUrl ?? undefined,
+                  // No detail means no hours at all, rather than the other
+                  // branch's. An absent openingHoursSpecification is honest; the
+                  // wrong one is a lie a searcher acts on by turning up.
+                  openingHoursSpecification: detail
+                    ? [
+                        ...detail.hours.map((h) => ({
+                          "@type": "OpeningHoursSpecification",
+                          dayOfWeek: WEEKDAYS,
+                          opens: h.opens,
+                          closes: h.closes,
+                        })),
+                        CLOSED_SUNDAY,
+                      ]
+                    : undefined,
+                  areaServed: detail?.areaServed.map((name) => ({
+                    "@type": "Place",
+                    name,
                   })),
-                }
-              : undefined,
+                  // Per branch, from that branch's own plans. The old block
+                  // quoted one range for the whole site built from every plan,
+                  // which priced each gym with the other's cheapest package.
+                  priceRange:
+                    prices.length > 0
+                      ? `₹${inr(Math.min(...prices))} - ₹${inr(Math.max(...prices))}`
+                      : undefined,
+                  hasOfferCatalog:
+                    plans.length > 0
+                      ? {
+                          "@type": "OfferCatalog",
+                          name: `${b.name} Membership Plans`,
+                          itemListElement: plans.map((p) => ({
+                            "@type": "Offer",
+                            name: p.name,
+                            price: String(p.price),
+                            priceCurrency: "INR",
+                            category:
+                              p.durationDays <= 31
+                                ? "Monthly membership"
+                                : `${Math.round(p.durationDays / 30)}-month membership`,
+                          })),
+                        }
+                      : undefined,
+                };
+              }),
+            ],
           }),
         }}
       />
@@ -805,7 +1030,14 @@ export default async function Home() {
         }}
       />
 
-      <FloatingWhatsApp />
+      <FloatingWhatsApp
+        branches={allBranches.map((b) => ({
+          code: b.code,
+          name: b.name,
+          ownerName: b.ownerName,
+          phone: b.phone,
+        }))}
+      />
     </div>
   );
 }

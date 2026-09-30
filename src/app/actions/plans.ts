@@ -66,6 +66,29 @@ export async function listPlansAction() {
   }
 }
 
+/**
+ * Every cached surface that quotes a plan price.
+ *
+ * "/" is the one that used to be missing, and its absence is the whole reason a
+ * price change could look like it never reached the website. The homepage
+ * derives its price range, its FAQ fee answer, the offer catalog and its own
+ * meta description from these same membership_plans rows, and it is ISR-cached
+ * for an hour -- so editing a price here refreshed the join page instantly while
+ * the homepage went on quoting the old figure until the hourly backstop caught
+ * up. The comment at the top of page.tsx already claimed trainers, reviews and
+ * branches revalidate "/" on edit; plans was the fourth such action and the only
+ * one that had been left out of its own rule.
+ */
+function revalidatePlanSurfaces() {
+  revalidatePath("/admin/plans");
+  revalidatePath("/join");
+  revalidatePath("/");
+  // The social share card quotes the same figure, and is ISR-cached in its own
+  // right -- revalidating "/" does not reach a file-based metadata route. Its
+  // hourly revalidate is the backstop if this call is a no-op.
+  revalidatePath("/opengraph-image");
+}
+
 // ===== UPDATE PLAN =====
 export async function updatePlanAction(
   id: number,
@@ -106,8 +129,7 @@ export async function updatePlanAction(
       })
       .where(eq(membershipPlans.id, id));
 
-    revalidatePath("/admin/plans");
-    revalidatePath("/join");
+    revalidatePlanSurfaces();
     return { success: true };
   } catch (e) {
     return { error: sanitizeError(e, "Failed to update plan") };
@@ -134,8 +156,7 @@ export async function togglePlanActiveAction(
       .set({ isActive })
       .where(eq(membershipPlans.id, id));
 
-    revalidatePath("/admin/plans");
-    revalidatePath("/join");
+    revalidatePlanSurfaces();
     return { success: true };
   } catch (e) {
     return { error: sanitizeError(e, "Failed to toggle plan") };

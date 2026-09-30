@@ -7,6 +7,7 @@ export const metadata = {
   title: "Refund & Cancellation Policy",
   description:
     "Brothers Gym refund and cancellation policy — all payments are non-refundable.",
+  alternates: { canonical: "/refund" },
 };
 
 // Drives the "On this page" rail. Order and ids must match the LegalSection

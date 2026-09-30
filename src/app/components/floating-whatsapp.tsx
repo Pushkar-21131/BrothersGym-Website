@@ -3,30 +3,22 @@
 import { useState, useRef, useEffect } from "react";
 import { Building2, MessageCircle, X } from "lucide-react";
 
-type Branch = {
+// Branch details are passed in by the server component, which reads them from
+// the `branches` table. They used to be a hardcoded array here, and it drifted:
+// Sagar Pur kept advertising a previous owner and a phone number that had
+// already been changed in the admin panel, because nothing connected the two
+// copies. This popup is the first thing a prospective member taps, so it is the
+// last place on the site that should disagree with the branch cards above it.
+export type WhatsAppBranch = {
   code: string;
   name: string;
-  ownerName: string;
-  phone: string;
+  // Nullable in the database for a branch nobody has filled in yet, so the
+  // greeting and the link both have to cope with a missing value.
+  ownerName: string | null;
+  phone: string | null;
 };
 
-// These are hardcoded because they rarely change and this is a client component
-const BRANCHES: Branch[] = [
-  {
-    code: "NR",
-    name: "Nangal Raya",
-    ownerName: "Shubhrant Thakur",
-    phone: "917042061402",
-  },
-  {
-    code: "SP",
-    name: "Sagar Pur",
-    ownerName: "Tushar Thakur",
-    phone: "918076540872",
-  },
-];
-
-export default function FloatingWhatsApp() {
+export default function FloatingWhatsApp({ branches }: { branches: WhatsAppBranch[] }) {
   const [open, setOpen] = useState(false);
   const popupRef = useRef<HTMLDivElement>(null);
 
@@ -55,26 +47,34 @@ export default function FloatingWhatsApp() {
     };
   }, [open]);
 
-  function buildWhatsAppLink(branch: Branch) {
+  // A branch with no number stored cannot be chatted with, so it is left out
+  // rather than rendered as a link to nowhere. Both branches have one today;
+  // this exists so clearing the field in the admin panel degrades quietly.
+  const chatBranches = branches.filter(
+    (b) => (b.phone ?? "").replace(/\D/g, "").length >= 10
+  );
+
+  function buildWhatsAppLink(branch: WhatsAppBranch) {
+    // wa.me takes bare digits. The stored number is E.164 ("+919818564742"),
+    // and a leading "+" makes the link fail instead of opening the chat.
+    const number = (branch.phone ?? "").replace(/\D/g, "");
     const msg = encodeURIComponent(
-      `Hi ${branch.ownerName}! I want to know more about Brothers Gym ${branch.name} membership.`
+      `Hi ${branch.ownerName || "Brothers Gym"}! I want to know more about Brothers Gym ${branch.name} membership.`
     );
-    return `https://wa.me/${branch.phone}?text=${msg}`;
+    return `https://wa.me/${number}?text=${msg}`;
   }
 
   return (
     <div
       ref={popupRef}
-      // 1.25rem is the old `bottom-5`. The added variable is the cookie banner's
-      // measured height (set in cookie-consent.tsx), so this button rides above
-      // that banner rather than being buried under it — the banner is z-50 and
-      // full width, this is z-40, so the z-index alone cannot win.
-      //
-      // Unset it falls back to 0px, giving exactly `bottom-5` again: that is the
-      // server render and the returning-visitor case, so nothing moves for
-      // anyone who has already dismissed the banner.
-      style={{ bottom: "calc(1.25rem + var(--cookie-banner-h, 0px))" }}
-      className="fixed right-5 z-40 flex flex-col items-end gap-3 transition-[bottom] duration-300 ease-out"
+      // This used to carry an inline
+      // `bottom: calc(1.25rem + var(--cookie-banner-h, 0px))`, so the button rode
+      // above the cookie-consent banner instead of being buried under it — that
+      // banner was z-50 and full width and this is z-40, so z-index alone could
+      // not win. The banner has since been removed (the site sets only
+      // strictly-necessary cookies, so it was never required) and the custom
+      // property went with it. `bottom-5` is the 1.25rem it always resolved to.
+      className="fixed right-5 bottom-5 z-40 flex flex-col items-end gap-3 transition-[bottom] duration-300 ease-out"
     >
       {/* Popup with branch options */}
       {open && (
@@ -99,7 +99,7 @@ export default function FloatingWhatsApp() {
 
           {/* Branch buttons */}
           <div className="p-3 space-y-2">
-            {BRANCHES.map((branch) => (
+            {chatBranches.map((branch) => (
               <a
                 key={branch.code}
                 href={buildWhatsAppLink(branch)}
@@ -113,7 +113,9 @@ export default function FloatingWhatsApp() {
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className="text-white font-bold text-sm truncate">{branch.name}</p>
-                  <p className="text-zinc-400 text-xs truncate">{branch.ownerName}</p>
+                  <p className="text-zinc-400 text-xs truncate">
+                    {branch.ownerName || "Brothers Gym"}
+                  </p>
                 </div>
                 <div className="w-8 h-8 bg-green-500 rounded-full flex items-center justify-center shrink-0">
                   <MessageCircle size={14} className="text-white" />

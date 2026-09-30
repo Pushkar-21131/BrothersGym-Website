@@ -6,6 +6,7 @@ import { FileText, IndianRupee, Users, Shield, XCircle } from "lucide-react";
 export const metadata = {
   title: "Terms & Conditions",
   description: "Brothers Gym terms and conditions for membership and website usage.",
+  alternates: { canonical: "/terms" },
 };
 
 // Drives the "On this page" rail. Order and ids must match the LegalSection

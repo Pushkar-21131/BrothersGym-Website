@@ -8,6 +8,10 @@ export const metadata = {
   title: "Contact Us",
   description:
     "Get in touch with Brothers Gym owners at Nangal Raya or Sagar Pur branches.",
+  // This page carries both branches' full NAP, hours and Google Maps links, so
+  // it is the page the Google Business Profiles have to agree with. It used to
+  // inherit the homepage's canonical and de-index itself.
+  alternates: { canonical: "/contact" },
 };
 
 const SECTIONS = [

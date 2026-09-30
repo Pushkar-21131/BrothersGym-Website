@@ -6,6 +6,7 @@ export const metadata = {
   title: "Privacy Policy",
   description:
     "Brothers Gym privacy policy — how we collect, use, and protect your personal and health information.",
+  alternates: { canonical: "/privacy" },
 };
 
 // Drives the "On this page" rail. Order and ids must match the LegalSection

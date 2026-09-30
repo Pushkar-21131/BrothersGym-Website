@@ -7,6 +7,11 @@ export const metadata = {
   title: "Join Brothers Gym Online",
   description:
     "Join Brothers Gym online — pick your branch, choose a plan, and pay securely by UPI, card or netbanking.",
+  // Relative: metadataBase in layout.tsx resolves it to the absolute URL. This
+  // page used to inherit the homepage's canonical from the root layout, which
+  // told Google the join funnel was a duplicate of "/" and dropped it from the
+  // index -- on the one page that takes money.
+  alternates: { canonical: "/join" },
 };
 
 export default async function JoinPage() {

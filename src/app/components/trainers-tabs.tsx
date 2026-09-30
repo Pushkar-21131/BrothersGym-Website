@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Building2, MapPin, User } from "lucide-react";
 import { formatINR } from "@/lib/utils";
 import { resolveTrainerPhoto } from "@/lib/trainer-photo";
@@ -163,6 +163,32 @@ export default function TrainersTabs({ branches, trainers, owners }: Props) {
 // ===== Trainer Card =====
 function TrainerCard({ trainer, isOwner = false }: { trainer: Trainer; isOwner?: boolean }) {
   const photoSrc = resolveTrainerPhoto(trainer);
+  const [expanded, setExpanded] = useState(false);
+  const [canExpand, setCanExpand] = useState(false);
+  const experienceRef = useRef<HTMLParagraphElement>(null);
+
+  // "More" shows only when the text is genuinely cut off. That is measured here
+  // rather than guessed from a character count, because the same sentence fits
+  // two lines in a desktop cell and overflows in a ~155px phone cell — so any
+  // fixed limit is wrong at one of the two widths, and the owner has no way to
+  // know which. The ResizeObserver re-checks when the cell changes width, which
+  // is what crossing the lg breakpoint does.
+  useEffect(() => {
+    const el = experienceRef.current;
+    if (!el) return;
+    const measure = () => {
+      // Expanded means the clamp is off, so scrollHeight === clientHeight and
+      // the measurement would always report "fits" — which would yank the
+      // "Less" button out from under the tap that opened it. Keep the answer
+      // taken while clamped.
+      if (!expanded) setCanExpand(el.scrollHeight > el.clientHeight + 1);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [expanded, trainer.experience]);
+
   return (
     <div className="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden group hover:border-yellow-500/50 transition-all duration-300 hover:-translate-y-1">
       {/* 7/8 is portrait, which is what a trainer photo is — they are all shot
@@ -243,9 +269,34 @@ function TrainerCard({ trainer, isOwner = false }: { trainer: Trainer; isOwner?:
 
       {/* Card body — compact */}
       <div className="p-3 md:p-4 space-y-2 md:space-y-3">
-        <p className="text-xs text-zinc-400 line-clamp-2 min-h-8 leading-relaxed">
-          {trainer.experience}
-        </p>
+        {/* Two lines by default with the rest a tap away, rather than the whole
+            bio always shown. A phone cell is ~155px wide, so a long sentence
+            runs to five or six lines and every card in the row grows with it —
+            the trainers section becomes a wall of text to scroll past. Kept
+            clamped, the grid stays dense and nothing is lost: the "More" button
+            only appears on the cards that actually overflow, and on desktop,
+            where the cell is wide enough to fit the sentence, it never appears
+            at all. */}
+        <div>
+          <p
+            ref={experienceRef}
+            className={`text-xs text-zinc-400 leading-relaxed min-h-8 ${
+              expanded ? "" : "line-clamp-2"
+            }`}
+          >
+            {trainer.experience}
+          </p>
+          {canExpand && (
+            <button
+              type="button"
+              onClick={() => setExpanded((v) => !v)}
+              aria-expanded={expanded}
+              className="mt-1 text-[10px] font-black uppercase tracking-wider text-yellow-500/80 hover:text-yellow-500 transition-colors"
+            >
+              {expanded ? "Less" : "More"}
+            </button>
+          )}
+        </div>
 
         {/* Label and price both step down on phones so the row still reads at
             ~140px of content width instead of pushing "₹5,000" past the card

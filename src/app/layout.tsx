@@ -152,14 +152,24 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         )}
 
         {/* Favicon variants.
-            The SVG stays first for browsers that take it — it is sharp at any
-            size. The PNG is the fallback, and it is the only one that matters
-            for apple-touch-icon: iOS ignores SVG there entirely, so "Add to
-            Home Screen" used to produce a blank tile with a screenshot in it
-            rather than the logo. */}
-        <link rel="icon" href="/images/brothers-gym-logo.svg" type="image/svg+xml" />
-        <link rel="icon" href="/images/brothers-gym-logo.png" type="image/png" sizes="512x512" />
-        <link rel="apple-touch-icon" href="/images/brothers-gym-logo.png" />
+            All three are the same circular crop of the gold disc from the master
+            logo; scripts/gen-favicon.js measures the disc off the artwork rather
+            than eyeballing it, so re-running it after a logo change re-cuts them.
+
+            There is deliberately no SVG icon any more. The master is a 222 KB
+            traced illustration, and at 16px its ring of "BROTHERSGYM" lettering
+            renders as illegible noise around the mark — the disc is the only part
+            that reads at tab size. Sizes are listed smallest-last because that is
+            the order browsers resolve them in.
+
+            apple-icon.png is opaque and the disc is inset: iOS ignores SVG here
+            entirely, and composites a transparent PNG onto black before applying
+            its own rounded-rect mask, which turned "Add to Home Screen" into a
+            black square with a gold blob on it. */}
+        <link rel="icon" href="/images/favicon-32.png" sizes="32x32" type="image/png" />
+        <link rel="icon" href="/images/favicon-16.png" sizes="16x16" type="image/png" />
+        <link rel="icon" href="/images/favicon-48.png" sizes="48x48" type="image/png" />
+        <link rel="apple-touch-icon" href="/images/apple-icon.png" />
       </head>
       <body className="bg-zinc-950 text-zinc-100 antialiased">
         {children}

@@ -980,7 +980,9 @@ export default async function Home() {
                   "Premium fitness gym with two locations in Delhi offering strength training, cardio, personal training, and expert coaching.",
                 // The PNG, not the SVG that used to be here: `logo` is read by
                 // things that rasterise it (knowledge panels, share cards) and
-                // an SVG is not reliably accepted. The SVG stays the favicon.
+                // an SVG is not reliably accepted. This is the full badge, not
+                // the circular favicon crop — at this size the lettering is
+                // legible and it is the mark people recognise.
                 logo: `${SITE_URL}/images/brothers-gym-logo.png`,
                 // The Maps listings first, one per branch. This is the join
                 // between the website entity and the Google Business Profile --

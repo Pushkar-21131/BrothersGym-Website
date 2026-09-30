@@ -69,13 +69,23 @@ export type JoinRequestRow = {
 
 type Filter = "awaiting" | "paid" | "rejected" | "all";
 
-/** "full_3m" → "Full Access · 3 Months". Falls back to the raw code. */
+/**
+ * "cardio_3m" → "Cardio · 3 Months". Falls back to the raw code.
+ *
+ * The stored codes are cardio_* and hardcore_*, matching the Cardio/Hardcore
+ * tabs the join page offers. This tested for "no_cardio" and "full" instead --
+ * the spellings the schema's $type union declared but the database has never
+ * held -- so it matched nothing and every card in this list showed a raw code
+ * like "cardio_1m" rather than a plan anyone could read. The old spellings are
+ * still accepted so a join row written under them keeps rendering.
+ */
 function planLabel(code: string): string {
-  const tier = code.startsWith("no_cardio")
-    ? "No Cardio"
-    : code.startsWith("full")
-      ? "Full Access"
-      : null;
+  const tier =
+    code.startsWith("hardcore") || code.startsWith("no_cardio")
+      ? "Hardcore"
+      : code.startsWith("cardio") || code.startsWith("full")
+        ? "Cardio"
+        : null;
   if (!tier) return code;
   const m = code.match(/_(\d+)m$/);
   const months = m ? Number(m[1]) : null;

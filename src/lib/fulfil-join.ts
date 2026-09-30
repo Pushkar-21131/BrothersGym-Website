@@ -160,9 +160,13 @@ export async function fulfilPaidJoin(params: {
   const durationDays = plan?.durationDays || 30;
   // The gym's calendar day, not the server's. See istDateString in lib/utils.
   const todayStr = istDateString();
-  const planType = (
-    join.planCode.includes("no_cardio") ? "no_cardio" : "full"
-  ) as any;
+  // The plan row's own flag, rather than a guess read off the code string. This
+  // tested `planCode.includes("no_cardio")` -- a spelling the schema's $type
+  // union declared but the table has never held, where the codes are cardio_*
+  // and hardcore_*. Nothing ever matched, so every Hardcore joiner was recorded
+  // as a full/cardio member. `plan` is already loaded above and carries the real
+  // flag; a missing plan row keeps the old "full" default.
+  const planType = (plan && !plan.includesCardio ? "no_cardio" : "full") as any;
 
   let outcome: { memberId: number; gymId: number; newExpiryStr: string };
 
@@ -385,9 +389,13 @@ export async function fulfilManualJoin(params: {
   const durationDays = plan?.durationDays || 30;
   // The gym's calendar day, not the server's. See istDateString in lib/utils.
   const todayStr = istDateString();
-  const planType = (
-    join.planCode.includes("no_cardio") ? "no_cardio" : "full"
-  ) as any;
+  // The plan row's own flag, rather than a guess read off the code string. This
+  // tested `planCode.includes("no_cardio")` -- a spelling the schema's $type
+  // union declared but the table has never held, where the codes are cardio_*
+  // and hardcore_*. Nothing ever matched, so every Hardcore joiner was recorded
+  // as a full/cardio member. `plan` is already loaded above and carries the real
+  // flag; a missing plan row keeps the old "full" default.
+  const planType = (plan && !plan.includesCardio ? "no_cardio" : "full") as any;
 
   const upiReference = params.upiReference?.trim() || join.upiReference || null;
 

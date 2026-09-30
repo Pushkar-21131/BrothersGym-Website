@@ -238,8 +238,38 @@ export const membershipPlans = pgTable(
       .references(() => branches.id)
       .notNull(),
     name: text("name").notNull(),
+    // The $type is compile-time only -- the column is plain `text` with no CHECK
+    // constraint -- and this union had drifted from what the table actually
+    // holds. Production rows are cardio_* and hardcore_*, matching the
+    // Cardio/Hardcore tabs on the join page, and never the full_*/no_cardio_*
+    // spellings this declared before.
+    //
+    // That was not cosmetic. Two readers keyed off the declared strings -- the
+    // planType mapping in fulfil-join.ts and the card label in the admin
+    // join-requests list -- and both silently matched nothing, so Hardcore
+    // joiners were stored as cardio members and the owner's list showed raw
+    // codes. Naming the codes that exist is what stops that being re-derived
+    // from a wrong source. The legacy spellings stay in the union because a join
+    // row written under them must keep resolving.
     code: text("code")
-      .$type<"full_1m" | "full_3m" | "full_6m" | "full_12m" | "no_cardio_1m" | "no_cardio_3m" | "no_cardio_6m" | "no_cardio_12m">()
+      .$type<
+        | "cardio_1m"
+        | "cardio_3m"
+        | "cardio_6m"
+        | "cardio_12m"
+        | "hardcore_1m"
+        | "hardcore_3m"
+        | "hardcore_6m"
+        | "hardcore_12m"
+        | "full_1m"
+        | "full_3m"
+        | "full_6m"
+        | "full_12m"
+        | "no_cardio_1m"
+        | "no_cardio_3m"
+        | "no_cardio_6m"
+        | "no_cardio_12m"
+      >()
       .notNull(),
     price: integer("price").notNull(),
     durationDays: integer("duration_days").notNull().default(30),

@@ -7,6 +7,7 @@
  * so two users with the same display name can never impersonate each other.
  */
 
+import { cache } from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { db } from "@/db";
@@ -36,38 +37,49 @@ async function getSession(): Promise<SessionPayload | null> {
 
 /**
  * Get the currently authenticated user's role, verified from DB.
+ *
+ * Delegates the DB lookup to getCurrentUser rather than repeating it. The two
+ * used to run the same `select ... from app_users where id = $1` independently,
+ * and a single admin page calls both — so every page began with two identical
+ * round trips to a database that is ~250ms away from the functions.
  */
-export async function getVerifiedRole(): Promise<Role | null> {
+export const getVerifiedRole = cache(async (): Promise<Role | null> => {
   const session = await getSession();
   if (!session) return null;
 
-  // Env-based owner: full access, always valid (subject = "owner")
+  // Env-based owner: full access, always valid (subject = "owner").
+  //
+  // The `session.role` test is deliberate and must stay ahead of the
+  // getCurrentUser call below. getCurrentUser trusts `sub === "owner"` and
+  // reports role "owner" whatever the token's own role field says, so routing
+  // this branch through it would quietly upgrade a token that claims some other
+  // role. This is the stricter of the two checks, so it decides here.
   if (session.sub === "owner") {
     return session.role === "owner" ? "owner" : null;
   }
 
-  // DB user: verify the account still exists and is active (a user who was
-  // deactivated or deleted should lose access immediately).
-  try {
-    const users = await db
-      .select({ id: appUsers.id, role: appUsers.role, isActive: appUsers.isActive })
-      .from(appUsers)
-      .where(eq(appUsers.id, Number(session.sub)))
-      .limit(1);
-
-    if (users.length === 0 || !users[0].isActive) return null;
-    return users[0].role as Role;
-  } catch (e) {
-    console.error("Auth check failed:", e);
-    return null;
-  }
-}
+  // DB user: getCurrentUser re-checks the account still exists and is active,
+  // so a user who was deactivated or deleted loses access immediately.
+  return (await getCurrentUser())?.role ?? null;
+});
 
 /**
  * Get the full current user object (with branchId + permissions).
  * Returns null if not logged in.
+ *
+ * Memoised per request with React's cache(). This is the single hottest query
+ * in the admin: hasPermission, getHiddenFields and getBranchScope each call it,
+ * and the members page calls all three — plus getVerifiedRole, which now
+ * delegates here too. Unmemoised that was six or seven identical `app_users`
+ * lookups per page render, each a separate round trip to a database in a
+ * different region from the functions. The admin's "slow page switching" was
+ * mostly this: the same row read over and over, ~250ms at a time.
+ *
+ * Per-request is the right scope. Nothing here is cached across users or
+ * across requests — a deactivated account still loses access on its very next
+ * request, which is what the checks above and below depend on.
  */
-export async function getCurrentUser(): Promise<CurrentUser | null> {
+export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
   const session = await getSession();
   if (!session) return null;
 
@@ -104,7 +116,7 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
     console.error("getCurrentUser failed:", e);
     return null;
   }
-}
+});
 
 /**
  * Enforce that the user is logged in as OWNER.

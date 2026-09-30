@@ -20,10 +20,11 @@ export default async function InactivePage() {
   }
   
   const scope = await getBranchScope();
-  const allBranches = await getAllBranches();
   const today = istDateString();
 
-  // Fetch expired + left members for the current scope.
+  // Fetch expired + left members for the current scope, alongside the branch
+  // list they do not depend on — see the note in admin/members/page.tsx. Both
+  // wait on `scope`, which cannot resolve before the role check above.
   //
   // `email` and `feeAmount` were selected here and never rendered anywhere in
   // inactive-client.tsx — they went into the RSC payload and no further. Both
@@ -32,7 +33,13 @@ export default async function InactivePage() {
   // staff account with fees hidden had every expired member's fee sitting in the
   // page source. Dropped from the query rather than blanked: the columns aren't
   // used, so there is nothing to configure and nothing to get wrong later.
-  const rows: Member[] = await db
+  //
+  // The `Promise<Member[]>` annotation is kept from the sequential version on
+  // purpose: it is what makes a mismatch between this query and the component
+  // that consumes it a build error rather than a runtime surprise. Promise.all
+  // would infer the row type instead, quietly accepting a column that was
+  // dropped, renamed or never selected.
+  const membersQuery: Promise<Member[]> = db
     .select({
       id: members.id,
       branchId: members.branchId,
@@ -61,6 +68,8 @@ export default async function InactivePage() {
       )
     )
     .orderBy(desc(members.membershipExpiry));
+
+  const [allBranches, rows] = await Promise.all([getAllBranches(), membersQuery]);
 
   const scopeLabel = scope.type === "single" ? scope.branchName : "All Branches";
   const showBranchColumn = scope.type === "all" && allBranches.length > 1;

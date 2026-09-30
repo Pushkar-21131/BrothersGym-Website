@@ -34,6 +34,10 @@ export type PricedPlan = {
   name: string;
   price: number;
   durationDays: number;
+  // Read as a column, never inferred from `name`. The homepage groups its price
+  // table by tier, and the tier is the difference between two plans of the same
+  // duration — the one thing a name-parsing bug would get silently backwards.
+  includesCardio: boolean;
 };
 
 export type PlanPricing = {
@@ -51,6 +55,7 @@ export const getPlanPricing = cache(async (): Promise<PlanPricing | null> => {
         name: membershipPlans.name,
         price: membershipPlans.price,
         durationDays: membershipPlans.durationDays,
+        includesCardio: membershipPlans.includesCardio,
       })
       .from(membershipPlans)
       .where(eq(membershipPlans.isActive, true))

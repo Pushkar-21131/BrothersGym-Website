@@ -1,4 +1,3 @@
-Contact: mailto:security@brothersgym.in
 Contact: https://wa.me/917042061402
 Expires: 2027-12-31T23:59:59.000Z
 Preferred-Languages: en, hi
@@ -8,6 +7,12 @@ Policy: https://brothersgym.in/privacy
 # If you discover a security vulnerability in Brothers Gym website,
 # please report it responsibly to the contacts above.
 # We appreciate coordinated disclosure and will respond within 48 hours.
+#
+# A mailto: contact used to sit above alongside the WhatsApp link. The domain
+# has no mailbox on it, so that line advertised an address that bounced -- and a
+# contact that silently fails is worse than no contact at all. WhatsApp is the
+# one channel that already works. If a real inbox is ever set up on the domain,
+# adding a mailto: line back is the right move.
 #
 # In scope:
 # - Authentication bypass

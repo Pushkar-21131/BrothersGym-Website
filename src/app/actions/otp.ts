@@ -30,7 +30,7 @@ function generateOTP(): string {
 /**
  * Get the recipient email for a login OTP.
  * - If it's the ADMIN_EMAIL (env-based owner) → send to OWNER_EMAIL
- * - If it's a DB-based owner (Shubhrant or Tushar) → send to their own email
+ * - If it's a branch owner stored in app_users → send to their own email
  * - Otherwise → return null (invalid)
  */
 async function getRecipientForLogin(email: string): Promise<string | null> {
@@ -43,7 +43,9 @@ async function getRecipientForLogin(email: string): Promise<string | null> {
     return ownerEmail;
   }
 
-  // DB-based owner (Shubhrant, Tushar, etc.)
+  // Branch owner: a row in app_users, not the env-configured super-admin.
+  // Deliberately not naming anyone -- these comments used to list the owners by
+  // name and went stale the first time a branch changed hands.
   try {
     const users = await db
       .select()

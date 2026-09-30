@@ -40,7 +40,7 @@ ergonomics across the public site.
 
 - **Landing page (`/`)** — full-bleed hero, a BMI calculator, tabbed trainer and
   owner profiles per branch, member reviews with star ratings, a branch picker with
-  Google Maps links, a floating WhatsApp button, and a cookie-consent banner.
+  Google Maps links, and a floating WhatsApp button.
 - **`/join` — online membership** — a guided wizard (branch → plan → details → pay):
   pick a branch, pick a plan, fill in details, then pay through **Razorpay** — the
   branch's own merchant account, so the money reaches that gym's owner. The membership

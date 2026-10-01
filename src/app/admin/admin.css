@@ -777,6 +777,27 @@
 }
 
 /* ===== Search + filter chips ===== */
+/* Search and the plan filter share one line. The plan filter is a select rather
+   than a chip so it narrows the list alongside the status chips instead of
+   replacing them — and it costs no extra row on a phone, where vertical space is
+   the thing that decides whether the owner scrolls. */
+.adm-search-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 11px;
+}
+.adm-search-row .adm-search {
+  flex: 1;
+  min-width: 0;
+  margin-bottom: 0;
+}
+.adm-plan-filter {
+  flex: 0 0 auto;
+  width: auto;
+  max-width: 46%;
+}
+
 .adm-search {
   position: relative;
   margin-bottom: 11px;

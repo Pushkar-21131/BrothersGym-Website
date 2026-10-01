@@ -48,6 +48,12 @@ export type Member = {
   feeAmount: number;
   joiningDate: string;
   membershipExpiry: string;
+  /**
+   * "full" is Cardio, "no_cardio" is Hardcore, "offline" is a member whose tier
+   * was never recorded — which is what every imported row used to be, and what
+   * an online join stores when its plan carries no cardio flag.
+   */
+  planType: "full" | "no_cardio" | "offline" | null;
   leftGym: boolean;
   createdAt: Date | null;
 };
@@ -75,6 +81,19 @@ const FILTERS: { key: FilterKey; label: string }[] = [
   { key: "left", label: "Left" },
 ];
 
+// Deliberately NOT a chip in the row above. Those five are mutually exclusive —
+// picking one replaces the others — so a "Cardio" chip there would make "which
+// cardio members are expiring" unanswerable, which is the question an owner
+// actually has. This is a separate control that composes with them.
+type PlanFilter = "all" | "full" | "no_cardio" | "offline";
+
+const PLAN_FILTERS: { key: PlanFilter; label: string }[] = [
+  { key: "all", label: "All plans" },
+  { key: "full", label: "Cardio" },
+  { key: "no_cardio", label: "Hardcore" },
+  { key: "offline", label: "Not recorded" },
+];
+
 export default function MemberList({
   initialMembers,
   showBranchColumn,
@@ -88,6 +107,7 @@ export default function MemberList({
   const [historyMember, setHistoryMember] = useState<Member | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [filter, setFilter] = useState<FilterKey>("all");
+  const [planFilter, setPlanFilter] = useState<PlanFilter>("all");
   const [showAddModal, setShowAddModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showRenewModal, setShowRenewModal] = useState<Member | null>(null);
@@ -305,6 +325,8 @@ export default function MemberList({
 
     return initialMembers.filter((m) => {
       if (filter !== "all" && statusOf(m) !== filter) return false;
+      if (planFilter !== "all" && (m.planType ?? "offline") !== planFilter)
+        return false;
       if (!q) return true;
 
       return (
@@ -322,7 +344,7 @@ export default function MemberList({
     // `hide` and `statusOf` are fresh closures each render but read nothing
     // except hiddenFields and the two date strings.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialMembers, searchQuery, filter, hiddenFields, today, soon]);
+  }, [initialMembers, searchQuery, filter, planFilter, hiddenFields, today, soon]);
 
   // Column count for the desktop table's empty state
   let visibleColCount = 6; // M.No, Name, Ph.No, Joining, Due Date, Actions
@@ -381,17 +403,35 @@ export default function MemberList({
   return (
     <div className="adm-pagebody">
       {/* Search sits above the chips: on a phone the owner is usually looking
-          for one person by number, not browsing a filtered list. */}
-      <div className="adm-search">
-        <Search size={16} />
-        <input
-          type="search"
-          inputMode="search"
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          placeholder="Search M.No, name, phone…"
-          aria-label="Search members"
-        />
+          for one person by number, not browsing a filtered list.
+
+          The plan filter shares this row rather than joining the chips below,
+          so it costs no extra line on a phone and — unlike a chip — it narrows
+          the list *alongside* the status filter instead of replacing it. */}
+      <div className="adm-search-row">
+        <div className="adm-search">
+          <Search size={16} />
+          <input
+            type="search"
+            inputMode="search"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search M.No, name, phone…"
+            aria-label="Search members"
+          />
+        </div>
+        <select
+          value={planFilter}
+          onChange={(e) => setPlanFilter(e.target.value as PlanFilter)}
+          className="adm-select adm-plan-filter"
+          aria-label="Filter by plan type"
+        >
+          {PLAN_FILTERS.map((p) => (
+            <option key={p.key} value={p.key}>
+              {p.label}
+            </option>
+          ))}
+        </select>
       </div>
 
       <div className="adm-chips" role="tablist" aria-label="Filter members">
@@ -443,7 +483,7 @@ export default function MemberList({
             </div>
             <p className="adm-empty-title">No members found</p>
             <p className="adm-empty-text">
-              {searchQuery || filter !== "all"
+              {searchQuery || filter !== "all" || planFilter !== "all"
                 ? "Try a different search or filter."
                 : "Add your first member with the + button."}
             </p>
@@ -469,6 +509,7 @@ export default function MemberList({
                         expiry={m.membershipExpiry}
                         today={today}
                       />
+                      <PlanTag planType={m.planType} />
                       {showBranchColumn && m.branchCode && (
                         <span className="adm-tag gold">{m.branchCode}</span>
                       )}
@@ -573,6 +614,7 @@ export default function MemberList({
                     )}
                     <td style={{ color: "var(--text)" }}>
                       {m.name}
+                      <PlanTag planType={m.planType} spaced />
                       {m.leftGym && (
                         <span className="adm-tag off" style={{ marginLeft: 8 }}>
                           Left
@@ -758,6 +800,44 @@ export default function MemberList({
         />
       )}
     </div>
+  );
+}
+
+/**
+ * The member's tier, which the list never showed before — the only place these
+ * words appeared in the whole admin was the Renew box's dropdown, so an imported
+ * member's cardio flag was stored and then invisible. Three existing tag
+ * modifiers, so this needs no new CSS: gold is the cardio tier, blue the
+ * weights-only tier, and muted is "never recorded" — the value every imported
+ * row used to carry, kept visible so a half-migrated list is obvious rather than
+ * silently reading as Hardcore.
+ */
+function PlanTag({
+  planType,
+  /** In the desktop table the tag sits inline after the name rather than in a
+   *  tag row, so it needs its own gap. */
+  spaced,
+}: {
+  planType: Member["planType"];
+  spaced?: boolean;
+}) {
+  if (!planType) return null;
+  if (planType === "full")
+    return (
+      <span className="adm-tag gold" style={spaced ? { marginLeft: 8 } : undefined}>
+        Cardio
+      </span>
+    );
+  if (planType === "no_cardio")
+    return (
+      <span className="adm-tag info" style={spaced ? { marginLeft: 8 } : undefined}>
+        Hardcore
+      </span>
+    );
+  return (
+    <span className="adm-tag muted" style={spaced ? { marginLeft: 8 } : undefined}>
+      Not recorded
+    </span>
   );
 }
 

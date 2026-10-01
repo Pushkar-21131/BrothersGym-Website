@@ -49,6 +49,7 @@ export default async function MembersPage() {
       feeAmount: members.feeAmount,
       joiningDate: members.joiningDate,
       membershipExpiry: members.membershipExpiry,
+      planType: members.planType,
       leftGym: members.leftGym,
       createdAt: members.createdAt,
       branchCode: branches.code,

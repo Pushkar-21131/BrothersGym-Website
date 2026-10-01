@@ -71,6 +71,17 @@ const nextConfig: NextConfig = {
 
   poweredByHeader: false,
 
+  experimental: {
+    serverActions: {
+      // The bulk member import posts its parsed rows to a server action, and
+      // Next's default body limit is 1 MB. 1,500 rows of JSON is roughly 450 KB,
+      // so it fits today — but only just, and the failure would be an opaque 413
+      // rather than anything the owner could act on. The import also sends in
+      // chunks, so this is headroom rather than the mechanism.
+      bodySizeLimit: "4mb",
+    },
+  },
+
   images: {
     // Serve the hero poster (the only next/image on the site so far) as AVIF or
     // WebP — both are dramatically smaller than the source JPG on browsers that

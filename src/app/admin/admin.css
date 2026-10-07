@@ -1142,6 +1142,12 @@
   min-height: 88px;
   resize: vertical;
 }
+/* Same fault and same reason as .form-input option in globals.css — the popup
+   is the browser's and defaults light, so the options must carry their own. */
+.adm-select option {
+  background: var(--surface2);
+  color: var(--text);
+}
 .adm-hint {
   font-size: 11px;
   color: var(--text3);

@@ -959,6 +959,15 @@ html {
   cursor: not-allowed;
 }
 
+/* A select's option list is drawn by the browser, not by us, and its default
+   background is the light one. Without a colour of its own each option inherits
+   the near-white text above onto that light panel and the list reads as blank.
+   color-scheme on html handles the browsers that honour it; this is the rest. */
+.form-input option {
+  background: var(--bg-input, #1e1e2a);
+  color: var(--text-primary, #fff);
+}
+
 /* Order Summary */
 .order-summary {
   background: var(--bg-card);

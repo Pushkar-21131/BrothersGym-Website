@@ -1,8 +1,18 @@
 /**
- * Generates the circular tab icon (and the iOS home-screen tile) from the master
- * logo SVG.
+ * Generates the circular tab icon, the iOS home-screen tile and the root
+ * favicon.ico, from the master logo SVG.
  *
  * Run with:  node scripts/gen-favicon.js
+ *
+ * WHY THERE IS ALSO A ROOT favicon.ico
+ * /favicon.ico is the path a browser or a search-engine icon crawler asks for
+ * before it reads a single link tag, and it is the one path this site had
+ * nothing at: no file existed there, so the [...slug] catch-all answered it with
+ * a 307 to "/" and a body of HTML. That is not an icon, and a crawler that finds
+ * no icon at the root keeps whatever it cached the last time it looked — which
+ * is how the retired badge, the one with the BROTHERSGYM ring that is illegible
+ * at 16px, stayed in Brave's and Google's search results after the switch to the
+ * disc. The .ico carries the same three sizes as the PNGs below.
  *
  * WHY A CROP AND NOT A REDRAW
  * The master logo is a full circular badge: "BROTHERSGYM" lettering around a dark
@@ -22,10 +32,12 @@
  */
 
 const sharp = require("sharp");
+const fs = require("fs");
 const path = require("path");
 
 const SRC = path.join(__dirname, "..", "public", "images", "brothers-gym-logo.svg");
 const OUT_DIR = path.join(__dirname, "..", "public", "images");
+const PUBLIC_DIR = path.join(__dirname, "..", "public");
 
 // Rendered once, large, purely to measure the disc and to provide something to
 // downsample from. Density 120 turns the 1254px artwork into ~2090px.
@@ -182,6 +194,43 @@ function measureDisc(data, width, height, channels) {
   return { cx, cy: model.cy, r: model.r, rows: points.length, worst, dropped: rows.length - points.length };
 }
 
+/**
+ * Assemble a multi-size .ico out of PNG buffers.
+ *
+ * An ICO is a 6-byte directory header, one 16-byte entry per image, then the
+ * payloads back to back. The entries here point at PNG data rather than the
+ * older BMP-with-AND-mask encoding; every browser that matters reads those, and
+ * Windows has since Vista, so the PNGs the loop above just wrote are reused
+ * byte for byte instead of being decoded and re-encoded into BMP.
+ */
+function buildIco(images) {
+  const HEADER = 6;
+  const ENTRY = 16;
+  const dir = Buffer.alloc(HEADER + ENTRY * images.length);
+  dir.writeUInt16LE(0, 0); // reserved, always 0
+  dir.writeUInt16LE(1, 2); // 1 = icon (2 would be cursor)
+  dir.writeUInt16LE(images.length, 4);
+
+  let offset = dir.length;
+  images.forEach(({ size, png }, i) => {
+    const at = HEADER + i * ENTRY;
+    // A dimension byte of 0 means 256. None of these are that big, but the
+    // encoding is silent about it and getting it wrong resizes the icon.
+    const dim = size >= 256 ? 0 : size;
+    dir.writeUInt8(dim, at);
+    dir.writeUInt8(dim, at + 1);
+    dir.writeUInt8(0, at + 2); // palette entries, 0 when the payload is PNG
+    dir.writeUInt8(0, at + 3); // reserved
+    dir.writeUInt16LE(1, at + 4); // colour planes
+    dir.writeUInt16LE(32, at + 6); // bits per pixel
+    dir.writeUInt32LE(png.length, at + 8);
+    dir.writeUInt32LE(offset, at + 12);
+    offset += png.length;
+  });
+
+  return Buffer.concat([dir, ...images.map((i) => i.png)]);
+}
+
 /** A white disc, used as a `dest-in` mask so the crop comes out circular. */
 const discMask = (size) =>
   Buffer.from(
@@ -237,6 +286,16 @@ async function main() {
     .png({ compressionLevel: 9 })
     .toFile(path.join(OUT_DIR, "apple-icon.png"));
   console.log(`  wrote apple-icon.png  ${TILE}x${TILE} (disc at ${INNER}px on brand dark)`);
+
+  // Root favicon.ico, reusing the PNGs just written so the two can never drift.
+  const ico = buildIco(
+    ICONS.map(({ file, size }) => ({ size, png: fs.readFileSync(path.join(OUT_DIR, file)) }))
+  );
+  fs.writeFileSync(path.join(PUBLIC_DIR, "favicon.ico"), ico);
+  console.log(
+    `  wrote favicon.ico  ${ICONS.map((i) => i.size).join("+")}px  ` +
+      `(${(ico.length / 1024).toFixed(1)} KB, PNG entries)`
+  );
 }
 
 main().catch((err) => {

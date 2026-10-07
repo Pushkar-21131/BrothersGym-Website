@@ -25,6 +25,10 @@
    direction we want anyway. */
 html {
   scroll-padding-top: 5rem;
+  /* A <select>'s popup, a date picker and the scrollbars are drawn by the
+     browser, not by us, and default to light. The options then inherit our
+     near-white text onto a white popup and the list reads as blank. */
+  color-scheme: dark;
 }
 
 /* ============================================

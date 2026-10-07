@@ -83,6 +83,8 @@ function revalidatePlanSurfaces() {
   revalidatePath("/admin/plans");
   revalidatePath("/join");
   revalidatePath("/");
+  // The full price tables live here, so a price edit has to reach it too.
+  revalidatePath("/plans");
   // The social share card quotes the same figure, and is ISR-cached in its own
   // right -- revalidating "/" does not reach a file-based metadata route. Its
   // hourly revalidate is the backstop if this call is a no-op.

@@ -149,6 +149,7 @@ export async function addTrainerAction(formData: FormData) {
 
     revalidatePath("/admin/trainers");
     revalidatePath("/");
+    revalidatePath("/plans");
     return { success: true };
   } catch (error) {
     return { error: sanitizeError(error, "Failed to add trainer") };
@@ -219,6 +220,7 @@ export async function updateTrainerAction(id: number, formData: FormData) {
 
     revalidatePath("/admin/trainers");
     revalidatePath("/");
+    revalidatePath("/plans");
     return { success: true };
   } catch (error) {
     return { error: sanitizeError(error, "Failed to update trainer") };
@@ -258,6 +260,7 @@ export async function deleteTrainerAction(id: number) {
 
     revalidatePath("/admin/trainers");
     revalidatePath("/");
+    revalidatePath("/plans");
     return { success: true };
   } catch (error) {
     return { error: sanitizeError(error, "Failed to delete trainer") };

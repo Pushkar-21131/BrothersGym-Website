@@ -1,8 +1,6 @@
 import type { Metadata } from "next";
-import { db } from "@/db";
-import { trainers, branches } from "@/db/schema";
-import { eq } from "drizzle-orm";
-import { getPlanPricing, type PricedPlan } from "@/lib/plan-pricing";
+import { getPlanPricing } from "@/lib/plan-pricing";
+import { getPublicBranches, getPublicTrainers, inr } from "@/lib/public-data";
 import { getVisibleReviews } from "@/app/actions/reviews";
 import Link from "next/link";
 import BMICalculator from "./components/bmi-calculator";
@@ -10,18 +8,10 @@ import HeroBackground from "./components/hero-background";
 import ReviewsSection from "./components/reviews-section";
 import TrainersTabs from "./components/trainers-tabs";
 import PublicNavbar from "./components/public-navbar";
+import PublicFooter from "./components/public-footer";
 import FloatingWhatsApp from "./components/floating-whatsapp";
 import { Bebas_Neue } from "next/font/google";
-import {
-  Dumbbell,
-  UserCircle,
-  MapPin,
-  Phone,
-  Building2,
-  ArrowRight,
-  Clock,
-  HelpCircle,
-} from "lucide-react";
+import { Dumbbell, UserCircle, Building2, ArrowRight } from "lucide-react";
 
 const bebas = Bebas_Neue({
   weight: "400",
@@ -115,139 +105,19 @@ const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Satur
 
 // One parallel round-trip instead of three sequential awaits.
 //
-// This deliberately does NOT swallow database errors. It used to return empty
-// arrays on failure, which looked safe but was worse: with revalidate = 3600,
-// an ISR regeneration during a blip would bake "Now at 0 locations" and "We
-// have 0 branches in Delhi" into the cached HTML and serve that for a full
-// hour. Throwing instead makes Next keep serving the last good snapshot.
-//
-// The one retry covers a Neon cold start (the free tier scales to zero and the
-// first query after an idle period can time out), so a genuine outage is what
-// throws, not a sleepy database. A failed `next build` is the intended
-// behaviour for a real outage — deploying a page that claims zero branches is
-// worse than not deploying.
+// The error posture lives in the readers themselves now: each retries once for
+// a Neon cold start and then throws, so a failed ISR regeneration keeps serving
+// the last good snapshot rather than caching a page that claims zero branches.
+// See public-data.ts.
 async function getHomeData() {
-  const fetchAll = () =>
-    Promise.all([
-      // Named columns, not select(). The branches table also holds owner_email,
-      // upi_id and upi_name — the owner's private address and the payee VPA his
-      // UPI app shows a payer before they confirm. Nothing on this page reads
-      // them, so nothing leaks today, but select() pulled all three into a
-      // statically cached public render: the day anyone spreads a branch object
-      // into a client component or a JSON-LD block, those publish with it.
-      //
-      // Listing exactly what the page uses makes that impossible rather than
-      // merely unlikely, and it shrinks the ISR payload on the most-visited page.
-      db
-        .select({
-          id: branches.id,
-          code: branches.code,
-          name: branches.name,
-          address: branches.address,
-          phone: branches.phone,
-          ownerName: branches.ownerName,
-          // Safe to expose, and already is: /contact renders this as the "Get
-          // Directions" href. The homepage needs it for the same job -- the
-          // structured data's `hasMap` and `sameAs`, which are how the site
-          // entity gets bound to the Google Maps listing for each branch. That
-          // binding is what lets an assistant resolve "Brothers Gym, Sagar Pur"
-          // to the listing the owner actually controls.
-          mapUrl: branches.mapUrl,
-        })
-        .from(branches)
-        .where(eq(branches.isActive, true))
-        .orderBy(branches.id),
-      db
-        .select({
-          id: trainers.id,
-          branchId: trainers.branchId,
-          name: trainers.name,
-          photoUrl: trainers.photoUrl,
-          // photoMime, never photoImage: this is the homepage, and selecting the
-          // base64 would put ~60KB per trainer into its HTML. The mime is enough
-          // to know an uploaded photo exists; the browser fetches it from
-          // /api/trainer-photo/[id]. See resolveTrainerPhoto.
-          photoMime: trainers.photoMime,
-          experience: trainers.experience,
-          ptFee: trainers.ptFee,
-          isOwner: trainers.isOwner,
-          instagramUrl: trainers.instagramUrl,
-          branchCode: branches.code,
-          branchName: branches.name,
-        })
-        .from(trainers)
-        .leftJoin(branches, eq(trainers.branchId, branches.id)),
-      getVisibleReviews(),
-    ]);
-
-  let allBranches, allTrainers, publicReviews;
-  try {
-    [allBranches, allTrainers, publicReviews] = await fetchAll();
-  } catch (e) {
-    console.error("[Home] first attempt failed, retrying once:", e);
-    [allBranches, allTrainers, publicReviews] = await fetchAll();
-  }
+  const [allBranches, allTrainers, publicReviews] = await Promise.all([
+    getPublicBranches(),
+    getPublicTrainers(),
+    getVisibleReviews(),
+  ]);
 
   return { allBranches, allTrainers, publicReviews };
 }
-
-/**
- * ₹ figures that a person reads, grouped the Indian way (1,00,000 — not
- * 100,000). Used for FAQ copy and meta descriptions; the JSON-LD `price` fields
- * stay unformatted, because those are parsed rather than read.
- */
-const inr = (n: number) => new Intl.NumberFormat("en-IN").format(n);
-
-/**
- * One price cell of the homepage price table — and it returns `<td>` itself, so
- * a row stays a flat three-column grid rather than nesting a wrapper that would
- * need its own column maths.
- *
- * It takes a LIST, not a plan, and that is the difference between a table that
- * is merely tidy and one that is true. Nothing constrains membership_plans to
- * two rows per duration — the unique index is on (branch_id, code) — so an owner
- * adding a "Student 3-month" plan would collide with the 3-month tier. A cell
- * that showed only the first match would drop it from the homepage silently,
- * which is how a page ends up quoting a price list that is missing a price. Two
- * plans in one cell stack and name themselves.
- *
- * A branch that does not sell a tier at a duration gets an em dash, not a
- * missing cell. The two branch cards must stay the same shape, or the columns
- * stop lining up with their headings.
- *
- * The per-month figure is shown only on plans longer than a month, where the
- * saving is the actual decision. On a 1-month plan it is the price again.
- */
-function PriceCell({ plans, last }: { plans: PricedPlan[]; last?: boolean }) {
-  const pad = last ? "pl-1.5 pr-4 md:pr-5" : "px-1.5";
-  if (plans.length === 0) {
-    return <td className={`${pad} py-2.5 text-right align-top text-zinc-600`}>—</td>;
-  }
-  return (
-    <td className={`${pad} py-2.5 text-right align-top whitespace-nowrap`}>
-      {plans.map((plan) => {
-        const perMonth =
-          plan.durationDays > 31 ? Math.round(plan.price / (plan.durationDays / 30)) : 0;
-        return (
-          <span key={`${plan.name}-${plan.price}`} className="block">
-            {plans.length > 1 && (
-              <span className="block text-[9px] font-normal text-zinc-400 leading-tight">
-                {plan.name}
-              </span>
-            )}
-            <span className="text-yellow-500 font-black">₹{inr(plan.price)}</span>
-            {perMonth > 0 && (
-              <span className="block text-[9px] md:text-[10px] font-normal text-zinc-500 leading-tight">
-                ₹{inr(perMonth)}/mo
-              </span>
-            )}
-          </span>
-        );
-      })}
-    </td>
-  );
-}
-
 
 /**
  * Homepage metadata. The one price claim it makes comes from the database.
@@ -322,80 +192,6 @@ export default async function Home() {
   // that they are a rating. If the gym later embeds its Google reviews from a
   // third party, mark THAT up -- a rating sourced from Google is not
   // self-serving and will show.
-
-  // Cheapest advertised PT rate, from the trainer rows the Trainers section
-  // already renders. The FAQ markup used to assert "PT fees start from
-  // ₹3,000/month" with nothing on the page to back it up.
-  const ptFees = allTrainers.map((t) => t.ptFee).filter((f) => f > 0);
-  const ptFrom = ptFees.length > 0 ? Math.min(...ptFees) : null;
-
-  // ===== FAQ: ONE SOURCE FOR THE VISIBLE COPY AND THE FAQPage MARKUP =====
-  //
-  // These were two hand-maintained lists — an inline array in the section below
-  // and a separate mainEntity block in the JSON-LD at the bottom of this file —
-  // and they had drifted badly. The markup claimed "fees start from ₹900/month
-  // to ₹1500/month" and "PT fees start from ₹3,000/month" while the visible
-  // answers named no figures at all, and the markup was missing a question the
-  // page actually shows.
-  //
-  // That is still worth avoiding, but the reason has changed and it is worth
-  // being accurate about what this markup now buys.
-  //
-  // Google retired FAQ rich results on 8 August 2023; they are restricted to
-  // authoritative government and health sites, and this is a gym. So the
-  // mismatch would no longer cost a rich result, because there is none to lose.
-  // What FAQPage is actually for now is machine reading: it is how an assistant
-  // answering "which gyms are near Janakpuri and what do they charge" gets a
-  // clean, attributable answer instead of guessing from prose. That is AEO, not
-  // SEO, and it is the channel the FAQ markup is kept for.
-  //
-  // Rendering both from this one array makes a future mismatch impossible, and
-  // every figure in it comes from the rows the site already sells and staffs
-  // from, so a price change in the admin panel reaches that answer too.
-  const faqs = [
-    {
-      q: "Where are Brothers Gym located?",
-      a: `We have ${allBranches.length} branches in Delhi: ${allBranches
-        .map((b) => `${b.name} (${b.address.split(",").slice(0, 2).join(",")})`)
-        .join(" and ")}. Both branches offer the same premium quality.`,
-    },
-    {
-      q: "What are the membership fees?",
-      // Names the actual range rather than sending the reader off to another
-      // page for it. The previous answer deferred to /join, which was the only
-      // place the numbers existed -- and /join only produces them in the browser
-      // after a branch is picked, so this answer described a page that a crawler
-      // sees as priceless. Every figure here comes from the same rows the table
-      // above renders.
-      a: pricing
-        ? `Across both branches, plans run from ₹${inr(
-            pricing.min
-          )} for a single month to ₹${inr(
-            pricing.max
-          )} for a full year, with a cheaper weights-only tier and a cardio tier at every duration. The 3, 6 and 12-month plans work out cheaper per month. Both branches' complete price lists are in the Plans & Pricing section above.`
-        : "Membership fees vary by branch. Visit our Join Online page and select your preferred branch to see the exact pricing for 1, 3, 6, or 12-month plans with or without cardio access.",
-    },
-    {
-      q: "What are the gym timings?",
-      a: "Sagar Pur branch operates in split timings (Morning: 5:30 AM – 12:00 PM, Evening: 4:00 PM – 10:00 PM). Nangal Raya branch is open full day: 5:30 AM – 10:00 PM. Both branches are closed on Sundays.",
-    },
-    {
-      q: "Do you offer personal training?",
-      a: ptFrom
-        ? `Yes, both branches have experienced personal trainers. PT fees start from ₹${inr(
-            ptFrom
-          )}/month — check our Trainers section to see the coaches at each branch and their individual fees.`
-        : "Yes, both branches have experienced personal trainers. Check our Trainers section to see the coaches at each branch and their PT fees.",
-    },
-    {
-      q: "Can I join online?",
-      a: "Yes! Visit our Join Online page, choose your preferred branch, pick a plan, and pay by UPI. Your membership is activated once the gym confirms your payment.",
-    },
-    {
-      q: "Can I use my membership at both branches?",
-      a: "Currently, memberships are branch-specific. If you want to switch or use both, please talk to the owner directly.",
-    },
-  ];
 
   return (
     <div className="min-h-screen bg-zinc-950 font-sans selection:bg-yellow-500 selection:text-black">
@@ -593,350 +389,39 @@ export default async function Home() {
         </div>
       </section>
 
-      {/* ============ PRICING ============ */}
-      {/* Server-rendered, and that is the whole point of it.
-          Every price on this site was until now reachable only by running
-          JavaScript: /join fetches its plans in a useEffect after you pick a
-          branch, so its HTML has always shipped zero prices, and the homepage
-          quoted a single "from ₹X" figure inside prose. Neither is something a
-          search engine or an assistant can lift an answer out of, and "how much
-          is a membership" is the question that decides whether someone walks in.
-          This table is drawn on the server from the same membership_plans rows
-          the join page sells from, so it is in the HTML on the first byte, and
-          it cannot drift from what the counter charges: an owner editing a price
-          in the admin panel calls revalidatePath("/") and this redraws. */}
-      {pricing && (
-        <section id="pricing" className="py-10 md:py-20 px-4 md:px-6 border-b border-zinc-800">
-          <div className="max-w-4xl mx-auto">
-            <div className="text-center mb-5 md:mb-9">
-              <p className="text-yellow-500 text-xs md:text-sm font-bold tracking-[0.4em] uppercase mb-3">
-                — Membership —
-              </p>
-              <h2 className="text-4xl md:text-6xl font-black uppercase tracking-tight text-white mb-3">
-                Plans &amp; <span className="text-yellow-500">Pricing</span>
-              </h2>
-              <p className="text-sm md:text-base text-zinc-400 max-w-xl mx-auto">
-                Both tiers at every duration — with or without cardio access. Each
-                branch prices its own.
-              </p>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-5">
-              {allBranches.map((branch) => {
-                const plans = pricing.plans.filter((p) => p.branchId === branch.id);
-                if (plans.length === 0) return null;
-
-                // ONE ROW PER DURATION, ONE COLUMN PER TIER.
-                //
-                // This shipped first as one row per plan: eight rows a branch,
-                // and both branches stacked on a phone, so reaching the second
-                // gym's 12-month price meant scrolling past fifteen rows. It is
-                // now four rows — and the shorter table is not even the main
-                // gain. Two tiers side by side is the comparison a reader
-                // actually makes ("is cardio worth the difference"), and that
-                // used to require holding four rows apart in your head.
-                //
-                // Grouped on durationDays and includesCardio, both real columns.
-                // Not parsed out of `name`: the tier is the difference between
-                // two plans that share a duration, which is precisely what a
-                // name regex gets silently backwards.
-                //
-                // A duration a branch does not sell renders an em dash rather
-                // than disappearing, so the two cards keep the same set of rows.
-                const durations = [...new Set(plans.map((p) => p.durationDays))].sort(
-                  (a, b) => a - b
-                );
-
-                return (
-                  <div
-                    key={branch.id}
-                    className="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden"
-                  >
-                    {/* Name and the call to action share a line. The button used
-                        to sit in a footer band of its own, which cost every
-                        reader a row of height for one link. */}
-                    <div className="flex items-center justify-between gap-3 px-4 md:px-5 py-3 border-b border-zinc-800">
-                      <div className="min-w-0">
-                        <h3 className="text-lg md:text-xl font-black uppercase tracking-widest text-white leading-none">
-                          {branch.name}
-                        </h3>
-                        <p className="text-[10px] text-zinc-500 uppercase tracking-widest mt-1.5 truncate">
-                          {branch.address.split(",").slice(0, 2).join(",")}
-                        </p>
-                      </div>
-                      <Link
-                        href="/join"
-                        className="shrink-0 inline-flex items-center gap-1 bg-yellow-500 hover:bg-yellow-400 text-black font-black uppercase tracking-wider text-[11px] px-3 py-2 rounded-lg transition-colors"
-                      >
-                        Join<span className="sr-only"> {branch.name}</span>
-                        <ArrowRight size={13} />
-                      </Link>
-                    </div>
-
-                    <table className="w-full text-[13px] md:text-sm">
-                      <thead>
-                        <tr className="text-[9px] md:text-[10px] uppercase tracking-[0.15em] text-zinc-500">
-                          <th scope="col" className="text-left font-bold pl-4 md:pl-5 pr-1 py-2.5">
-                            Duration
-                          </th>
-                          <th scope="col" className="text-right font-bold px-1.5 py-2.5">
-                            Hardcore
-                          </th>
-                          <th scope="col" className="text-right font-bold pl-1.5 pr-4 md:pr-5 py-2.5">
-                            Cardio
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {durations.map((days) => {
-                          const at = plans.filter((p) => p.durationDays === days);
-                          const months = Math.max(1, Math.round(days / 30));
-                          return (
-                            <tr key={days} className="border-t border-zinc-800/70">
-                              <th
-                                scope="row"
-                                className="text-left align-top font-semibold text-zinc-200 pl-4 md:pl-5 pr-1 py-2.5 whitespace-nowrap"
-                              >
-                                {months} {months === 1 ? "Month" : "Months"}
-                              </th>
-                              <PriceCell plans={at.filter((p) => !p.includesCardio)} />
-                              <PriceCell plans={at.filter((p) => p.includesCardio)} last />
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </section>
-      )}
-
-      {/* ============ FAQ ============ */}
-      <section id="faq" className="py-10 md:py-20 px-4 md:px-6 border-b border-zinc-800">
-        <div className="max-w-4xl mx-auto">
-          <div className="text-center mb-6 md:mb-10">
-            <div className="inline-flex items-center justify-center w-14 h-14 bg-yellow-500/10 border border-yellow-500/30 rounded-full mb-4">
-              <HelpCircle size={24} className="text-yellow-500" />
-            </div>
-            <h2 className="text-4xl md:text-6xl font-black uppercase tracking-tight mb-4">
-              Frequently Asked <span className="text-yellow-500">Questions</span>
-            </h2>
-            <p className="text-zinc-400 text-base md:text-lg">
-              Everything you need to know before walking through our doors.
+      {/* ============ PLANS & FAQ BAND ============ */}
+      {/* The price table and the FAQ used to live here. Both are on /plans now,
+          and this band is what the homepage kept: one line that still names a
+          real figure in server-rendered prose, so the homepage goes on answering
+          "how much is a membership" for a crawler, plus the internal link that
+          gets /plans crawled at all. Gated on `pricing` like the table was — with
+          no active plans it says nothing about a price. */}
+      <section className="py-8 md:py-12 px-4 md:px-6 border-b border-zinc-800">
+        <div className="max-w-4xl mx-auto flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 md:gap-6 rounded-2xl border border-yellow-500/30 bg-yellow-500/5 px-5 py-5 md:px-8 md:py-6">
+          <div className="text-center sm:text-left">
+            <p className="text-[10px] font-black text-yellow-500 uppercase tracking-widest mb-1.5">
+              Membership
+            </p>
+            <p className="text-white font-bold text-base md:text-lg leading-snug">
+              {pricing
+                ? `Plans from ₹${inr(pricing.monthlyMin)}/month at both Delhi branches.`
+                : "Plans at both Delhi branches."}
+            </p>
+            <p className="text-zinc-400 text-sm mt-1">
+              Full price lists, timings, and the questions we get most.
             </p>
           </div>
-
-          <div className="space-y-3">
-            {faqs.map((faq, i) => (
-              <details
-                key={i}
-                className="group bg-zinc-900 border border-zinc-800 hover:border-yellow-500/30 rounded-xl overflow-hidden transition-colors"
-              >
-                <summary className="font-bold cursor-pointer text-white flex justify-between items-center p-5 gap-4 list-none">
-                  <span className="text-sm md:text-base">{faq.q}</span>
-                  <span className="w-8 h-8 bg-yellow-500/20 group-hover:bg-yellow-500 text-yellow-500 group-hover:text-black rounded-lg flex items-center justify-center transition-colors shrink-0 text-lg font-black">
-                    <span className="group-open:hidden">+</span>
-                    <span className="hidden group-open:inline">−</span>
-                  </span>
-                </summary>
-                <div className="px-5 pb-5">
-                  <p className="text-zinc-400 leading-relaxed text-sm md:text-base border-t border-zinc-800 pt-4">
-                    {faq.a}
-                  </p>
-                </div>
-              </details>
-            ))}
-          </div>
+          <Link
+            href="/plans"
+            className="shrink-0 inline-flex items-center justify-center gap-2 bg-yellow-500 hover:bg-yellow-400 text-black font-black uppercase tracking-wider text-xs md:text-sm px-5 md:px-6 py-3 rounded-lg transition-transform hover:scale-105 active:scale-95 whitespace-nowrap"
+          >
+            Plans &amp; FAQ <ArrowRight size={16} />
+          </Link>
         </div>
       </section>
 
       {/* ============ FOOTER ============ */}
-      <footer id="contact" className="bg-zinc-950 pt-10 md:pt-16 pb-8 px-4 md:px-6 relative overflow-hidden border-t border-zinc-900">
-        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[600px] h-[300px] bg-yellow-500/5 rounded-full blur-3xl z-0"></div>
-
-        <div className="max-w-7xl mx-auto relative z-10">
-          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-5 md:gap-6 mb-6 pb-6 md:mb-12 md:pb-12 border-b border-zinc-900">
-            <div className="flex-1">
-              <div className="flex items-center gap-3 mb-4">
-                <img src="/images/brothers-gym-logo.svg" alt="Brothers Gym logo" loading="lazy" decoding="async" className="h-14 w-14 rounded-full" />
-                <div>
-                  <h3 className="text-xl md:text-2xl font-black uppercase tracking-widest text-white">
-                    Brothers<span className="text-yellow-500">Gym</span>
-                  </h3>
-                  <p className="text-[10px] text-zinc-500 uppercase tracking-widest">
-                    Two Brothers · Two Locations
-                  </p>
-                </div>
-              </div>
-              <p className="text-zinc-400 max-w-md text-sm md:text-base">
-                Ready to start your journey? Drop by any of our branches or give us a call. We&apos;re ready when you are.
-              </p>
-            </div>
-
-            <Link
-              href="/join"
-              className="bg-yellow-500 hover:bg-yellow-400 text-black font-black uppercase tracking-wider px-6 md:px-8 py-3 md:py-4 rounded-lg transition-transform hover:scale-105 active:scale-95 text-center whitespace-nowrap flex items-center justify-center gap-2 self-start"
-            >
-              Join Online <ArrowRight size={18} />
-            </Link>
-          </div>
-
-          {/* No scroll-mt here any more: the offset moved to a single
-              scroll-padding-top on html, which now covers every anchor. A
-              scroll-mt would stack on top of it and land this grid ~96px lower
-              than the rest. See the note in globals.css. */}
-          <div id="locations" className="grid grid-cols-2 md:grid-cols-3 gap-3 md:gap-6 mb-6 md:mb-12">
-            {/* MOBILE DENSITY — every change below is `max-md:` scoped, so the
-                md: layout keeps its exact previous classes.
-
-                The card is ~140px of content wide on a phone, and the 44px boxed
-                icon plus a 12px gap was eating 56px of that — 40%. The title,
-                the owner name and a 90-character address were all fighting over
-                what was left, which is why "NANGAL RAYA" broke onto two lines and
-                the address onto seven.
-
-                So the icon shrinks to 16px inline, the type steps down one notch,
-                and the phone number becomes a full-width pill — it is the card's
-                only action and a plain text row did not read as tappable. */}
-            {allBranches.map((branch) => (
-              <div
-                key={branch.id}
-                className="bg-zinc-900/60 border border-zinc-800 hover:border-yellow-500/40 p-4 md:p-6 rounded-2xl transition-colors group max-md:p-3 max-md:rounded-xl"
-              >
-                <div className="flex items-center gap-3 mb-4 md:mb-5 max-md:gap-2 max-md:mb-2.5">
-                  <div className="w-11 h-11 bg-yellow-500/10 border border-yellow-500/30 rounded-lg flex items-center justify-center group-hover:bg-yellow-500 group-hover:border-yellow-500 transition-colors max-md:shrink-0 max-md:w-7 max-md:h-7 max-md:rounded-md">
-                    <Building2 size={20} className="text-yellow-500 group-hover:text-black transition-colors max-md:w-4 max-md:h-4" />
-                  </div>
-                  <div className="max-md:min-w-0">
-                    <h4 className="font-black text-white uppercase tracking-wide text-sm md:text-base max-md:text-[13px] max-md:leading-tight">
-                      {branch.name}
-                    </h4>
-                    <span className="text-[10px] font-black text-yellow-500 uppercase tracking-widest">
-                      Branch · {branch.code}
-                    </span>
-                    {branch.ownerName && (
-                      <p className="text-[10px] text-zinc-400 mt-0.5">
-                        Owner: <span className="text-zinc-300">{branch.ownerName}</span>
-                      </p>
-                    )}
-                  </div>
-                </div>
-
-                <div className="space-y-3 text-sm max-md:space-y-2 max-md:text-[11px]">
-                  <a
-                    href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(branch.address)}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-start gap-2 text-zinc-300 hover:text-yellow-500 transition-colors"
-                  >
-                    <MapPin size={16} className="text-yellow-500 shrink-0 mt-0.5 max-md:w-3.5 max-md:h-3.5" />
-                    <span className="leading-relaxed max-md:leading-snug">{branch.address}</span>
-                  </a>
-                  {branch.phone && (
-                    <a
-                      href={`tel:${branch.phone}`}
-                      className="flex items-center gap-2 text-zinc-300 hover:text-yellow-500 transition-colors max-md:w-full max-md:justify-center max-md:gap-1.5 max-md:rounded-lg max-md:border max-md:border-zinc-800 max-md:bg-zinc-800/40 max-md:py-1.5 max-md:text-yellow-500"
-                    >
-                      <Phone size={16} className="text-yellow-500 max-md:w-3.5 max-md:h-3.5" />
-                      <span className="font-medium max-md:font-semibold">{branch.phone}</span>
-                    </a>
-                  )}
-                </div>
-              </div>
-            ))}
-
-            {/* Spans both phone columns: the split-timings rows below use
-                justify-between, which collides in a half-width card.
-
-                Its header is matched to the branch cards above (max-md: only) so
-                the three cards stacked in this grid read as one design. The body
-                is left alone — it is full-width here and already runs at text-xs. */}
-            <div className="col-span-2 md:col-span-1 bg-zinc-900/60 border border-zinc-800 p-4 md:p-6 rounded-2xl max-md:p-3 max-md:rounded-xl">
-              <div className="flex items-center gap-3 mb-5 max-md:gap-2 max-md:mb-2.5">
-                <div className="w-11 h-11 bg-yellow-500/10 border border-yellow-500/30 rounded-lg flex items-center justify-center max-md:shrink-0 max-md:w-7 max-md:h-7 max-md:rounded-md">
-                  <Clock size={20} className="text-yellow-500 max-md:w-4 max-md:h-4" />
-                </div>
-                <div className="max-md:min-w-0">
-                  <h4 className="font-black text-white uppercase tracking-wide text-sm md:text-base max-md:text-[13px] max-md:leading-tight">
-                    Opening Hours
-                  </h4>
-                  <span className="text-[10px] font-black text-yellow-500 uppercase tracking-widest">
-                    Sunday Closed
-                  </span>
-                </div>
-              </div>
-
-              <div className="mb-4">
-                <p className="text-[10px] font-black text-yellow-500 uppercase tracking-widest mb-2">
-                  Sagar Pur (Split Timings)
-                </p>
-                <div className="space-y-1.5">
-                  <div className="flex items-center justify-between py-1.5 border-b border-zinc-800">
-                    <span className="text-zinc-400 text-xs">Morning</span>
-                    <span className="text-white font-bold text-xs">5:30 AM – 12:00 PM</span>
-                  </div>
-                  <div className="flex items-center justify-between py-1.5">
-                    <span className="text-zinc-400 text-xs">Evening</span>
-                    <span className="text-white font-bold text-xs">4:00 PM – 10:00 PM</span>
-                  </div>
-                </div>
-              </div>
-
-              <div>
-                <p className="text-[10px] font-black text-yellow-500 uppercase tracking-widest mb-2">
-                  Nangal Raya (Full Day)
-                </p>
-                <div className="flex items-center justify-between py-1.5">
-                  <span className="text-zinc-400 text-xs">Mon – Sat</span>
-                  <span className="text-white font-bold text-xs">5:30 AM – 10:00 PM</span>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="flex flex-col md:flex-row justify-between items-center gap-4 pt-6 md:pt-8 border-t border-zinc-900 text-sm text-zinc-500">
-            <div className="flex flex-col md:flex-row items-center gap-2 md:gap-4 text-center md:text-left">
-              <p>&copy; {new Date().getFullYear()} Brothers Gym. All rights reserved.</p>
-              <div className="flex flex-wrap justify-center gap-4 text-xs">
-                <Link href="/privacy" className="hover:text-yellow-500 transition-colors">Privacy</Link>
-                <Link href="/terms" className="hover:text-yellow-500 transition-colors">Terms</Link>
-                <Link href="/refund" className="hover:text-yellow-500 transition-colors">Refund</Link>
-                <Link href="/contact" className="hover:text-yellow-500 transition-colors">Contact</Link>
-              </div>
-            </div>
-            <div className="flex items-center gap-4">
-              <span className="text-xs uppercase tracking-widest text-zinc-600">Follow us</span>
-              <a
-                href="https://www.instagram.com/brothersgym12"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="w-9 h-9 rounded-full bg-zinc-900 border border-zinc-800 hover:bg-yellow-500 hover:border-yellow-500 flex items-center justify-center text-zinc-400 hover:text-black transition-all"
-                aria-label="Instagram"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <rect x="2" y="2" width="20" height="20" rx="5" ry="5"></rect>
-                  <path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"></path>
-                  <line x1="17.5" y1="6.5" x2="17.51" y2="6.5"></line>
-                </svg>
-              </a>
-              <a
-                href="https://www.facebook.com/profile.php?id=100063764862295"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="w-9 h-9 rounded-full bg-zinc-900 border border-zinc-800 hover:bg-yellow-500 hover:border-yellow-500 flex items-center justify-center text-zinc-400 hover:text-black transition-all"
-                aria-label="Facebook"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z"></path>
-                </svg>
-              </a>
-            </div>
-          </div>
-        </div>
-      </footer>
+      <PublicFooter branches={allBranches} />
 
       <script
         type="application/ld+json"
@@ -1080,26 +565,6 @@ export default async function Home() {
                 };
               }),
             ],
-          }),
-        }}
-      />
-
-      <script
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{
-          __html: JSON.stringify({
-            "@context": "https://schema.org",
-            "@type": "FAQPage",
-            // Same `faqs` array the section above renders, so the marked-up
-            // answer is by construction the answer on the page.
-            mainEntity: faqs.map((faq) => ({
-              "@type": "Question",
-              name: faq.q,
-              acceptedAnswer: {
-                "@type": "Answer",
-                text: faq.a,
-              },
-            })),
           }),
         }}
       />

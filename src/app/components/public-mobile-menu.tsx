@@ -1,12 +1,16 @@
 "use client";
 
 import { useRef, useEffect } from "react";
+import { usePathname } from "next/navigation";
 import { Menu, X } from "lucide-react";
 
+// The "#" entries are homepage anchors; PublicNavbar resolves the same list
+// against the current path, and both places have to agree.
 const NAV_ITEMS = [
   { href: "#about", label: "About" },
   { href: "#bmi", label: "BMI Calculator" },
   { href: "#reviews", label: "Reviews" },
+  { href: "/plans", label: "Plans & FAQ" },
   { href: "#staff", label: "Trainers" },
   { href: "#locations", label: "Locations" },
   { href: "#contact", label: "Contact" },
@@ -23,6 +27,10 @@ export default function PublicMobileMenu({
   onOpenChange: (open: boolean) => void;
 }) {
   const menuRef = useRef<HTMLDivElement>(null);
+
+  // On "/" the prefix is empty, so the anchors stay bare and jump in place.
+  // Anywhere else they have to point back at the homepage.
+  const home = usePathname() === "/" ? "" : "/";
 
   useEffect(() => {
     if (!open) return;
@@ -83,7 +91,7 @@ export default function PublicMobileMenu({
             {NAV_ITEMS.map((item) => (
               <a
                 key={item.href}
-                href={item.href}
+                href={item.href.startsWith("#") ? `${home}${item.href}` : item.href}
                 onClick={() => onOpenChange(false)}
                 className="block px-4 py-3 rounded-lg hover:bg-zinc-800 text-zinc-300 hover:text-yellow-500 transition-colors text-sm font-medium border-b border-zinc-800 last:border-0"
               >

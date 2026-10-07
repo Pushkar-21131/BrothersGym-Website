@@ -66,6 +66,7 @@ export async function updateBranchAction(id: number, formData: FormData) {
 
     revalidatePath("/admin/branch");
     revalidatePath("/");
+    revalidatePath("/plans");
     revalidatePath("/contact");
     revalidatePath("/privacy");
     revalidatePath("/terms");

@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import PublicMobileMenu from "./public-mobile-menu";
 
 // The bar sits ON TOP of the hero video/poster. At the very top it's fully
@@ -41,6 +42,13 @@ export default function PublicNavbar() {
   // starts just below it) reads as one attached surface, whatever the scroll.
   const s = menuOpen ? 1 : scrim;
 
+  // The section anchors only exist on the homepage. This bar is rendered on
+  // /plans too, where a bare "#about" is a link to nowhere, so each anchor is
+  // resolved against the current path. On "/" the prefix is empty and the href
+  // stays exactly what it was — a plain `<a href="#about">` jumps in place,
+  // whereas "/#about" from the homepage would reload the whole page.
+  const home = usePathname() === "/" ? "" : "/";
+
   return (
     <nav
       className="fixed top-0 left-0 right-0 z-40 transition-colors duration-200"
@@ -63,13 +71,17 @@ export default function PublicNavbar() {
           </span>
         </Link>
 
-        <div className="hidden md:flex items-center gap-6 lg:gap-8 text-sm font-semibold tracking-wide text-zinc-300">
-          <a href="#about" className="hover:text-yellow-500 transition-colors">ABOUT</a>
-          <a href="#bmi" className="hover:text-yellow-500 transition-colors">BMI</a>
-          <a href="#reviews" className="hover:text-yellow-500 transition-colors">REVIEWS</a>
-          <a href="#staff" className="hover:text-yellow-500 transition-colors">TRAINERS</a>
-          <a href="#locations" className="hover:text-yellow-500 transition-colors">LOCATIONS</a>
-          <a href="#contact" className="hover:text-yellow-500 transition-colors">CONTACT</a>
+        {/* gap-4 at md, not gap-6: PLANS & FAQ is the seventh link and this row
+            starts at 768px, where the logo and the CTA already take most of the
+            width. Only the md: step changes; lg: keeps the original spacing. */}
+        <div className="hidden md:flex items-center gap-4 lg:gap-8 text-sm font-semibold tracking-wide text-zinc-300 whitespace-nowrap">
+          <a href={`${home}#about`} className="hover:text-yellow-500 transition-colors">ABOUT</a>
+          <a href={`${home}#bmi`} className="hover:text-yellow-500 transition-colors">BMI</a>
+          <a href={`${home}#reviews`} className="hover:text-yellow-500 transition-colors">REVIEWS</a>
+          <Link href="/plans" className="hover:text-yellow-500 transition-colors">PLANS &amp; FAQ</Link>
+          <a href={`${home}#staff`} className="hover:text-yellow-500 transition-colors">TRAINERS</a>
+          <a href={`${home}#locations`} className="hover:text-yellow-500 transition-colors">LOCATIONS</a>
+          <a href={`${home}#contact`} className="hover:text-yellow-500 transition-colors">CONTACT</a>
         </div>
 
         <div className="flex items-center gap-2 md:gap-3 shrink-0">

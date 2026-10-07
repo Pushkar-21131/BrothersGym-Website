@@ -340,14 +340,12 @@ export function findHeader(
   return null;
 }
 
-export type SkipReason = "gymId" | "name" | "contact" | "fee" | "expiry";
+export type SkipReason = "gymId" | "name" | "fee";
 
 export const SKIP_LABELS: Record<SkipReason, string> = {
   gymId: "no M.No",
   name: "no name",
-  contact: "no phone number",
   fee: "no fee",
-  expiry: "no due date",
 };
 
 export type SheetReport = { name: string; rows: number; skipped?: string };
@@ -360,27 +358,36 @@ export type ParseResult = {
   mapping: Mapping | null;
   skipped: Record<SkipReason, number>;
   duplicates: string[];
+  /** Rows imported with no phone number on file. */
+  withoutPhone: number;
+  /** Rows with no readable due date. The server dates these today. */
+  withoutDueDate: number;
+  /** The first few of those, named so the owner can correct them. */
+  datedToday: string[];
 };
+
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 /**
  * Turns every sheet of a workbook into import rows. A sheet that cannot be read
  * is named rather than dropped, and a row that cannot be imported is counted
- * against the reason it failed, so the screen can say "3 with no phone number"
- * instead of an unexplained shortfall. Rows are deduped on M.No across the whole
- * workbook.
+ * against the reason it failed, so the screen can say "3 with no fee" instead of
+ * an unexplained shortfall. Rows are deduped on M.No across the whole workbook.
+ *
+ * A missing phone or due date does not disqualify a row — the owner's register
+ * has gaps in both, and a member with no number is still a member. They import
+ * anyway and are counted here, because an unremarked-on gap is one he cannot see
+ * or fix.
  */
 export function parseSheets(parsed: ParsedSheet[]): ParseResult {
   const rows: ImportMemberRow[] = [];
   const sheets: SheetReport[] = [];
-  const skipped: Record<SkipReason, number> = {
-    gymId: 0,
-    name: 0,
-    contact: 0,
-    fee: 0,
-    expiry: 0,
-  };
+  const skipped: Record<SkipReason, number> = { gymId: 0, name: 0, fee: 0 };
   const seen = new Set<number>();
   const duplicates: string[] = [];
+  const datedToday: string[] = [];
+  let withoutPhone = 0;
+  let withoutDueDate = 0;
   let mapping: Mapping | null = null;
 
   for (const sheet of parsed) {
@@ -412,18 +419,24 @@ export function parseSheets(parsed: ParsedSheet[]): ParseResult {
       const parsedId = parseGymId(get("gymId", cells));
       const name = String(get("name", cells) || "").trim();
       const fee = toInt(get("feeAmount", cells));
-      const expiry = excelDateToISO(get("membershipExpiry", cells));
+      // A blank cell and an unreadable one both mean "not known"; the server
+      // dates those today.
+      const rawExpiry = excelDateToISO(get("membershipExpiry", cells));
+      const expiry = ISO_DATE.test(rawExpiry) ? rawExpiry : "";
 
       if (!parsedId.gymId) skipped.gymId++;
       else if (!name) skipped.name++;
-      else if (!contact) skipped.contact++;
       else if (!fee) skipped.fee++;
-      else if (!expiry) skipped.expiry++;
       else if (seen.has(parsedId.gymId)) {
         if (duplicates.length < 8) duplicates.push(`${parsedId.gymId} (${name})`);
       } else {
         seen.add(parsedId.gymId);
         counted++;
+        if (!contact) withoutPhone++;
+        if (!expiry) {
+          withoutDueDate++;
+          if (datedToday.length < 8) datedToday.push(`${parsedId.gymId} (${name})`);
+        }
 
         // No C on the M.No means Hardcore: the register is a complete split, so
         // reading it that way is reading his data, not inventing a value.
@@ -448,5 +461,14 @@ export function parseSheets(parsed: ParsedSheet[]): ParseResult {
     sheets.push({ name: sheet.name, rows: counted });
   }
 
-  return { rows, sheets, mapping, skipped, duplicates };
+  return {
+    rows,
+    sheets,
+    mapping,
+    skipped,
+    duplicates,
+    withoutPhone,
+    withoutDueDate,
+    datedToday,
+  };
 }

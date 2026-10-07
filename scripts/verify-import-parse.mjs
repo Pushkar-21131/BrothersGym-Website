@@ -40,6 +40,7 @@ const NR_CARDIO = 300; // every 4th
 const SP_MEMBERS = 300; // second tab, gymId 2001..2300
 const SP_CARDIO = 30; // every 10th
 const EXTRA_CARDIO = 3; // C 8007, 8045C, 8050(C)
+const EXTRA_ROWS = 5; // those three, plus 9002 (no phone) and 9005 (no due date)
 const EXPIRY = "2026-12-31";
 
 const expiryDate = new Date(Date.UTC(2026, 11, 31));
@@ -160,7 +161,7 @@ const result = parseSheets(parsed);
 const cardio = result.rows.filter((r) => r.planType === "full").length;
 const hardcore = result.rows.filter((r) => r.planType === "no_cardio").length;
 
-const expectedRows = NR_MEMBERS + SP_MEMBERS + EXTRA_CARDIO;
+const expectedRows = NR_MEMBERS + SP_MEMBERS + EXTRA_ROWS;
 const expectedCardio = NR_CARDIO + SP_CARDIO + EXTRA_CARDIO;
 
 ok("every usable row landed", result.rows.length, expectedRows);
@@ -190,22 +191,26 @@ group("Per-sheet counts");
 ok("sheet report", result.sheets, [
   { name: "NR Register", rows: NR_MEMBERS },
   { name: "SP Register", rows: SP_MEMBERS },
-  { name: "Extras", rows: EXTRA_CARDIO },
+  { name: "Extras", rows: EXTRA_ROWS },
 ]);
 
 group("Rows that could not be imported");
-ok("breakdown by reason", result.skipped, {
-  gymId: 1,
-  name: 1,
-  contact: 1,
-  fee: 1,
-  expiry: 1,
-});
+ok("breakdown by reason", result.skipped, { gymId: 1, name: 1, fee: 1 });
 ok("repeated M.No named", result.duplicates, ["5 (Duplicate Row)"]);
 
-group("Representative rows");
+group("Rows imported despite a gap");
 const byId = new Map(result.rows.map((r) => [r.gymId, r]));
+ok("no phone counted", result.withoutPhone, 1);
+ok("no due date counted", result.withoutDueDate, 1);
+ok("those rows named", result.datedToday, ["9005 (No Due)"]);
+ok("a member with no phone still imported", byId.get(9002)?.contactNumber, "");
+ok("...and still gets a plan", byId.get(9002)?.planType, "no_cardio");
+ok("no due date sent blank for the server to date", byId.get(9005)?.membershipExpiry, "");
+ok("no name is still rejected", byId.has(9001), false);
+ok("no fee is still rejected", byId.has(9003), false);
+ok("no M.No is still rejected", byId.has(9004), false);
 
+group("Representative rows");
 ok("gymId 7 is hardcore", byId.get(7)?.planType, "no_cardio");
 ok("gymId 8 is cardio", byId.get(8)?.planType, "full");
 ok("gymId 2001 is hardcore", byId.get(2001)?.planType, "no_cardio");

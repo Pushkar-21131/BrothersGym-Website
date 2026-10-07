@@ -26,6 +26,7 @@ import toast from "react-hot-toast";
 import HistoryModal from "./history-modal";
 import { Sheet } from "../sheet";
 import { formatINR, istDateString, addDaysIso } from "@/lib/utils";
+import { hasDialablePhone } from "@/lib/whatsapp";
 
 /**
  * One row as `admin/members/page.tsx` selects it — exported so that page can
@@ -524,12 +525,18 @@ export default function MemberList({
                 <div className="adm-rec-grid">
                   <div>
                     <div className="adm-rec-k">Phone</div>
-                    <a
-                      href={`tel:${m.contactNumber}`}
-                      className="adm-rec-v adm-link"
-                    >
-                      <Phone size={11} /> {m.contactNumber}
-                    </a>
+                    {hasDialablePhone(m.contactNumber) ? (
+                      <a
+                        href={`tel:${m.contactNumber}`}
+                        className="adm-rec-v adm-link"
+                      >
+                        <Phone size={11} /> {m.contactNumber}
+                      </a>
+                    ) : (
+                      <div className="adm-rec-v" style={{ color: "var(--text3)" }}>
+                        Not on file
+                      </div>
+                    )}
                   </div>
                   <div>
                     <div className="adm-rec-k">Due</div>
@@ -625,7 +632,7 @@ export default function MemberList({
                       <td className="adm-td-clip">{m.address || "—"}</td>
                     )}
                     {!hide("parentName") && <td>{m.parentName || "—"}</td>}
-                    <td>{m.contactNumber}</td>
+                    <td>{m.contactNumber || "—"}</td>
                     <td style={{ color: "var(--blue2)" }}>{m.joiningDate}</td>
                     <td>
                       <span

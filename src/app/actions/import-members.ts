@@ -72,17 +72,23 @@ function planTypeOf(value: unknown): MemberPlanType {
     : "offline";
 }
 
-/** Why this row cannot be imported, or null if it can. Mirrors the client's
- *  own check so the preview and the server never disagree about "ready". */
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Why this row cannot be imported, or null if it can. Mirrors the client's own
+ * check so the preview and the server never disagree about "ready".
+ *
+ * A missing phone or due date is deliberately not a reason. The owner's register
+ * has gaps in both and a member with no number is still a member — dropping the
+ * row loses his record entirely. A missing due date is dated today by
+ * toInsertValues, since the column cannot hold "unknown".
+ */
 function invalidReason(row: ImportMemberRow): string | null {
   if (!Number.isFinite(Number(row.gymId)) || Number(row.gymId) <= 0)
     return "no M.No";
   if (!row.name) return "no name";
-  if (!row.contactNumber) return "no phone";
-  if (!row.emergencyContact) return "no emergency contact";
   if (!Number.isFinite(Number(row.feeAmount)) || Number(row.feeAmount) <= 0)
     return "no fee";
-  if (!row.membershipExpiry) return "no due date";
   return null;
 }
 
@@ -91,18 +97,21 @@ function toInsertValues(
   branchId: number,
   today: string
 ): MemberInsert {
+  const rawExpiry = String(row.membershipExpiry ?? "").trim();
   return {
     branchId,
     gymId: Math.floor(Number(row.gymId)),
     name: String(row.name),
     email: row.email || null,
-    contactNumber: String(row.contactNumber),
+    contactNumber: String(row.contactNumber ?? "").trim(),
     address: row.address || null,
     parentName: row.parentName || null,
-    emergencyContact: String(row.emergencyContact),
+    emergencyContact: String(
+      row.emergencyContact || row.contactNumber || "N/A"
+    ),
     feeAmount: Math.floor(Number(row.feeAmount)),
     joiningDate: row.joiningDate || today,
-    membershipExpiry: String(row.membershipExpiry),
+    membershipExpiry: ISO_DATE.test(rawExpiry) ? rawExpiry : today,
     planType: planTypeOf(row.planType),
   };
 }

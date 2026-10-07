@@ -17,6 +17,17 @@ export function buildWhatsAppLink(phone: string, message: string) {
   return `https://wa.me/${num}?text=${encodeURIComponent(message)}`;
 }
 
+/**
+ * Whether there is a number worth opening a chat or dialling.
+ *
+ * An imported member can have no phone. Without this, buildWhatsAppLink("")
+ * yields `wa.me/?text=…`, which opens WhatsApp with no recipient — the message
+ * is never sent and nothing looks wrong — and `tel:` becomes a no-op.
+ */
+export function hasDialablePhone(phone: string | null | undefined): boolean {
+  return (phone ?? "").replace(/\D/g, "").length >= 10;
+}
+
 // ============================================
 // WHATSAPP TEMPLATES (long, expressive, emoji-friendly)
 // ============================================

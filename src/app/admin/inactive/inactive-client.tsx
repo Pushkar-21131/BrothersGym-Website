@@ -17,6 +17,7 @@ import {
   Phone,
 } from "lucide-react";
 import { Sheet } from "../sheet";
+import { hasDialablePhone } from "@/lib/whatsapp";
 
 /**
  * One row as `admin/inactive/page.tsx` selects it — exported so that page can
@@ -249,9 +250,15 @@ export default function InactiveMembersClient({
               <div className="adm-rec-grid">
                 <div>
                   <div className="adm-rec-k">Phone</div>
-                  <a href={`tel:${m.contactNumber}`} className="adm-rec-v adm-link">
-                    <Phone size={11} /> {m.contactNumber}
-                  </a>
+                  {hasDialablePhone(m.contactNumber) ? (
+                    <a href={`tel:${m.contactNumber}`} className="adm-rec-v adm-link">
+                      <Phone size={11} /> {m.contactNumber}
+                    </a>
+                  ) : (
+                    <div className="adm-rec-v" style={{ color: "var(--text3)" }}>
+                      Not on file
+                    </div>
+                  )}
                 </div>
                 <div>
                   <div className="adm-rec-k">Expired</div>
@@ -286,15 +293,17 @@ export default function InactiveMembersClient({
               <div className="adm-rec-foot">
                 {!m.leftGym ? (
                   <>
-                    <a
-                      href={whatsappLink(m)}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="adm-act green"
-                    >
-                      <MessageCircle size={15} />
-                      <span className="adm-act-label">Win Back</span>
-                    </a>
+                    {hasDialablePhone(m.contactNumber) && (
+                      <a
+                        href={whatsappLink(m)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="adm-act green"
+                      >
+                        <MessageCircle size={15} />
+                        <span className="adm-act-label">Win Back</span>
+                      </a>
+                    )}
                     <button
                       type="button"
                       onClick={() => setMarkLeftMember(m)}

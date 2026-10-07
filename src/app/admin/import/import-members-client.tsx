@@ -40,6 +40,9 @@ export default function ImportMembersClient({
   const [mapping, setMapping] = useState<Mapping | null>(null);
   const [skipped, setSkipped] = useState<Record<SkipReason, number> | null>(null);
   const [duplicates, setDuplicates] = useState<string[]>([]);
+  const [withoutPhone, setWithoutPhone] = useState(0);
+  const [withoutDueDate, setWithoutDueDate] = useState(0);
+  const [datedToday, setDatedToday] = useState<string[]>([]);
   const [failures, setFailures] = useState<string[]>([]);
   const [selectedBranchId, setSelectedBranchId] = useState<number | "">(
     currentBranchId || ""
@@ -118,6 +121,9 @@ export default function ImportMembersClient({
       setMapping(result.mapping);
       setSkipped(result.skipped);
       setDuplicates(result.duplicates);
+      setWithoutPhone(result.withoutPhone);
+      setWithoutDueDate(result.withoutDueDate);
+      setDatedToday(result.datedToday);
       setRows(result.rows);
 
       if (result.rows.length === 0) {
@@ -206,6 +212,9 @@ export default function ImportMembersClient({
         setMapping(null);
         setSkipped(null);
         setDuplicates([]);
+        setWithoutPhone(0);
+        setWithoutDueDate(0);
+        setDatedToday([]);
         setFileName("");
       }
     } catch (err: unknown) {
@@ -281,7 +290,7 @@ export default function ImportMembersClient({
               Required
             </div>
             <p className="adm-note-text" style={{ marginTop: 0 }}>
-              M.No · Fees · Name · Ph.No · Due Date
+              M.No · Fees · Name
             </p>
           </div>
           <div className="adm-field">
@@ -289,9 +298,15 @@ export default function ImportMembersClient({
               Optional
             </div>
             <p className="adm-note-text" style={{ marginTop: 0 }}>
-              Address · Father Name · Joining Date · Email · Emergency Contact
+              Phone · Due Date · Address · Father Name · Joining Date · Email ·
+              Emergency Contact
             </p>
           </div>
+          <p className="adm-hint">
+            A row with no phone or no due date is still imported, and counted
+            below so you know which ones to fill in. Blank due dates are dated
+            today.
+          </p>
           <p className="adm-hint">
             Column names are matched, not the order — including spellings like
             &ldquo;Mobile No&rdquo;, &ldquo;S/O&rdquo;, &ldquo;Valid Upto&rdquo; or
@@ -407,6 +422,41 @@ export default function ImportMembersClient({
             <p className="adm-hint" style={{ marginBottom: 0 }}>
               The same M.No appears more than once, so only the first was kept.
               Two different members would otherwise be merged into one.
+            </p>
+          </div>
+        </section>
+      )}
+
+      {withoutPhone > 0 && (
+        <section className="adm-card adm-note" style={{ marginTop: 12 }}>
+          <Info size={17} style={{ flex: "0 0 auto", color: "var(--blue2)" }} />
+          <div>
+            <p className="adm-note-title">
+              {withoutPhone} with no phone number
+            </p>
+            <p className="adm-note-text">
+              They will still be imported. You just can&apos;t WhatsApp or call
+              them until a number is added.
+            </p>
+          </div>
+        </section>
+      )}
+
+      {withoutDueDate > 0 && (
+        <section className="adm-card adm-note danger" style={{ marginTop: 12 }}>
+          <AlertCircle size={17} style={{ flex: "0 0 auto", color: "var(--red2)" }} />
+          <div style={{ minWidth: 0 }}>
+            <p className="adm-note-title">
+              {withoutDueDate} with no due date — dated today
+            </p>
+            <p className="adm-note-text" style={{ wordBreak: "break-word" }}>
+              {datedToday.join(" · ")}
+              {withoutDueDate > datedToday.length &&
+                ` …and ${withoutDueDate - datedToday.length} more`}
+            </p>
+            <p className="adm-hint" style={{ marginBottom: 0 }}>
+              These will show as expiring today, so they will sit at the top of
+              the reminders list until their real date is filled in.
             </p>
           </div>
         </section>

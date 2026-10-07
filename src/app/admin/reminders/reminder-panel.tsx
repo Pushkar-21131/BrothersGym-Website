@@ -10,6 +10,7 @@ import {
   generateReminderMessage,
   generateSMSMessage,
   getSMSVariables,
+  hasDialablePhone,
   ReminderTemplateId,
 } from "@/lib/whatsapp";
 
@@ -139,6 +140,10 @@ export default function ReminderPanel({
       toast.error("Message is empty.");
       return;
     }
+    if (!hasDialablePhone(member.contactNumber)) {
+      toast.error(`${member.name} has no phone number on file.`);
+      return;
+    }
     const url = buildWhatsAppLink(member.contactNumber, msg);
     window.open(url, "_blank", "noopener,noreferrer");
   }
@@ -149,13 +154,26 @@ export default function ReminderPanel({
       return;
     }
 
+    // Members with no number are excluded up front: buildWhatsAppLink("") opens
+    // WhatsApp with no recipient, so they would each cost a dead tab and send
+    // nothing, with nothing on screen to say the reminder never went.
+    const reachable = list.filter((m) => hasDialablePhone(m.contactNumber));
+    const skipped = list.length - reachable.length;
+
+    if (reachable.length === 0) {
+      toast.error("Nobody in this list has a phone number on file.");
+      return;
+    }
+
     const confirmed = window.confirm(
-      `Open WhatsApp for ${list.length} members?\n\nYour browser may block some popups.`
+      `Open WhatsApp for ${reachable.length} members?` +
+        (skipped ? `\n\n${skipped} skipped — no phone number on file.` : "") +
+        `\n\nYour browser may block some popups.`
     );
     if (!confirmed) return;
 
     let opened = 0;
-    for (const member of list) {
+    for (const member of reachable) {
       const msg = getWhatsAppMessage(member);
       if (!msg.trim()) continue;
       const url = buildWhatsAppLink(member.contactNumber, msg);
@@ -166,7 +184,10 @@ export default function ReminderPanel({
     if (opened === 0) {
       toast.error("Popups blocked. Allow popups or send individually.");
     } else {
-      toast.success(`Opened ${opened} WhatsApp tab(s).`);
+      toast.success(
+        `Opened ${opened} WhatsApp tab(s).` +
+          (skipped ? ` ${skipped} skipped — no number.` : "")
+      );
     }
   }
 
@@ -448,9 +469,13 @@ export default function ReminderPanel({
                   </div>
                 </div>
 
-                <a href={`tel:${m.contactNumber}`} className="adm-link">
-                  {m.contactNumber}
-                </a>
+                {hasDialablePhone(m.contactNumber) ? (
+                  <a href={`tel:${m.contactNumber}`} className="adm-link">
+                    {m.contactNumber}
+                  </a>
+                ) : (
+                  <span style={{ color: "var(--text3)" }}>No number</span>
+                )}
               </div>
 
               <div className="adm-rec-foot">

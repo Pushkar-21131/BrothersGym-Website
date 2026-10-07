@@ -28,6 +28,7 @@ import {
 import toast from "react-hot-toast";
 import HistoryModal from "./history-modal";
 import { Sheet } from "../sheet";
+import type { MemberGender } from "@/db/schema";
 import { formatINR, istDateString, addDaysIso } from "@/lib/utils";
 import {
   buildMemberUpdateMessage,
@@ -63,6 +64,8 @@ export type Member = {
    * an online join stores when its plan carries no cardio flag.
    */
   planType: "full" | "no_cardio" | "offline" | null;
+  /** Null is "not recorded" — the state of every member on file before this column. */
+  gender: MemberGender | null;
   leftGym: boolean;
   createdAt: Date | null;
 };
@@ -103,6 +106,26 @@ const PLAN_FILTERS: { key: PlanFilter; label: string }[] = [
   { key: "offline", label: "Not recorded" },
 ];
 
+/** Like the plan filter: a separate control that composes with the status chips. */
+type GenderFilter = "all" | "male" | "female" | "other" | "none";
+
+const GENDER_FILTERS: { key: GenderFilter; label: string }[] = [
+  { key: "all", label: "All genders" },
+  { key: "male", label: "Male" },
+  { key: "female", label: "Female" },
+  { key: "other", label: "Other" },
+  { key: "none", label: "Not recorded" },
+];
+
+/** "male" → "Male". Rendered in the list and both exports. */
+const GENDER_LABELS: Record<MemberGender, string> = {
+  male: "Male",
+  female: "Female",
+  other: "Other",
+};
+
+const genderLabel = (g: Member["gender"]) => (g ? GENDER_LABELS[g] : "Not recorded");
+
 export default function MemberList({
   initialMembers,
   showBranchColumn,
@@ -117,6 +140,7 @@ export default function MemberList({
   const [searchQuery, setSearchQuery] = useState("");
   const [filter, setFilter] = useState<FilterKey>("all");
   const [planFilter, setPlanFilter] = useState<PlanFilter>("all");
+  const [genderFilter, setGenderFilter] = useState<GenderFilter>("all");
   const [showAddModal, setShowAddModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showRenewModal, setShowRenewModal] = useState<Member | null>(null);
@@ -132,9 +156,11 @@ export default function MemberList({
     expiry: string;
     feeAmount?: number;
   } | null>(null);
-  const [prefill, setPrefill] = useState<{ name: string; phone: string } | null>(
-    null
-  );
+  const [prefill, setPrefill] = useState<{
+    name: string;
+    phone: string;
+    sex?: MemberGender | null;
+  } | null>(null);
   const router = useRouter();
   const searchParams = useSearchParams();
   const fromEnquiryId = Number(searchParams.get("fromEnquiry")) || null;
@@ -154,7 +180,7 @@ export default function MemberList({
     getEnquiryForPrefill(fromEnquiryId).then((r) => {
       if (cancelled || "error" in r) return;
       setEnquiryId(fromEnquiryId);
-      setPrefill({ name: r.name, phone: r.phone });
+      setPrefill({ name: r.name, phone: r.phone, sex: r.sex });
       setShowAddModal(true);
       // Dropped from the URL, so reloading the page — or coming back to it —
       // does not reopen this form for someone who has already been added.
@@ -178,7 +204,7 @@ export default function MemberList({
       // Build headers in OWNER'S order
       const headers = ["Branch", "M.No"];
       if (!hide("feeAmount")) headers.push("Fees");
-      headers.push("Name");
+      headers.push("Name", "Gender");
       if (!hide("address")) headers.push("Address");
       if (!hide("parentName")) headers.push("Father Name");
       headers.push("Ph.No", "Joining Date", "Due Date");
@@ -203,7 +229,7 @@ export default function MemberList({
         const row: (string | number)[] = [m.branchName || "", m.gymId];
         if (!hide("feeAmount"))
           row.push(`₹${m.feeAmount.toLocaleString("en-IN")}`);
-        row.push(m.name);
+        row.push(m.name, genderLabel(m.gender));
         if (!hide("address")) row.push(m.address || "");
         if (!hide("parentName")) row.push(m.parentName || "");
         row.push(m.contactNumber, m.joiningDate, m.membershipExpiry);
@@ -239,7 +265,9 @@ export default function MemberList({
     const doc = new jsPDF();
     doc.text("Brothers Gym - Members List", 14, 15);
 
-    const cols: string[] = ["Branch", "M.No", "Name", "Ph.No", "Joining", "Due Date"];
+    const cols: string[] = [
+      "Branch", "M.No", "Name", "Gender", "Ph.No", "Joining", "Due Date",
+    ];
     if (!hide("feeAmount")) cols.push("Fees");
 
     const rows = initialMembers.map((m) => {
@@ -247,6 +275,7 @@ export default function MemberList({
         m.branchCode || "-",
         m.gymId,
         m.name,
+        genderLabel(m.gender),
         m.contactNumber,
         m.joiningDate,
         m.membershipExpiry,
@@ -420,6 +449,11 @@ export default function MemberList({
       if (filter !== "all" && statusOf(m) !== filter) return false;
       if (planFilter !== "all" && (m.planType ?? "offline") !== planFilter)
         return false;
+      if (genderFilter !== "all") {
+        // "none" is the absence of a value, so it cannot be an equality test.
+        const wanted = genderFilter === "none" ? null : genderFilter;
+        if (m.gender !== wanted) return false;
+      }
       if (!q) return true;
 
       return (
@@ -437,10 +471,10 @@ export default function MemberList({
     // `hide` and `statusOf` are fresh closures each render but read nothing
     // except hiddenFields and the two date strings.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialMembers, searchQuery, filter, planFilter, hiddenFields, today, soon]);
+  }, [initialMembers, searchQuery, filter, planFilter, genderFilter, hiddenFields, today, soon]);
 
   // Column count for the desktop table's empty state
-  let visibleColCount = 6; // M.No, Name, Ph.No, Joining, Due Date, Actions
+  let visibleColCount = 7; // M.No, Name, Gender, Ph.No, Joining, Due Date, Actions
   if (showBranchColumn) visibleColCount += 1;
   if (!hide("feeAmount")) visibleColCount += 1;
   if (!hide("address")) visibleColCount += 1;
@@ -542,6 +576,18 @@ export default function MemberList({
           {PLAN_FILTERS.map((p) => (
             <option key={p.key} value={p.key}>
               {p.label}
+            </option>
+          ))}
+        </select>
+        <select
+          value={genderFilter}
+          onChange={(e) => setGenderFilter(e.target.value as GenderFilter)}
+          className="adm-select adm-plan-filter"
+          aria-label="Filter by gender"
+        >
+          {GENDER_FILTERS.map((g) => (
+            <option key={g.key} value={g.key}>
+              {g.label}
             </option>
           ))}
         </select>
@@ -670,6 +716,15 @@ export default function MemberList({
                     <div className="adm-rec-k">Joined</div>
                     <div className="adm-rec-v">{m.joiningDate}</div>
                   </div>
+                  <div>
+                    <div className="adm-rec-k">Gender</div>
+                    <div
+                      className="adm-rec-v"
+                      style={m.gender ? undefined : { color: "var(--text3)" }}
+                    >
+                      {genderLabel(m.gender)}
+                    </div>
+                  </div>
                   {!hide("parentName") && (
                     <div>
                       <div className="adm-rec-k">Father</div>
@@ -698,6 +753,7 @@ export default function MemberList({
               <th>M.No</th>
               {!hide("feeAmount") && <th>Fees</th>}
               <th>Name</th>
+              <th>Gender</th>
               {!hide("address") && <th>Address</th>}
               {!hide("parentName") && <th>Father Name</th>}
               <th>Ph.No</th>
@@ -739,6 +795,9 @@ export default function MemberList({
                           Left
                         </span>
                       )}
+                    </td>
+                    <td style={m.gender ? undefined : { color: "var(--text3)" }}>
+                      {genderLabel(m.gender)}
                     </td>
                     {!hide("address") && (
                       <td className="adm-td-clip">{m.address || "—"}</td>
@@ -1152,8 +1211,8 @@ function MemberFormModal({
   branches: Branch[];
   hiddenFields: string[];
   today: string;
-  /** Name and phone carried over from an enquiry. New members only. */
-  prefill?: { name: string; phone: string } | null;
+  /** Name, phone and sex carried over from an enquiry. New members only. */
+  prefill?: { name: string; phone: string; sex?: MemberGender | null } | null;
 }) {
   const [showAdditional, setShowAdditional] = useState(false);
   const hide = (field: string) => hiddenFields.includes(field);
@@ -1240,6 +1299,25 @@ function MemberFormModal({
             required
             defaultValue={member?.joiningDate || today}
           />
+          <div className="adm-field">
+            <label className="adm-label" htmlFor="mf-gender">
+              Gender
+            </label>
+            <select
+              id="mf-gender"
+              name="gender"
+              className="adm-select"
+              // Blank means "not recorded", which is the state of everyone
+              // already on file and an answer the owner is allowed to keep
+              // giving. Carried over from the enquiry when there is one.
+              defaultValue={member?.gender ?? prefill?.sex ?? ""}
+            >
+              <option value="">Not recorded</option>
+              <option value="male">Male</option>
+              <option value="female">Female</option>
+              <option value="other">Other</option>
+            </select>
+          </div>
           <Input
             label="Due Date (Expiry)"
             name="membershipExpiry"

@@ -6,6 +6,9 @@ import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { getBranchScope, requireSingleBranch } from "@/lib/branch";
 import { sanitizeError } from "@/lib/errors";
+// The same whitelist the register import uses, so "Male" and "M" mean one thing
+// everywhere a member's gender can be set.
+import { parseSex } from "@/lib/import-parse";
 import { istDateString, addDaysIso, formatINR } from "@/lib/utils";
 import { formatDateIn, type MemberChange } from "@/lib/whatsapp";
 import {
@@ -164,6 +167,7 @@ export async function addMemberAction(formData: FormData) {
           feeAmount: resolvedFee,
           joiningDate: joiningDate || today,
           membershipExpiry,
+          gender: parseSex(formData.get("gender")),
         })
         .returning();
 
@@ -284,6 +288,11 @@ export async function updateMemberAction(
         ...(feeHidden ? {} : { feeAmount }),
         joiningDate,
         membershipExpiry,
+        // Not a hideable field, so it is written unconditionally — the form
+        // always renders it, and the empty option means "clear it". Deliberately
+        // absent from `diffMemberChanges` below: a correction to how a member is
+        // recorded is not something to announce to them over WhatsApp.
+        gender: parseSex(formData.get("gender")),
       })
       .where(eq(members.id, id));
 

@@ -32,6 +32,9 @@ export const branches = pgTable("branches", {
 });
 
 // ========== MEMBERS ==========
+/** Same three values the enquiry list stores as `sex`. */
+export type MemberGender = "male" | "female" | "other";
+
 export const members = pgTable(
   "members",
   {
@@ -52,7 +55,11 @@ export const members = pgTable(
     planType: text("plan_type")
       .$type<"full" | "no_cardio" | "offline">()
       .default("offline"),
-    
+    // Nullable and un-defaulted: the register has no gender for the members
+    // already on file, and "not recorded" is a real answer this column has to
+    // be able to hold. Same three values as `enquiries.sex`.
+    gender: text("gender").$type<MemberGender>(),
+
     // After existing fields, add:
     consentToHealthData: boolean("consent_to_health_data").default(false),
     consentDate: timestamp("consent_date"),
@@ -307,6 +314,9 @@ export const onlineJoins = pgTable(
     // rows created before this column existed have neither.
     parentName: text("parent_name"),
     emergencyContact: text("emergency_contact"),
+    // Optional on the public form, so nullable. Stored on the join row for the
+    // same reason parentName is: the Razorpay webhook never sees the browser.
+    gender: text("gender").$type<MemberGender>(),
     status: text("status")
       // "pending"  — request created, member is on the pay screen / hasn't paid.
       // "claimed"  — member tapped "I've paid" (manual UPI); awaiting owner confirm.

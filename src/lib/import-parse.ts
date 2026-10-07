@@ -78,6 +78,23 @@ export function toInt(v: unknown): number {
   return isNaN(n) ? 0 : Math.floor(n);
 }
 
+export type Sex = "male" | "female" | "other";
+
+/**
+ * "M" / "Male" / "Man" / "F" as the owner's register writes them, for both the
+ * member import and the enquiry one. Lives here rather than in enquiry-parse.ts
+ * because that module already imports from this one, and the member import has to
+ * read the same column the same way.
+ */
+export function parseSex(raw: unknown): Sex | null {
+  const s = String(raw ?? "").trim().toLowerCase();
+  if (!s) return null;
+  if (/^(m|male|man|boy)$/.test(s)) return "male";
+  if (/^(f|female|woman|girl)$/.test(s)) return "female";
+  if (/^(o|other)$/.test(s)) return "other";
+  return null;
+}
+
 // The owner marks cardio clients by writing a C on the M.No — "C123". toInt()
 // used to strip it, and the action then stored every imported row as "offline",
 // so the only cardio signal in his register was discarded on the way in.
@@ -178,7 +195,8 @@ type FieldKey =
   | "joiningDate"
   | "membershipExpiry"
   | "address"
-  | "email";
+  | "email"
+  | "gender";
 
 type FieldSpec = {
   key: FieldKey;
@@ -269,6 +287,15 @@ const FIELDS: FieldSpec[] = [
     aliases: ["name", "membername", "fullname", "customername", "partyname"],
     keywords: ["name"],
     exclude: ["father", "mother", "parent", "guardian", "gym", "trainer"],
+  },
+  {
+    // Optional, like joiningDate — a register with no such column still imports
+    // exactly as it did before. The register writes it as "Sex", hence the
+    // aliases; parseSex() below turns M/F/Male/Woman into one value.
+    key: "gender",
+    label: "Gender",
+    aliases: ["sex", "gender", "mf", "m/f"],
+    keywords: ["sex", "gender"],
   },
   {
     key: "address",
@@ -506,6 +533,7 @@ export function parseSheets(parsed: ParsedSheet[]): ParseResult {
           joiningDate: excelDateToISO(get("joiningDate", cells)),
           membershipExpiry: expiry,
           planType,
+          gender: parseSex(get("gender", cells)),
         });
       }
     }

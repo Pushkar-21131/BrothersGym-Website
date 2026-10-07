@@ -1127,6 +1127,22 @@ export default function JoinPlansClient({
                       required
                     />
                   </div>
+                  {/* Not on a renewal: the renewal path deliberately does not
+                      touch a member's gender, so asking for it would collect an
+                      answer that goes nowhere. */}
+                  {memberType !== "renewal" && (
+                    <div className="form-group">
+                      <label className="form-label">
+                        Gender <span className="optional">(optional)</span>
+                      </label>
+                      <select name="gender" className="form-input" defaultValue="">
+                        <option value="">Prefer not to say</option>
+                        <option value="male">Male</option>
+                        <option value="female">Female</option>
+                        <option value="other">Other</option>
+                      </select>
+                    </div>
+                  )}
                   <div className="form-group">
                     <label className="form-label">
                       Date of Birth <span className="optional">(optional)</span>

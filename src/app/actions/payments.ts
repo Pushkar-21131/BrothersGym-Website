@@ -12,6 +12,8 @@ import { sanitizeError } from "@/lib/errors";
 import { isPlaceholder } from "@/lib/env-placeholder";
 import { verifyTurnstile } from "@/lib/turnstile";
 import { fulfilPaidJoin } from "@/lib/fulfil-join";
+// One definition of what counts as a gender, shared with the member import.
+import { parseSex } from "@/lib/import-parse";
 import { notifyJoinConfirmed } from "@/lib/join-notify";
 import { deriveJoinReference, parseJoinReference } from "@/lib/manual-join";
 import {
@@ -238,6 +240,7 @@ export async function createOnlineJoinOrder(formData: FormData) {
   const address = String(formData.get("address") || "").trim();
   const parentName = String(formData.get("parentName") || "").trim();
   const emergencyContact = String(formData.get("emergencyContact") || "").trim();
+  const gender = parseSex(formData.get("gender"));
   const planCode = String(formData.get("planCode") || "");
   const existingMemberId = formData.get("existingMemberId")
     ? Number(formData.get("existingMemberId"))
@@ -374,6 +377,7 @@ export async function createOnlineJoinOrder(formData: FormData) {
         // no browser to ask.
         parentName,
         emergencyContact,
+        gender,
       })
       .returning();
 
@@ -732,6 +736,7 @@ export async function createJoinLead(formData: FormData) {
   const address = String(formData.get("address") || "").trim();
   const parentName = String(formData.get("parentName") || "").trim();
   const emergencyContact = String(formData.get("emergencyContact") || "").trim();
+  const gender = parseSex(formData.get("gender"));
   const planCode = String(formData.get("planCode") || "");
   const existingMemberId = formData.get("existingMemberId")
     ? Number(formData.get("existingMemberId"))
@@ -849,6 +854,7 @@ export async function createJoinLead(formData: FormData) {
         memberId: verifiedMemberId,
         parentName,
         emergencyContact,
+        gender,
       })
       .returning();
 

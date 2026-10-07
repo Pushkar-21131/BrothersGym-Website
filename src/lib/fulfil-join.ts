@@ -278,6 +278,10 @@ export async function fulfilPaidJoin(params: {
           joiningDate: todayStr,
           membershipExpiry: newExpiryStr,
           planType,
+          // Off the join row only. Unlike parentName there is no `params`
+          // fallback to consider: no join row can predate this column, so
+          // nothing older than it can be carrying a value to recover.
+          gender: join.gender ?? null,
           // Consent tracking (legal compliance)
           consentToHealthData: true,
           consentDate: new Date(),
@@ -498,6 +502,7 @@ export async function fulfilManualJoin(params: {
           joiningDate: todayStr,
           membershipExpiry: newExpiryStr,
           planType,
+          gender: join.gender ?? null,
           consentToHealthData: true,
           consentDate: new Date(),
           consentIpAddress: params.consentIp,

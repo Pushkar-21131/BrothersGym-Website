@@ -2,11 +2,13 @@
 
 import { db } from "@/db";
 import { members } from "@/db/schema";
+import type { MemberGender } from "@/db/schema";
 import { revalidatePath } from "next/cache";
 import { requireSingleBranch } from "@/lib/branch";
 import { sanitizeError } from "@/lib/errors";
 import { assertAuthenticated, assertPermission } from "@/lib/auth-check";
 import { istDateString } from "@/lib/utils";
+import { parseSex } from "@/lib/import-parse";
 import { sql } from "drizzle-orm";
 
 export type MemberPlanType = "full" | "no_cardio" | "offline";
@@ -27,6 +29,8 @@ export type ImportMemberRow = {
    * the client sends "no_cardio" for rows with no C — see the note there.
    */
   planType?: MemberPlanType;
+  /** Optional: a register with no Sex column leaves this null. */
+  gender?: MemberGender | null;
 };
 
 export type ImportOutcome =
@@ -118,6 +122,9 @@ function toInsertValues(
     joiningDate: ISO_DATE.test(rawJoining) ? rawJoining : today,
     membershipExpiry: ISO_DATE.test(rawExpiry) ? rawExpiry : today,
     planType: planTypeOf(row.planType),
+    // Re-whitelisted server-side: the browser is what parsed the sheet. Null
+    // rather than a fallback, because "not recorded" is a real answer here.
+    gender: parseSex(row.gender),
   };
 }
 
@@ -157,6 +164,11 @@ async function insertChunk(
           joiningDate: sql`excluded.joining_date`,
           membershipExpiry: sql`excluded.membership_expiry`,
           planType: sql`excluded.plan_type`,
+          // Not `excluded.gender` like every column above it. Those are all
+          // recoverable from the register; a gender is not, so a repair re-import
+          // of a sheet whose Sex column is blank must fill the gaps and leave the
+          // values already on file alone rather than erasing them.
+          gender: sql`coalesce(excluded.gender, ${members.gender})`,
         },
       })
       .returning({ id: members.id });

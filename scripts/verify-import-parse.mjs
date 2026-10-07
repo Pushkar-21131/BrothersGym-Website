@@ -274,6 +274,48 @@ ok("only one row kept", clash.rows.length, 1);
 ok("the first wins", clash.rows[0]?.name, "Plain Row");
 ok("the clash is named", clash.duplicates, ["120 (Cardio Row)"]);
 
+// ===== 4. the Sex column =====
+// The register's own column, which is optional: the sheets above have none and
+// must keep importing. Every spelling the owner uses has to land on one value.
+group("Gender from the register's Sex column");
+const sex = parseSheets([
+  {
+    name: "Sex",
+    grid: [
+      ["", "M.No", "Name", "Sex", "Ph.No", "Due Date", "Fees"],
+      ["", "1", "M One", "M", "9811100001", expiryDate, 500],
+      ["", "2", "F One", "F", "9811100002", expiryDate, 500],
+      ["", "3", "Male One", "Male", "9811100003", expiryDate, 500],
+      ["", "4", "Woman One", "Woman", "9811100004", expiryDate, 500],
+      ["", "5", "Other One", "Other", "9811100005", expiryDate, 500],
+      ["", "6", "Blank One", "", "9811100006", expiryDate, 500],
+      ["", "7", "Title One", "Mr", "9811100007", expiryDate, 500],
+    ],
+  },
+]);
+const sexById = new Map(sex.rows.map((r) => [r.gymId, r]));
+ok('"M"', sexById.get(1)?.gender, "male");
+ok('"F"', sexById.get(2)?.gender, "female");
+ok('"Male"', sexById.get(3)?.gender, "male");
+ok('"Woman"', sexById.get(4)?.gender, "female");
+ok('"Other"', sexById.get(5)?.gender, "other");
+ok("blank cell → not recorded", sexById.get(6)?.gender, null);
+ok('"Mr" (a title, not a gender) → not recorded', sexById.get(7)?.gender, null);
+ok("a blank gender is not a reason to drop the row", sex.rows.length, 7);
+ok(
+  "the column is reported as read",
+  sex.mapping?.matched.find((m) => m.label === "Gender"),
+  { label: "Gender", header: "Sex" }
+);
+
+// A file with no such column at all — the shape every register has been in until
+// now — must be untouched by this.
+ok(
+  "a sheet with no gender column still reads every row",
+  result.rows.every((r) => r.gender === null),
+  true
+);
+
 // ===== summary =====
 console.log(
   `\n${failures === 0 ? "PASS" : "FAIL"} — ${checks - failures}/${checks} checks`

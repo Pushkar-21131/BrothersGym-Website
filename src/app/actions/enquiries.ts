@@ -240,7 +240,9 @@ export async function getEnquiryForPrefill(id: number) {
   const existing = await loadEnquiryInScope(id);
   if (!existing) return { error: "Enquiry not found" };
 
-  return { name: existing.name, phone: existing.phone ?? "" };
+  // Sex comes along as well: it was typed when the person first walked in, and
+  // the Add Member form should not ask for it a second time.
+  return { name: existing.name, phone: existing.phone ?? "", sex: existing.sex };
 }
 
 // ===== IMPORT =====

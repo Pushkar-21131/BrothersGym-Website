@@ -8,9 +8,13 @@
  * 5 December here, and a second parser of our own would eventually disagree.
  */
 
-import { excelDateToISO } from "@/lib/import-parse";
+import { excelDateToISO, parseSex, type Sex } from "@/lib/import-parse";
 
-export type EnquirySex = "male" | "female" | "other";
+// Re-exported rather than redefined: the member import reads the same column out
+// of the same register, so there must be one set of rules, not two.
+export { parseSex };
+
+export type EnquirySex = Sex;
 
 export type ImportEnquiryRow = {
   name: string;
@@ -81,16 +85,6 @@ const FIELDS: FieldSpec[] = [
 const norm = (s: unknown) => String(s ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
-
-/** "M" / "Male" / "F" / "Female" as the register writes them. */
-export function parseSex(raw: unknown): EnquirySex | null {
-  const s = String(raw ?? "").trim().toLowerCase();
-  if (!s) return null;
-  if (/^(m|male|man|boy)$/.test(s)) return "male";
-  if (/^(f|female|woman|girl)$/.test(s)) return "female";
-  if (/^(o|other)$/.test(s)) return "other";
-  return null;
-}
 
 /** Digits only, so a "+91 98765 43210" and a "098765-43210" compare equal. */
 function phoneDigits(raw: unknown) {

@@ -2072,6 +2072,14 @@
   margin-bottom: 14px;
   align-self: flex-start;
 }
+/* Except when it IS in a toolbar — Users, Trainers and Reviews stand it alone,
+   but Enquiries, Members, Equipment and Staff put it on the export row. There
+   the margin only pads the flex line, and the align-self lifts this button off
+   the baseline its neighbours are centred on. */
+.adm-toolbar .adm-desk-only.adm-btn.primary {
+  margin-bottom: 0;
+  align-self: auto;
+}
 
 /* Bulk send buttons on the reminders page. */
 .adm-bulk {

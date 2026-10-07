@@ -42,6 +42,7 @@ export default function ImportMembersClient({
   const [duplicates, setDuplicates] = useState<string[]>([]);
   const [withoutPhone, setWithoutPhone] = useState(0);
   const [withoutDueDate, setWithoutDueDate] = useState(0);
+  const [unreadableDueDate, setUnreadableDueDate] = useState(0);
   const [datedToday, setDatedToday] = useState<string[]>([]);
   const [failures, setFailures] = useState<string[]>([]);
   const [selectedBranchId, setSelectedBranchId] = useState<number | "">(
@@ -123,6 +124,7 @@ export default function ImportMembersClient({
       setDuplicates(result.duplicates);
       setWithoutPhone(result.withoutPhone);
       setWithoutDueDate(result.withoutDueDate);
+      setUnreadableDueDate(result.unreadableDueDate);
       setDatedToday(result.datedToday);
       setRows(result.rows);
 
@@ -449,6 +451,13 @@ export default function ImportMembersClient({
             <p className="adm-note-title">
               {withoutDueDate} with no due date — dated today
             </p>
+            {unreadableDueDate > 0 && (
+              <p className="adm-note-text">
+                {unreadableDueDate} of them have something in the cell that could
+                not be read as a date. The raw text is quoted below, so the
+                format can be checked before anything is stored.
+              </p>
+            )}
             <p className="adm-note-text" style={{ wordBreak: "break-word" }}>
               {datedToday.join(" · ")}
               {withoutDueDate > datedToday.length &&

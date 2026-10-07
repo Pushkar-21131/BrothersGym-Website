@@ -40,7 +40,7 @@ const NR_CARDIO = 300; // every 4th
 const SP_MEMBERS = 300; // second tab, gymId 2001..2300
 const SP_CARDIO = 30; // every 10th
 const EXTRA_CARDIO = 3; // C 8007, 8045C, 8050(C)
-const EXTRA_ROWS = 5; // those three, plus 9002 (no phone) and 9005 (no due date)
+const EXTRA_ROWS = 6; // those three, plus 9002 (no phone), 9005 (no due date), 9006 (unreadable)
 const EXPIRY = "2026-12-31";
 
 const expiryDate = new Date(Date.UTC(2026, 11, 31));
@@ -100,6 +100,10 @@ function buildWorkbook() {
   extras.addRow([9003, "No Fee", "9999900003", expiryDate, 0]); // no fee
   extras.addRow([null, "No Id", "9999900004", expiryDate, 500]); // no M.No
   extras.addRow([9005, "No Due", "9999900005", null, 500]); // no due date
+  // The case that broke production: a due date that is present but unreadable.
+  // It must be told apart from the blank one above, because one is a gap in the
+  // owner's book and the other is a reader that cannot handle his format.
+  extras.addRow([9006, "Unreadable Due", "9999900009", "sometime next year", 500]);
   extras.addRow(["C 8007", "Cardio Space", "9999900006", expiryDate, 700]);
   extras.addRow(["8045C", "Cardio Suffix", "9999900007", expiryDate, 700]);
   extras.addRow(["8050(C)", "Cardio Paren", "9999900008", expiryDate, 700]);
@@ -142,6 +146,19 @@ ok("Date object", excelDateToISO(expiryDate), EXPIRY);
 ok("Excel serial 45000", excelDateToISO(45000), "2023-03-15");
 ok('"31-12-2026"', excelDateToISO("31-12-2026"), "2026-12-31");
 ok('"" (blank)', excelDateToISO(""), "");
+ok("null", excelDateToISO(null), "");
+
+// The shapes that used to reach Postgres and take a whole 250-row statement
+// down with them, or that came back as a confidently wrong day.
+group("Date parsing — the values that used to break the import");
+ok('"45566" (serial stored as text)', excelDateToISO("45566"), "2024-10-01");
+ok('"07-10-26" (two-digit year)', excelDateToISO("07-10-26"), "2026-10-07");
+ok('"01/10/24" (two-digit year)', excelDateToISO("01/10/24"), "2024-10-01");
+ok('"31-12-2026 00:00:00"', excelDateToISO("31-12-2026 00:00:00"), "2026-12-31");
+ok('"07 Oct 2026" (no UTC shift)', excelDateToISO("07 Oct 2026"), "2026-10-07");
+ok('"not-a-date"', excelDateToISO("not-a-date"), "");
+ok('"31-02-2026" (no such day)', excelDateToISO("31-02-2026"), "");
+ok('"2026" (a bare year)', excelDateToISO("2026"), "2026-01-01");
 
 // ===== 2. the whole workbook, through Excel =====
 group("Workbook round-trip");
@@ -201,11 +218,20 @@ ok("repeated M.No named", result.duplicates, ["5 (Duplicate Row)"]);
 group("Rows imported despite a gap");
 const byId = new Map(result.rows.map((r) => [r.gymId, r]));
 ok("no phone counted", result.withoutPhone, 1);
-ok("no due date counted", result.withoutDueDate, 1);
-ok("those rows named", result.datedToday, ["9005 (No Due)"]);
+ok("no due date counted", result.withoutDueDate, 2);
+ok("the unreadable one counted apart from the blank one", result.unreadableDueDate, 1);
+ok("both rows named, the unreadable one quoted first", result.datedToday, [
+  '9006 (Unreadable Due) — "sometime next year"',
+  "9005 (No Due)",
+]);
 ok("a member with no phone still imported", byId.get(9002)?.contactNumber, "");
 ok("...and still gets a plan", byId.get(9002)?.planType, "no_cardio");
 ok("no due date sent blank for the server to date", byId.get(9005)?.membershipExpiry, "");
+ok(
+  "an unreadable due date is sent blank, not passed through",
+  byId.get(9006)?.membershipExpiry,
+  ""
+);
 ok("no name is still rejected", byId.has(9001), false);
 ok("no fee is still rejected", byId.has(9003), false);
 ok("no M.No is still rejected", byId.has(9004), false);

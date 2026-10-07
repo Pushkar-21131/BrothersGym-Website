@@ -98,6 +98,7 @@ function toInsertValues(
   today: string
 ): MemberInsert {
   const rawExpiry = String(row.membershipExpiry ?? "").trim();
+  const rawJoining = String(row.joiningDate ?? "").trim();
   return {
     branchId,
     gymId: Math.floor(Number(row.gymId)),
@@ -110,7 +111,11 @@ function toInsertValues(
       row.emergencyContact || row.contactNumber || "N/A"
     ),
     feeAmount: Math.floor(Number(row.feeAmount)),
-    joiningDate: row.joiningDate || today,
+    // Both dates are gated, not just the expiry. A date column is a `date` in
+    // Postgres and anything else is refused outright, so one unreadable joining
+    // date would have failed the 250 rows sharing its statement — and, through
+    // the fallback below, spent the whole function budget finding out which.
+    joiningDate: ISO_DATE.test(rawJoining) ? rawJoining : today,
     membershipExpiry: ISO_DATE.test(rawExpiry) ? rawExpiry : today,
     planType: planTypeOf(row.planType),
   };
@@ -167,6 +172,45 @@ async function insertChunk(
   // RETURNING yields only the rows actually inserted, so the difference is the
   // ones the unique index turned away.
   return { written: rows.length, skipped: values.length - rows.length };
+}
+
+/**
+ * A failed chunk, halved until the offending rows are on their own.
+ *
+ * One bad row in 250 used to be isolated at 250 round trips — 250 x 78ms is two
+ * seconds, and on a chunk that failed early enough it was most of the 10s budget,
+ * so the retry could be what killed the function rather than the bad row.
+ * Halving finds the same rows in about 2·log₂(n), and since the halves are
+ * independent it costs one round trip per level rather than one per node. A chunk
+ * that fails outright still bottoms out at a statement per row, so this is never
+ * worse than the loop it replaced.
+ */
+async function insertIsolating(
+  chunk: MemberInsert[],
+  updateExisting: boolean,
+  errors: string[]
+): Promise<{ written: number; skipped: number }> {
+  try {
+    return await insertChunk(chunk, updateExisting);
+  } catch (e) {
+    if (chunk.length === 1) {
+      const values = chunk[0];
+      errors.push(
+        `${values.name} (M.No ${values.gymId}): ${sanitizeError(e, "failed")}`
+      );
+      return { written: 0, skipped: 0 };
+    }
+
+    const mid = Math.ceil(chunk.length / 2);
+    const halves = await Promise.all([
+      insertIsolating(chunk.slice(0, mid), updateExisting, errors),
+      insertIsolating(chunk.slice(mid), updateExisting, errors),
+    ]);
+    return {
+      written: halves[0].written + halves[1].written,
+      skipped: halves[0].skipped + halves[1].skipped,
+    };
+  }
 }
 
 export async function importMembersAction(
@@ -232,20 +276,10 @@ export async function importMembersAction(
       skippedExisting += result.skipped;
     } catch {
       // A multi-row INSERT is atomic, so ONE bad row would otherwise take the
-      // other 249 down with it — and per-row reporting is the whole point here.
-      // Re-run just this chunk one row at a time to isolate the offender and
-      // keep everything else. Only a chunk that actually failed pays this.
-      for (const values of chunk) {
-        try {
-          const result = await insertChunk([values], updateExisting);
-          written += result.written;
-          skippedExisting += result.skipped;
-        } catch (rowError) {
-          errors.push(
-            `${values.name} (M.No ${values.gymId}): ${sanitizeError(rowError, "failed")}`
-          );
-        }
-      }
+      // other 249 down with it — and naming that row is the whole point here.
+      const result = await insertIsolating(chunk, updateExisting, errors);
+      written += result.written;
+      skippedExisting += result.skipped;
     }
   }
 

@@ -10,22 +10,46 @@
 import type ExcelJS from "exceljs";
 import type { ImportMemberRow, MemberPlanType } from "@/app/actions/import-members";
 
+const pad = (n: number) => String(n).padStart(2, "0");
+
+/** Excel counts days from 1899-12-30, which is what the 25569 corrects for. */
+function fromSerial(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return "";
+  const utc = new Date(Math.round((n - 25569) * 86400 * 1000));
+  return isNaN(utc.getTime()) ? "" : utc.toISOString().split("T")[0];
+}
+
 export function excelDateToISO(value: unknown): string {
-  if (!value) return "";
-  if (value instanceof Date) return value.toISOString().split("T")[0];
-  if (typeof value === "number") {
-    const utc = new Date(Math.round((value - 25569) * 86400 * 1000));
-    return utc.toISOString().split("T")[0];
+  if (value === null || value === undefined) return "";
+  if (value instanceof Date) {
+    return isNaN(value.getTime()) ? "" : value.toISOString().split("T")[0];
   }
 
+  if (typeof value === "number") return fromSerial(value);
+
   const s = String(value).trim();
+  if (!s) return "";
+
+  // A serial stored as text ("45566") must be read as a serial. Left to
+  // new Date() it is taken for a YEAR and returns "+045565-12-31" — non-empty,
+  // not a date, and rejected by Postgres, which fails the whole 250-row
+  // statement it is in. Five digits and up only: a bare "2026" is likelier to be
+  // the year the owner meant than serial 2026, which is 1905.
+  if (/^\d{5,6}$/.test(s)) return fromSerial(Number(s));
 
   // Day-first, deliberately: a register typed as text in Delhi means 05/12/2026
   // as 5 December, while V8's own parsing would read it as 12 May and return a
-  // confidently wrong date that nothing would flag.
-  const dmy = s.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/);
+  // confidently wrong date that nothing would flag. Two-digit years are included
+  // for the same reason — "07-10-26" previously fell past this and came back as
+  // 9 July, a three-month error. A trailing time is ignored, not fatal.
+  const dmy = s.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})(?:[ T].*)?$/);
   if (dmy) {
-    const [, d, m, y] = dmy.map(Number);
+    const d = Number(dmy[1]);
+    const m = Number(dmy[2]);
+    const y =
+      dmy[3].length === 2
+        ? Number(dmy[3]) + (Number(dmy[3]) < 70 ? 2000 : 1900)
+        : Number(dmy[3]);
     const date = new Date(Date.UTC(y, m - 1, d));
     const valid =
       date.getUTCFullYear() === y &&
@@ -35,10 +59,17 @@ export function excelDateToISO(value: unknown): string {
   }
 
   const d = new Date(s);
-  if (!isNaN(d.getTime())) return d.toISOString().split("T")[0];
-  // Unrecognised: passed through rather than guessed, so the server rejects that
-  // one row by name instead of storing a date nobody can verify.
-  return s;
+  if (!isNaN(d.getTime())) {
+    // Read back from the LOCAL parts, not toISOString(): "07 Oct 2026" lands at
+    // local midnight, so UTC would report the 6th for anyone east of Greenwich.
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  }
+
+  // Unreadable, so empty rather than passed through. The old passthrough sent the
+  // raw string to the insert, where Postgres refused it and took the other 249
+  // rows of the statement down with it. Empty means "not known", which the server
+  // dates today — the same treatment as a blank cell, and it cannot fail a chunk.
+  return "";
 }
 
 export function toInt(v: unknown): number {
@@ -362,6 +393,13 @@ export type ParseResult = {
   withoutPhone: number;
   /** Rows with no readable due date. The server dates these today. */
   withoutDueDate: number;
+  /**
+   * How many of those had something in the cell that could not be read, as
+   * opposed to nothing at all. The two need opposite responses — one is a gap in
+   * the owner's book, the other is our reader failing on his data — so the screen
+   * must not report them as a single number.
+   */
+  unreadableDueDate: number;
   /** The first few of those, named so the owner can correct them. */
   datedToday: string[];
 };
@@ -385,9 +423,11 @@ export function parseSheets(parsed: ParsedSheet[]): ParseResult {
   const skipped: Record<SkipReason, number> = { gymId: 0, name: 0, fee: 0 };
   const seen = new Set<number>();
   const duplicates: string[] = [];
-  const datedToday: string[] = [];
+  const unreadable: string[] = [];
+  const blank: string[] = [];
   let withoutPhone = 0;
   let withoutDueDate = 0;
+  let unreadableDueDate = 0;
   let mapping: Mapping | null = null;
 
   for (const sheet of parsed) {
@@ -420,8 +460,12 @@ export function parseSheets(parsed: ParsedSheet[]): ParseResult {
       const name = String(get("name", cells) || "").trim();
       const fee = toInt(get("feeAmount", cells));
       // A blank cell and an unreadable one both mean "not known"; the server
-      // dates those today.
-      const rawExpiry = excelDateToISO(get("membershipExpiry", cells));
+      // dates those today. The raw text is kept for the report, because when
+      // most of a column fails to read, the shape of what failed is the whole
+      // diagnosis — and it separates "he has not filled this in" from "we could
+      // not read what he filled in", which need opposite responses.
+      const rawExpiryCell = get("membershipExpiry", cells);
+      const rawExpiry = excelDateToISO(rawExpiryCell);
       const expiry = ISO_DATE.test(rawExpiry) ? rawExpiry : "";
 
       if (!parsedId.gymId) skipped.gymId++;
@@ -435,7 +479,14 @@ export function parseSheets(parsed: ParsedSheet[]): ParseResult {
         if (!contact) withoutPhone++;
         if (!expiry) {
           withoutDueDate++;
-          if (datedToday.length < 8) datedToday.push(`${parsedId.gymId} (${name})`);
+          const shown = String(rawExpiryCell ?? "").trim();
+          if (shown) {
+            unreadableDueDate++;
+            if (unreadable.length < 8)
+              unreadable.push(`${parsedId.gymId} (${name}) — "${shown}"`);
+          } else if (blank.length < 8) {
+            blank.push(`${parsedId.gymId} (${name})`);
+          }
         }
 
         // No C on the M.No means Hardcore: the register is a complete split, so
@@ -469,6 +520,9 @@ export function parseSheets(parsed: ParsedSheet[]): ParseResult {
     duplicates,
     withoutPhone,
     withoutDueDate,
-    datedToday,
+    unreadableDueDate,
+    // Unreadable first: those are the samples that need acting on, and the blank
+    // ones would otherwise crowd them out of a list capped at eight.
+    datedToday: [...unreadable, ...blank].slice(0, 8),
   };
 }

@@ -382,6 +382,48 @@ export const onlineJoins = pgTable(
   })
 );
 
+// ========== ENQUIRIES ==========
+// People who asked about joining and haven't decided. The owner's paper
+// "Enquiry List" — S.No, Name, Sex, Date of Inquiry, Phone, Note.
+export const enquiries = pgTable(
+  "enquiries",
+  {
+    id: serial("id").primaryKey(),
+    branchId: integer("branch_id")
+      .references(() => branches.id)
+      .notNull(),
+    name: text("name").notNull(),
+    sex: text("sex").$type<"male" | "female" | "other">(),
+    // Nullable on purpose: a walk-in who left no number is still a lead, and
+    // hasDialablePhone() already covers the blank case at the send button.
+    phone: text("phone"),
+    inquiryDate: date("inquiry_date").notNull().defaultNow(),
+    // The form's NOTE column — usually the days they visited, e.g. "Monday, Thursday".
+    note: text("note"),
+    status: text("status")
+      .$type<"new" | "follow_up" | "joined" | "lost">()
+      .default("new")
+      .notNull(),
+    // What drives the reminder: overdue rows float to the top of the list.
+    followUpDate: date("follow_up_date"),
+    lastContactedAt: timestamp("last_contacted_at"),
+    contactCount: integer("contact_count").default(0).notNull(),
+    convertedMemberId: integer("converted_member_id").references(
+      () => members.id
+    ),
+    createdAt: timestamp("created_at").defaultNow(),
+  },
+  (table) => ({
+    branchStatusIdx: index("enquiries_branch_status_idx").on(
+      table.branchId,
+      table.status
+    ),
+    followUpIdx: index("enquiries_follow_up_date_idx").on(table.followUpDate),
+  })
+);
+
+export type EnquiryStatus = "new" | "follow_up" | "joined" | "lost";
+
 // ========== REVIEWS ==========
 // Reviews are shared across branches (they're for the brand)
 // If you want per-branch reviews later, add branchId here
@@ -482,6 +524,13 @@ export type StaffPermissions = {
     canView?: boolean;
     canSendWhatsApp?: boolean;
     canSendSMS?: boolean;
+  };
+  enquiries?: {
+    canView?: boolean;
+    canAdd?: boolean;
+    canEdit?: boolean;
+    canDelete?: boolean;
+    canSendWhatsApp?: boolean;
   };
   equipment?: {
     canView?: boolean;

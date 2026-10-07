@@ -51,6 +51,18 @@ export const PERMISSION_MODULES: PermissionModule[] = [
     ],
   },
   {
+    key: "enquiries",
+    label: "Enquiries",
+    description: "Track people who enquired but haven't joined yet",
+    actions: [
+      { key: "canView", label: "View enquiry list" },
+      { key: "canAdd", label: "Add enquiries" },
+      { key: "canEdit", label: "Edit enquiries" },
+      { key: "canDelete", label: "Delete enquiries" },
+      { key: "canSendWhatsApp", label: "Send WhatsApp follow-ups" },
+    ],
+  },
+  {
     key: "equipment",
     label: "Equipment",
     description: "Track gym equipment and expenses",
@@ -121,6 +133,13 @@ export const DEFAULT_STAFF_PERMISSIONS: StaffPermissions = {
     canView: true,
     canSendWhatsApp: true,
     canSendSMS: false,
+  },
+  enquiries: {
+    canView: true,
+    canAdd: false,
+    canEdit: false,
+    canDelete: false,
+    canSendWhatsApp: true,
   },
   equipment: {
     canView: true,

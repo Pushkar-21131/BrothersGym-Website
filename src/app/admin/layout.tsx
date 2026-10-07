@@ -15,10 +15,11 @@ import {
   Tag,
   Building2,
   Inbox,
+  ClipboardList,
 } from "lucide-react";
 import { db } from "@/db";
-import { onlineJoins } from "@/db/schema";
-import { and, count, eq, inArray } from "drizzle-orm";
+import { onlineJoins, enquiries } from "@/db/schema";
+import { and, count, eq, inArray, isNotNull, lte } from "drizzle-orm";
 import {
   canManageBrandContent,
   getAllBranches,
@@ -27,6 +28,7 @@ import {
   isSuperAdmin,
 } from "@/lib/branch";
 import { hasPermission, getCurrentUser } from "@/lib/auth-check";
+import { istDateString } from "@/lib/utils";
 import BranchSwitcher from "./branch-switcher";
 import LogoutButton from "./logout-button";
 import AdminShell, { AdmNavLink } from "./admin-shell";
@@ -86,6 +88,8 @@ export default async function AdminLayout({ children }: { children: ReactNode })
   const canSeeMembers = isOwner || (await hasPermission("members", "canView"));
   const canSeeReminders =
     isOwner || (await hasPermission("reminders", "canView"));
+  const canSeeEnquiries =
+    isOwner || (await hasPermission("enquiries", "canView"));
   const canSeeEquipment =
     isOwner || (await hasPermission("equipment", "canView"));
   const canSeeImport = isOwner || (await hasPermission("import", "canView"));
@@ -124,6 +128,31 @@ export default async function AdminLayout({ children }: { children: ReactNode })
       pendingJoinCount = Number(rows[0]?.c ?? 0);
     } catch {
       pendingJoinCount = 0;
+    }
+  }
+
+  // Badge on the Enquiries nav: open enquiries whose follow-up date has come
+  // round. A call list, same as the join badge — not a count of everything.
+  // Wrapped for the same reason: a DB hiccup must not take the shell down.
+  let dueEnquiryCount = 0;
+  if (canSeeEnquiries) {
+    try {
+      const rows = await db
+        .select({ c: count() })
+        .from(enquiries)
+        .where(
+          and(
+            inArray(enquiries.status, ["new", "follow_up"]),
+            isNotNull(enquiries.followUpDate),
+            lte(enquiries.followUpDate, istDateString()),
+            currentBranchId === "all"
+              ? undefined
+              : eq(enquiries.branchId, currentBranchId)
+          )
+        );
+      dueEnquiryCount = Number(rows[0]?.c ?? 0);
+    } catch {
+      dueEnquiryCount = 0;
     }
   }
 
@@ -177,6 +206,15 @@ export default async function AdminLayout({ children }: { children: ReactNode })
             count={pendingJoinCount}
           >
             Join Requests
+          </AdmNavLink>
+        )}
+        {canSeeEnquiries && (
+          <AdmNavLink
+            href="/admin/enquiries"
+            icon={<ClipboardList size={17} />}
+            count={dueEnquiryCount}
+          >
+            Enquiries
           </AdmNavLink>
         )}
         {canSeeMembers && (

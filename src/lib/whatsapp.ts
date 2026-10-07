@@ -108,6 +108,148 @@ Brothers Gym Team 💪`,
 }
 
 // ============================================
+// ENQUIRY FOLLOW-UP TEMPLATES
+// ============================================
+// For people who asked about joining and haven't decided. Every one of these
+// lands in an editable box before sending — the owner sends these personally.
+
+export type EnquiryTemplateId = "gentle" | "join_now" | "hindi";
+
+export function generateEnquiryMessage(
+  templateId: EnquiryTemplateId,
+  data: { name: string }
+) {
+  const templates: Record<EnquiryTemplateId, string> = {
+    gentle: `Hi ${data.name}! 👋
+
+This is Brothers Gym — you'd asked about joining. Just checking in to see if you're still thinking it over.
+
+If you have any questions about the plans or the timings, just reply here. We'd be glad to have you train with us. 💪
+- Brothers Gym Team`,
+
+    join_now: `Hi ${data.name}!
+
+Brothers Gym here, following up on your enquiry.
+
+Are you ready to start your membership? Just reply yes and we'll get you set up. 💪
+- Brothers Gym Team`,
+
+    hindi: `नमस्ते ${data.name} जी 🙏
+
+Brothers Gym की तरफ से। आप जॉइन करने के बारे में पूछने आए थे — क्या आप अभी भी सोच रहे हैं?
+
+कोई भी सवाल हो तो यहीं मैसेज कर दीजिए। हमें आपके साथ ट्रेनिंग करने में खुशी होगी। 💪
+- Brothers Gym Team`,
+  };
+
+  return templates[templateId];
+}
+
+// ============================================
+// MEMBER UPDATE MESSAGE
+// ============================================
+
+/** One field the owner changed, in a form that reads as "old → new". */
+export type MemberChange = {
+  field: string;
+  label: string;
+  from: string;
+  to: string;
+};
+
+/** "2026-11-04" → "4 Nov 2026". UTC, so the calendar day never slips. */
+export function formatDateIn(iso: string) {
+  const [y, m, d] = String(iso ?? "").split("-").map(Number);
+  if (!y || !m || !d) return String(iso ?? "");
+  return new Intl.DateTimeFormat("en-IN", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(new Date(Date.UTC(y, m - 1, d)));
+}
+
+const PLAN_LABELS: Record<string, string> = {
+  full: "Cardio",
+  no_cardio: "Hardcore",
+  offline: "Not recorded",
+};
+
+/**
+ * The WhatsApp message sent after a member's details change, or — with no
+ * changes — a summary of what the gym currently holds for them.
+ *
+ * `changes` empty is not an error: that is the standing "WhatsApp" button on a
+ * member row, which has nothing to announce and just states their details.
+ */
+export function buildMemberUpdateMessage(data: {
+  name: string;
+  gymId: number | string;
+  changes: MemberChange[];
+  expiry: string;
+  feeAmount?: number;
+  planType?: string | null;
+  customNote?: string;
+}) {
+  const fee = data.feeAmount
+    ? new Intl.NumberFormat("en-IN", {
+        style: "currency",
+        currency: "INR",
+        maximumFractionDigits: 0,
+      }).format(data.feeAmount)
+    : "";
+
+  const lines: string[] = [];
+  // Blank is a real state — the member import deliberately accepts a member
+  // with no due date — and it must not reach a member as "valid till **".
+  const expiryText = formatDateIn(data.expiry);
+
+  if (data.changes.length > 0) {
+    lines.push(
+      `Hi ${data.name}!`,
+      "",
+      `We've updated your Brothers Gym membership (ID #${data.gymId}):`,
+      ""
+    );
+    for (const c of data.changes) {
+      lines.push(`• ${c.label}: ${c.from} → ${c.to}`);
+    }
+    lines.push(
+      "",
+      expiryText
+        ? `Your membership is now valid till *${expiryText}*.`
+        : "Your membership details have been updated."
+    );
+  } else {
+    lines.push(
+      `Hi ${data.name}!`,
+      "",
+      `Here are your current Brothers Gym membership details (ID #${data.gymId}):`,
+      "",
+      expiryText
+        ? `• Due Date: *${expiryText}*`
+        : "• Due Date: not recorded yet"
+    );
+    if (fee) lines.push(`• Fees: ${fee}`);
+    if (data.planType) {
+      lines.push(`• Plan: ${PLAN_LABELS[data.planType] ?? data.planType}`);
+    }
+  }
+
+  lines.push(
+    "",
+    "If anything here looks wrong, just reply to this message.",
+    "",
+    "- Brothers Gym Team"
+  );
+
+  const base = lines.join("\n");
+  return data.customNote?.trim()
+    ? `${base}\n\n${data.customNote.trim()}`
+    : base;
+}
+
+// ============================================
 // SMS TEMPLATES (short, DLT-compliant, English-only)
 // ============================================
 // IMPORTANT: These must EXACTLY match your DLT-approved templates.

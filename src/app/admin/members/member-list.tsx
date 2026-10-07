@@ -1,13 +1,14 @@
 "use client";
 
-import { useState, useMemo } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useMemo, useEffect } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   addMemberAction,
   updateMemberAction,
   deleteMemberAction,
   renewMemberAction,
 } from "@/app/actions/members";
+import { getEnquiryForPrefill, markEnquiryStatusAction } from "@/app/actions/enquiries";
 import {
   Plus,
   Download,
@@ -21,12 +22,19 @@ import {
   ChevronUp,
   Phone,
   Users,
+  MessageCircle,
+  Copy,
 } from "lucide-react";
 import toast from "react-hot-toast";
 import HistoryModal from "./history-modal";
 import { Sheet } from "../sheet";
 import { formatINR, istDateString, addDaysIso } from "@/lib/utils";
-import { hasDialablePhone } from "@/lib/whatsapp";
+import {
+  buildMemberUpdateMessage,
+  buildWhatsAppLink,
+  hasDialablePhone,
+  type MemberChange,
+} from "@/lib/whatsapp";
 
 /**
  * One row as `admin/members/page.tsx` selects it — exported so that page can
@@ -115,10 +123,48 @@ export default function MemberList({
   const [editingMember, setEditingMember] = useState<Member | null>(null);
   const [loading, setLoading] = useState(false);
   const [deletingId, setDeletingId] = useState<number | null>(null);
+  // Drives the "send them the update" sheet. Set after an edit or a renewal
+  // that actually changed something, and with no changes at all by the standing
+  // WhatsApp button on a row.
+  const [updatePrompt, setUpdatePrompt] = useState<{
+    member: Member;
+    changes: MemberChange[];
+    expiry: string;
+    feeAmount?: number;
+  } | null>(null);
+  const [prefill, setPrefill] = useState<{ name: string; phone: string } | null>(
+    null
+  );
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const fromEnquiryId = Number(searchParams.get("fromEnquiry")) || null;
+  // Held separately from the URL: the param is stripped as soon as it is read,
+  // and the link back to the enquiry has to survive that.
+  const [enquiryId, setEnquiryId] = useState<number | null>(null);
 
   const hide = (field: string) => hiddenFields.includes(field);
   const needsBranchPick = currentBranchId === null;
+
+  // Arriving from the enquiry list's "Joined" button. The enquiry is only
+  // marked joined once a member is actually saved — see handleAdd.
+  useEffect(() => {
+    if (!fromEnquiryId || !canAdd) return;
+    let cancelled = false;
+
+    getEnquiryForPrefill(fromEnquiryId).then((r) => {
+      if (cancelled || "error" in r) return;
+      setEnquiryId(fromEnquiryId);
+      setPrefill({ name: r.name, phone: r.phone });
+      setShowAddModal(true);
+      // Dropped from the URL, so reloading the page — or coming back to it —
+      // does not reopen this form for someone who has already been added.
+      router.replace("/admin/members");
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [fromEnquiryId, canAdd, router]);
 
   // ===== EXPORT TO EXCEL (Owner's format) =====
   // exceljs is ~1MB parsed, and it is only ever needed once the owner actually
@@ -223,8 +269,24 @@ export default function MemberList({
 
     if (result.error) toast.error(result.error);
     else {
+      // The enquiry that sent us here counts as joined only now that the member
+      // exists, so the link back to them is written here rather than on the
+      // button that started this. A refusal is reported instead of swallowed —
+      // otherwise the enquiry stays on the call list with nothing to explain it.
+      if (enquiryId && "memberId" in result && result.memberId) {
+        const marked = await markEnquiryStatusAction(
+          enquiryId,
+          "joined",
+          result.memberId
+        );
+        if ("error" in marked) {
+          toast.error(`Member added, but the enquiry is still open: ${marked.error}`);
+        }
+      }
       toast.success("Member added successfully!");
       setShowAddModal(false);
+      setPrefill(null);
+      setEnquiryId(null);
       router.refresh();
     }
   }
@@ -234,11 +296,34 @@ export default function MemberList({
     const result = await updateMemberAction(id, formData);
     setLoading(false);
 
-    if (result.error) toast.error(result.error);
+    // Narrowed rather than read optimistically: updateMemberAction returns a
+    // real union, so `changes` does not exist on the error branch.
+    if ("error" in result) toast.error(result.error);
     else {
       toast.success("Member updated successfully!");
+      const member = editingMember;
       setShowEditModal(false);
       setEditingMember(null);
+
+      // Offered only when something actually changed. `changes` is computed on
+      // the server, so a field this account cannot write is never announced.
+      if (member && result.changes.length > 0) {
+        setUpdatePrompt({
+          member: {
+            ...member,
+            contactNumber: String(
+              formData.get("contactNumber") || member.contactNumber
+            ),
+          },
+          changes: result.changes,
+          expiry: String(
+            formData.get("membershipExpiry") || member.membershipExpiry
+          ),
+          feeAmount: hide("feeAmount")
+            ? undefined
+            : Number(formData.get("feeAmount")) || member.feeAmount,
+        });
+      }
       router.refresh();
     }
   }
@@ -280,7 +365,14 @@ export default function MemberList({
     if ("error" in r && r.error) toast.error(r.error);
     else if ("newExpiry" in r) {
       toast.success(`Renewed till ${r.newExpiry}`);
+      const member = showRenewModal;
       setShowRenewModal(null);
+      setUpdatePrompt({
+        member,
+        changes: r.changes,
+        expiry: r.newExpiry,
+        feeAmount: amount,
+      });
       router.refresh();
     }
   }
@@ -379,6 +471,27 @@ export default function MemberList({
       )}
       {canEdit && (
         <button
+          onClick={() =>
+            setUpdatePrompt({
+              member: m,
+              changes: [],
+              expiry: m.membershipExpiry,
+              // Blanked rather than sent when this account cannot see fees,
+              // which is the same value the list itself is rendered from.
+              feeAmount: hide("feeAmount") ? undefined : m.feeAmount,
+            })
+          }
+          className="adm-act"
+          style={{ color: "var(--green2)" }}
+          title="Send their details on WhatsApp"
+          aria-label={`WhatsApp ${m.name}`}
+        >
+          <MessageCircle size={15} />
+          <span className="adm-act-label">WhatsApp</span>
+        </button>
+      )}
+      {canEdit && (
+        <button
           onClick={() => openEditModal(m)}
           className="adm-act icon"
           title="Edit"
@@ -386,8 +499,7 @@ export default function MemberList({
         >
           <Edit size={15} />
         </button>
-      )}
-      {canDelete && (
+      )}      {canDelete && (
         <button
           onClick={() => handleDelete(m.id)}
           disabled={deletingId === m.id}
@@ -676,14 +788,18 @@ export default function MemberList({
       {/* ===== ADD MODAL ===== */}
       {showAddModal && canAdd && (
         <MemberFormModal
-          title="Add New Member"
-          onClose={() => setShowAddModal(false)}
+          title={prefill ? "New Member (from enquiry)" : "Add New Member"}
+          onClose={() => {
+            setShowAddModal(false);
+            setPrefill(null);
+          }}
           onSubmit={handleAdd}
           loading={loading}
           needsBranchPick={needsBranchPick}
           branches={branches}
           hiddenFields={hiddenFields}
           today={today}
+          prefill={prefill}
         />
       )}
 
@@ -806,6 +922,16 @@ export default function MemberList({
           onClose={() => setHistoryMember(null)}
         />
       )}
+
+      {updatePrompt && (
+        <MemberUpdateSheet
+          member={updatePrompt.member}
+          changes={updatePrompt.changes}
+          expiry={updatePrompt.expiry}
+          feeAmount={updatePrompt.feeAmount}
+          onClose={() => setUpdatePrompt(null)}
+        />
+      )}
     </div>
   );
 }
@@ -875,6 +1001,135 @@ function StatusTag({
   return <span className="adm-tag ok">Active</span>;
 }
 
+// ===== SEND UPDATE ON WHATSAPP =====
+/**
+ * Shown after an edit or a renewal that changed something, and by the WhatsApp
+ * button on a row.
+ *
+ * With changes it leads with what changed, old → new, so the owner can check
+ * the message against the numbers before sending. With none it is just a
+ * compose box holding the member's current details.
+ *
+ * Nothing is sent from here. `wa.me` opens the owner's own WhatsApp with this
+ * text in the box — he presses send, and it comes from his number.
+ */
+function MemberUpdateSheet({
+  member,
+  changes,
+  expiry,
+  feeAmount,
+  onClose,
+}: {
+  member: Member;
+  changes: MemberChange[];
+  expiry: string;
+  feeAmount?: number;
+  onClose: () => void;
+}) {
+  const [message, setMessage] = useState(() =>
+    buildMemberUpdateMessage({
+      name: member.name,
+      gymId: member.gymId,
+      changes,
+      expiry,
+      feeAmount,
+    })
+  );
+
+  const dialable = hasDialablePhone(member.contactNumber);
+
+  async function copyMessage() {
+    try {
+      await navigator.clipboard.writeText(message);
+      toast.success("Copied.");
+    } catch {
+      // Clipboard access throws in an insecure context or without permission.
+      // The text is on screen and selectable, so this is not worth an error.
+      toast.error("Could not copy — select the text instead.");
+    }
+  }
+
+  function send() {
+    if (!message.trim()) {
+      toast.error("Message is empty.");
+      return;
+    }
+    if (!dialable) {
+      toast.error(`${member.name} has no phone number on file.`);
+      return;
+    }
+    window.open(
+      buildWhatsAppLink(member.contactNumber, message),
+      "_blank",
+      "noopener,noreferrer"
+    );
+    onClose();
+  }
+
+  return (
+    <Sheet
+      onClose={onClose}
+      title={
+        changes.length > 0 ? `Update: ${member.name}` : `WhatsApp: ${member.name}`
+      }
+    >
+      {changes.length > 0 && (
+        <>
+          <p className="adm-label">What changed</p>
+          <ul className="adm-bullets" style={{ marginBottom: 14 }}>
+            {changes.map((c) => (
+              <li key={c.field}>
+                {c.label}: <strong>{c.from}</strong> → <strong>{c.to}</strong>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+
+      {!dialable && (
+        <p className="adm-hint" style={{ color: "var(--red2)" }}>
+          No phone number on file — add one in Edit before sending.
+        </p>
+      )}
+
+      <div className="adm-field">
+        <label className="adm-label" htmlFor="mu-message">
+          Message
+        </label>
+        <textarea
+          id="mu-message"
+          rows={9}
+          value={message}
+          onChange={(e) => setMessage(e.target.value)}
+          className="adm-textarea"
+        />
+      </div>
+
+      <div style={{ display: "flex", gap: 9, marginTop: 16 }}>
+        <button type="button" onClick={onClose} className="adm-btn" style={{ flex: 1 }}>
+          Skip
+        </button>
+        <button
+          type="button"
+          onClick={copyMessage}
+          className="adm-btn"
+          style={{ flex: 1 }}
+        >
+          <Copy size={15} /> Copy
+        </button>
+        <button
+          type="button"
+          onClick={send}
+          className="adm-btn primary"
+          style={{ flex: 2 }}
+        >
+          <MessageCircle size={15} /> Open WhatsApp
+        </button>
+      </div>
+    </Sheet>
+  );
+}
+
 // ===== MEMBER FORM MODAL (Add + Edit) =====
 function MemberFormModal({
   title,
@@ -886,6 +1141,7 @@ function MemberFormModal({
   branches,
   hiddenFields,
   today,
+  prefill,
 }: {
   title: string;
   onClose: () => void;
@@ -896,6 +1152,8 @@ function MemberFormModal({
   branches: Branch[];
   hiddenFields: string[];
   today: string;
+  /** Name and phone carried over from an enquiry. New members only. */
+  prefill?: { name: string; phone: string } | null;
 }) {
   const [showAdditional, setShowAdditional] = useState(false);
   const hide = (field: string) => hiddenFields.includes(field);
@@ -943,7 +1201,7 @@ function MemberFormModal({
             label="Name"
             name="name"
             required
-            defaultValue={member?.name}
+            defaultValue={member?.name ?? prefill?.name}
             colSpan
           />
           {!hide("address") && (
@@ -972,7 +1230,7 @@ function MemberFormModal({
             name="contactNumber"
             type="tel"
             required
-            defaultValue={member?.contactNumber}
+            defaultValue={member?.contactNumber ?? prefill?.phone}
             placeholder="10-digit mobile"
           />
           <Input

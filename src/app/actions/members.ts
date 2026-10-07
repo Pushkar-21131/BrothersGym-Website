@@ -6,12 +6,75 @@ import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { getBranchScope, requireSingleBranch } from "@/lib/branch";
 import { sanitizeError } from "@/lib/errors";
-import { istDateString, addDaysIso } from "@/lib/utils";
+import { istDateString, addDaysIso, formatINR } from "@/lib/utils";
+import { formatDateIn, type MemberChange } from "@/lib/whatsapp";
 import {
   assertPermission,
   assertAuthenticated,
   getHiddenFields,
 } from "@/lib/auth-check";
+
+/**
+ * What changed, in the terms a member would recognise, for the WhatsApp message
+ * offered after a save.
+ *
+ * Computed here rather than in the browser because a field the owner has hidden
+ * from this account is left out of the SET list — a client-side diff would
+ * announce a change that was never written.
+ */
+function diffMemberChanges(
+  before: {
+    name: string;
+    contactNumber: string;
+    feeAmount: number;
+    membershipExpiry: string;
+  },
+  after: {
+    name: string;
+    contactNumber: string;
+    feeAmount: number;
+    membershipExpiry: string;
+  }
+): MemberChange[] {
+  const changes: MemberChange[] = [];
+
+  if (before.name !== after.name) {
+    changes.push({
+      field: "name",
+      label: "Name",
+      from: before.name,
+      to: after.name,
+    });
+  }
+  if (before.contactNumber !== after.contactNumber) {
+    changes.push({
+      field: "contactNumber",
+      label: "Phone",
+      from: before.contactNumber || "—",
+      to: after.contactNumber || "—",
+    });
+  }
+  if (before.feeAmount !== after.feeAmount) {
+    changes.push({
+      field: "feeAmount",
+      label: "Fees",
+      from: formatINR(before.feeAmount),
+      to: formatINR(after.feeAmount),
+    });
+  }
+  if (before.membershipExpiry !== after.membershipExpiry) {
+    changes.push({
+      field: "membershipExpiry",
+      label: "Due Date",
+      // A blank due date is a real state, not a formatting failure, so it says
+      // so rather than rendering as an empty arrow.
+      from: formatDateIn(before.membershipExpiry) || "not recorded",
+      to: formatDateIn(after.membershipExpiry) || "not recorded",
+    });
+  }
+
+  return changes;
+}
 
 // ===== ADD MEMBER =====
 export async function addMemberAction(formData: FormData) {
@@ -86,7 +149,7 @@ export async function addMemberAction(formData: FormData) {
     // between them left a member row with no payment for the fee that was taken
     // at the desk — the member exists, the money is missing from every revenue
     // total, and nothing reports it.
-    await db.transaction(async (tx) => {
+    const created = await db.transaction(async (tx) => {
       const newMember = await tx
         .insert(members)
         .values({
@@ -115,18 +178,34 @@ export async function addMemberAction(formData: FormData) {
           date: joiningDate || today,
         });
       }
+
+      return newMember[0] ?? null;
     });
 
     revalidatePath("/admin/members");
     revalidatePath("/admin");
-    return { success: true };
+    // The id is returned so an enquiry converted from the enquiry list can be
+    // linked to the member it became.
+    return { success: true, memberId: created?.id };
   } catch (error) {
     return { error: sanitizeError(error, "Failed to add member") };
   }
 }
 
 // ===== UPDATE MEMBER =====
-export async function updateMemberAction(id: number, formData: FormData) {
+/**
+ * `changes` is what feeds the "tell them what changed" WhatsApp sheet. Declared
+ * as a real union — like RenewOutcome below — so the client has to narrow it
+ * instead of reading a property that the error branch does not carry.
+ */
+export type UpdateOutcome =
+  | { error: string }
+  | { success: true; changes: MemberChange[] };
+
+export async function updateMemberAction(
+  id: number,
+  formData: FormData
+): Promise<UpdateOutcome> {
   try {
     const role = await assertAuthenticated();
     if (role !== "owner") {
@@ -213,9 +292,27 @@ export async function updateMemberAction(id: number, formData: FormData) {
     // and revenue reporting. Editing a member only changes the member record;
     // past payments are immutable and are added via renew/add flows.
 
+    // Fed to the "send them the update on WhatsApp" sheet. The fee is compared
+    // against its own old value when it is hidden, so a field this account
+    // cannot write never shows up as a change.
+    const changes = diffMemberChanges(
+      {
+        name: existing[0].name,
+        contactNumber: existing[0].contactNumber,
+        feeAmount: existing[0].feeAmount,
+        membershipExpiry: existing[0].membershipExpiry,
+      },
+      {
+        name,
+        contactNumber,
+        feeAmount: feeHidden ? existing[0].feeAmount : feeAmount,
+        membershipExpiry,
+      }
+    );
+
     revalidatePath("/admin/members");
     revalidatePath("/admin");
-    return { success: true };
+    return { success: true, changes };
   } catch (error) {
     return { error: sanitizeError(error, "Failed to update member") };
   }
@@ -335,7 +432,9 @@ export async function renewMemberAction(
     // serialises against the online/UPI renewal paths in fulfil-join.ts too —
     // they lock the same row. The second caller blocks, then re-reads and sees
     // the first caller's expiry, which is what makes the extension cumulative.
-    type RenewOutcome = { error: string } | { success: true; newExpiry: string };
+    type RenewOutcome =
+      | { error: string }
+      | { success: true; newExpiry: string; changes: MemberChange[] };
 
     const outcome: RenewOutcome = await db.transaction(async (tx) => {
       const existing = await tx
@@ -382,7 +481,24 @@ export async function renewMemberAction(
         method: paymentMethod,
       });
 
-      return { success: true as const, newExpiry };
+      return {
+        success: true as const,
+        newExpiry,
+        changes: diffMemberChanges(
+          {
+            name: member.name,
+            contactNumber: member.contactNumber,
+            feeAmount: member.feeAmount,
+            membershipExpiry: member.membershipExpiry,
+          },
+          {
+            name: member.name,
+            contactNumber: member.contactNumber,
+            feeAmount: amount,
+            membershipExpiry: newExpiry,
+          }
+        ),
+      };
     });
 
     if ("error" in outcome) return outcome;

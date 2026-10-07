@@ -7,6 +7,7 @@
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
+    "verify": "node scripts/verify-import-parse.mjs && node scripts/verify-enquiry-parse.mjs && node scripts/verify-whatsapp-message.mjs",
     "audit:check": "npm audit --audit-level=high",
     "audit:full": "npm audit",
     "db:backup": "node scripts/backup-db.mjs",

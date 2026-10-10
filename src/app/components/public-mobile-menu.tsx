@@ -80,12 +80,14 @@ export default function PublicMobileMenu({
       {open && (
         <>
           <div
-            className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40"
+            className="fixed inset-0 bg-black/40 backdrop-blur-sm z-40"
             style={{ top: "80px" }}
             onClick={() => onOpenChange(false)}
           />
 
-          <div className="fixed left-0 right-0 mx-4 rounded-xl border border-zinc-800 bg-zinc-900 p-3 shadow-2xl z-50 max-h-[calc(100vh-100px)] overflow-y-auto"
+          {/* A dropdown, not a sheet: it hangs off the toggle in the navbar's
+              own px-4 gutter rather than stretching the width of the screen. */}
+          <div className="fixed right-4 w-56 rounded-xl border border-zinc-800 bg-zinc-900 p-3 shadow-2xl z-50 max-h-[calc(100vh-100px)] overflow-y-auto"
             style={{ top: "88px" }}
           >
             {NAV_ITEMS.map((item) => (

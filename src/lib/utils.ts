@@ -14,6 +14,19 @@ export function formatINR(amount: number): string {
 }
 
 /**
+ * A member's number as the owner writes it: a cardio member keeps the register's
+ * C, so M.No 1295 of the cardio tier prints as "C-1295".
+ *
+ * The database holds the number and the tier in two columns — the register holds
+ * them in one — so this spelling exists to make the app and the sheet agree line
+ * for line. It is derived on the way out, never stored: parseGymId() reads
+ * "C-1295" straight back to 1295 plus the cardio flag, so an export re-imports.
+ */
+export function formatGymId(gymId: number, planType: string | null): string {
+  return planType === "full" ? `C-${gymId}` : String(gymId);
+}
+
+/**
  * Calendar dates, in India, as "YYYY-MM-DD".
  *
  * `new Date().toISOString().split("T")[0]` gives the UTC date, not the local

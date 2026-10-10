@@ -36,6 +36,7 @@ export default function ImportMembersClient({
     null
   );
   const [updateExisting, setUpdateExisting] = useState(false);
+  const [skippedNotice, setSkippedNotice] = useState(0);
   const [sheets, setSheets] = useState<SheetReport[]>([]);
   const [mapping, setMapping] = useState<Mapping | null>(null);
   const [skipped, setSkipped] = useState<Record<SkipReason, number> | null>(null);
@@ -55,6 +56,7 @@ export default function ImportMembersClient({
   async function onFile(file: File) {
     setFileName(file.name);
     setFailures([]);
+    setSkippedNotice(0);
 
     if (file.size > 5 * 1024 * 1024) {
       toast.error("File too large. Maximum 5 MB allowed.");
@@ -155,13 +157,18 @@ export default function ImportMembersClient({
       !confirm(
         `Import ${rows.length} members into ${
           branches.find((b) => b.id === branchIdToUse)?.name || "your branch"
-        }?${updateExisting ? "\n\nMembers already in the system WILL be overwritten." : ""}`
+        }?${
+          updateExisting
+            ? "\n\nMembers already in the system WILL be overwritten."
+            : "\n\nMembers already in the system will be SKIPPED — nothing in this file is read for them. To refresh them from this sheet, turn on \"Update existing members\" first."
+        }`
       )
     )
       return;
 
     setLoading(true);
     setFailures([]);
+    setSkippedNotice(0);
 
     let written = 0;
     let skippedExisting = 0;
@@ -207,6 +214,13 @@ export default function ImportMembersClient({
       if (errors.length) {
         setFailures(errors);
         toast.error(`${errors.length} rows could not be imported`);
+      } else if (skippedExisting > 0 && !updateExisting) {
+        // The sheet is deliberately left loaded. This run changed nothing at all
+        // about those rows — the fee, the due date, the plan and the Sex column
+        // in the file were all ignored for them — and the one useful next step
+        // needs the file still in memory: switch the toggle on, press Import
+        // again. Clearing it here is what turned a silent no-op into a dead end.
+        setSkippedNotice(skippedExisting);
       } else {
         // Cleared only on a wholly clean run, so a partial import stays on screen.
         setRows([]);
@@ -300,8 +314,8 @@ export default function ImportMembersClient({
               Optional
             </div>
             <p className="adm-note-text" style={{ marginTop: 0 }}>
-              Phone · Due Date · Address · Father Name · Joining Date · Email ·
-              Emergency Contact
+              Phone · Sex · Due Date · Address · Father Name · Joining Date ·
+              Email · Emergency Contact
             </p>
           </div>
           <p className="adm-hint">
@@ -319,6 +333,13 @@ export default function ImportMembersClient({
             A <strong>C</strong> on the M.No (C123) means that member is marked
             Cardio; everyone else is Hardcore. The split is shown before you
             import.
+          </p>
+          <p className="adm-hint" style={{ marginBottom: 0 }}>
+            A <strong>Sex</strong> column is read as it is written — M, Male, F,
+            Female, Woman — and a <strong>Cardio/Hardcore</strong> column is read
+            as the plan. Both are optional. On a member already on file, Sex
+            fills a blank and never overwrites what is there; the plan, like the
+            fee and the due date, is overwritten.
           </p>
         </div>
       </details>
@@ -386,6 +407,28 @@ export default function ImportMembersClient({
             <p className="adm-note-text">
               {cardioCount} Cardio · {rows.length - cardioCount} Hardcore. Check the
               preview before importing.
+            </p>
+          </div>
+        </section>
+      )}
+
+      {skippedNotice > 0 && (
+        <section className="adm-card adm-note danger" style={{ marginTop: 12 }}>
+          <AlertCircle size={17} style={{ flex: "0 0 auto", color: "var(--red2)" }} />
+          <div style={{ minWidth: 0 }}>
+            <p className="adm-note-title">
+              {skippedNotice} member{skippedNotice === 1 ? "" : "s"} already on file
+              — left exactly as they were
+            </p>
+            <p className="adm-note-text">
+              That M.No is already in this branch, so this file was not read for
+              them at all: not the fee, not the due date, not the plan and not the
+              Sex column. That is what importing only new members means.
+            </p>
+            <p className="adm-hint" style={{ marginBottom: 0 }}>
+              If you have corrected the sheet and want it applied to them, turn on
+              &ldquo;Update existing members&rdquo; below and press Import again —
+              the file is still loaded.
             </p>
           </div>
         </section>
@@ -505,7 +548,9 @@ export default function ImportMembersClient({
               <span className="adm-switch-title">Update existing members</span>
               <span className="adm-switch-sub">
                 Overwrites the fee, due date and plan of any member whose M.No is
-                already in this branch. Leave off to add only new members.
+                already in this branch. Sex fills a blank, and never overwrites.
+                Leave off to add only new members — and to leave every existing
+                one, and everything in this file about them, untouched.
               </span>
             </span>
             <input

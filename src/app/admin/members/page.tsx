@@ -1,6 +1,6 @@
 import { db } from "@/db";
 import { members, branches } from "@/db/schema";
-import { desc, eq, inArray } from "drizzle-orm";
+import { asc, eq, inArray } from "drizzle-orm";
 import { redirect } from "next/navigation";
 import MemberList, { type Member } from "./member-list";
 import { getBranchScope, getAllBranches } from "@/lib/branch";
@@ -63,7 +63,17 @@ export default async function MembersPage() {
         ? eq(members.branchId, scope.branchId)
         : inArray(members.branchId, scope.branchIds)
     )
-    .orderBy(desc(members.createdAt));
+    // Register order — branch, then M.No — not insertion order.
+    //
+    // This was `desc(createdAt)`, which is only ever an order when the rows were
+    // written one at a time. A bulk import sends 250 rows in a single statement
+    // and they all take the same `defaultNow()` to the microsecond, so the list
+    // came back in whatever order the chunks happened to land in: M.Nos shuffled
+    // for no visible reason, and the tie broken by nothing at all. Ordering by
+    // the number the owner looks members up by is the one order he can check
+    // against his own sheet, and (branch_id, gym_id) is the unique index the
+    // table already carries, so it costs no sort.
+    .orderBy(asc(members.branchId), asc(members.gymId));
 
   const [allBranches, rows] = await Promise.all([getAllBranches(), membersQuery]);
 

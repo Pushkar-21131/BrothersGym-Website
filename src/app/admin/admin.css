@@ -798,6 +798,32 @@
   max-width: 46%;
 }
 
+/* The members row carries two more controls than the enquiry one, and with four
+   of them the widths have to be stated rather than worked out. Every select is
+   `width: 100%` from .adm-select, so as flex items the two filters each took the
+   46% cap above and left the search input a slot too narrow to read a typed
+   M.No back in — the one control the owner actually types into.
+
+   Six columns, so each control can be handed a share of the line. On a phone
+   that is the scope beside the box, then the two filters splitting the line
+   below: the box keeps two thirds of the width instead of a fifth, and each
+   select stays as narrow as the words it is showing. */
+.adm-search-row-filters {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  align-items: center;
+}
+.adm-search-row-filters .adm-search {
+  grid-column: span 4;
+}
+.adm-search-row-filters .adm-search-scope {
+  grid-column: span 2;
+}
+.adm-search-row-filters .adm-plan-filter {
+  grid-column: span 3;
+  max-width: none;
+}
+
 .adm-search {
   position: relative;
   margin-bottom: 11px;
@@ -2259,10 +2285,18 @@
     flex-wrap: wrap;
     overflow: visible;
   }
-  .adm-search {
-    margin-left: 0;
-    margin-right: 0;
-    max-width: 430px;
+  /* A mouse has the room for all four controls on one line, and the search box
+     no longer needs two thirds of it: the three selects size to the word each is
+     showing, and the box is capped rather than stretched so the row stays a row
+     of controls instead of a box with two orphans at the far right. */
+  .adm-search-row-filters {
+    grid-template-columns: auto minmax(0, 430px) auto auto;
+    justify-content: start;
+  }
+  .adm-search-row-filters .adm-search,
+  .adm-search-row-filters .adm-search-scope,
+  .adm-search-row-filters .adm-plan-filter {
+    grid-column: auto;
   }
 
   /* The FAB is gone here, so its twin appears. The twin sits high in the

@@ -316,6 +316,54 @@ ok(
   true
 );
 
+// ===== 5. the register's own Cardio/Hardcore column =====
+// The book carries the tier twice — as a C on the M.No and as its own column.
+// Only the C was ever read, so a sheet that spells the tier out arrived as
+// Hardcore. A blank cell must leave the C to decide, and a word like "Hardcore
+// (No Cardio)" must not be read as cardio because it contains the word.
+group("Plan from the register's Cardio/Hardcore column");
+const plan = parseSheets([
+  {
+    name: "Plan",
+    grid: [
+      ["", "M.No", "Name", "Cardio/Hardcore", "Ph.No", "Due Date", "Fees"],
+      ["", "1", "Spelled Out", "CARDIO", "9811100001", expiryDate, 500],
+      ["", "2", "Spelled Hard", "HARDCORE", "9811100002", expiryDate, 500],
+      ["", "3", "Parenthesised", "Hardcore (No Cardio)", "9811100003", expiryDate, 500],
+      ["", "4", "Blank Cell", "", "9811100004", expiryDate, 500],
+      ["", "5", "Lower Case", "cardio", "9811100005", expiryDate, 500],
+      ["", "C6", "Blank Cell, C On The M.No", "", "9811100006", expiryDate, 500],
+      ["", "7", "Nonsense", "?", "9811100007", expiryDate, 500],
+    ],
+  },
+]);
+const planById = new Map(plan.rows.map((r) => [r.gymId, r]));
+ok('"CARDIO" → cardio', planById.get(1)?.planType, "full");
+ok('"HARDCORE" → hardcore', planById.get(2)?.planType, "no_cardio");
+ok(
+  '"Hardcore (No Cardio)" does not read as cardio',
+  planById.get(3)?.planType,
+  "no_cardio"
+);
+ok(
+  "a blank cell leaves the M.No to decide (no C → hardcore)",
+  planById.get(4)?.planType,
+  "no_cardio"
+);
+ok('"cardio" in lower case still reads', planById.get(5)?.planType, "full");
+ok(
+  "a blank cell leaves the M.No to decide (C → cardio)",
+  planById.get(6)?.planType,
+  "full"
+);
+ok('"?" is not a plan, so the M.No decides', planById.get(7)?.planType, "no_cardio");
+ok(
+  "the column is reported as read, not ignored",
+  plan.mapping?.matched.find((m) => m.label === "Cardio/Hardcore"),
+  { label: "Cardio/Hardcore", header: "Cardio/Hardcore" }
+);
+ok("nothing in that sheet is left unread", plan.mapping?.ignored, []);
+
 // ===== summary =====
 console.log(
   `\n${failures === 0 ? "PASS" : "FAIL"} — ${checks - failures}/${checks} checks`

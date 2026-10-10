@@ -45,6 +45,10 @@ export default async function InactivePage() {
       branchId: members.branchId,
       gymId: members.gymId,
       name: members.name,
+      // Read so the M.No can be printed in the register's own spelling
+      // ("C-1295"). Not a hideable field, so it carries none of the risk that
+      // took `email` and `feeAmount` out of this query.
+      planType: members.planType,
       contactNumber: members.contactNumber,
       joiningDate: members.joiningDate,
       membershipExpiry: members.membershipExpiry,

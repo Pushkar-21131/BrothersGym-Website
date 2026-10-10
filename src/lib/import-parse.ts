@@ -117,6 +117,27 @@ export function parseGymId(raw: unknown): { gymId: number; cardio: boolean } {
   return { gymId: plain > 0 ? plain : 0, cardio: false };
 }
 
+/**
+ * The register's own Cardio/Hardcore column, read as a plan.
+ *
+ * The C on the M.No is one way the owner records the tier and this column is the
+ * other, and his book carries both. Only the C was ever read, so a sheet that
+ * spells the tier out — and a register whose C column is blank for a stretch —
+ * arrived as Hardcore instead of what it says. Null (not "no_cardio") is the
+ * answer for a blank or unrecognised cell, so the C still decides whenever this
+ * column has nothing to say.
+ */
+export function parsePlanType(raw: unknown): MemberPlanType | null {
+  const s = String(raw ?? "").trim().toLowerCase();
+  if (!s) return null;
+  // "Hardcore" is often written out as "Hardcore (No Cardio)", so the negative
+  // has to be tested before the word inside it.
+  if (s.includes("hard") || s.includes("no cardio") || s.includes("without"))
+    return "no_cardio";
+  if (s.includes("cardio")) return "full";
+  return null;
+}
+
 export function cellValue(cell: ExcelJS.Cell): unknown {
   if (!cell || cell.value === null || cell.value === undefined) return "";
   const v = cell.value;
@@ -196,7 +217,8 @@ type FieldKey =
   | "membershipExpiry"
   | "address"
   | "email"
-  | "gender";
+  | "gender"
+  | "planType";
 
 type FieldSpec = {
   key: FieldKey;
@@ -296,6 +318,15 @@ const FIELDS: FieldSpec[] = [
     label: "Gender",
     aliases: ["sex", "gender", "mf", "m/f"],
     keywords: ["sex", "gender"],
+  },
+  {
+    // Optional, like gender. The register's own tier column, sitting beside the C
+    // on the M.No — see parsePlanType(). A sheet without one imports exactly as
+    // it did before.
+    key: "planType",
+    label: "Cardio/Hardcore",
+    aliases: ["cardiohardcore", "cardio", "hardcore"],
+    keywords: ["cardio", "hardcore"],
   },
   {
     key: "address",
@@ -516,9 +547,12 @@ export function parseSheets(parsed: ParsedSheet[]): ParseResult {
           }
         }
 
-        // No C on the M.No means Hardcore: the register is a complete split, so
-        // reading it that way is reading his data, not inventing a value.
-        const planType: MemberPlanType = parsedId.cardio ? "full" : "no_cardio";
+        // His own tier column when it has something to say, else the C on the
+        // M.No. No C and no column means Hardcore: the register is a complete
+        // split, so reading it that way is reading his data, not inventing one.
+        const planType: MemberPlanType =
+          parsePlanType(get("planType", cells)) ??
+          (parsedId.cardio ? "full" : "no_cardio");
 
         rows.push({
           gymId: parsedId.gymId,

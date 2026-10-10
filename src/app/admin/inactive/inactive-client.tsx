@@ -18,6 +18,8 @@ import {
 } from "lucide-react";
 import { Sheet } from "../sheet";
 import { hasDialablePhone } from "@/lib/whatsapp";
+import { formatGymId } from "@/lib/utils";
+import { memberMatches } from "@/lib/member-search";
 
 /**
  * One row as `admin/inactive/page.tsx` selects it — exported so that page can
@@ -37,6 +39,8 @@ export type Member = {
   branchName: string | null;
   gymId: number;
   name: string;
+  /** "full" is Cardio — the register's C, for the M.No as it is written there. */
+  planType: string | null;
   contactNumber: string;
   joiningDate: string;
   membershipExpiry: string;
@@ -100,13 +104,11 @@ export default function InactiveMembersClient({
 
     if (search.trim()) {
       const q = search.toLowerCase().trim();
-      list = list.filter(
-        (m) =>
-          m.gymId.toString().includes(q) ||
-          m.name.toLowerCase().includes(q) ||
-          m.contactNumber.includes(q) ||
-          (m.branchName && m.branchName.toLowerCase().includes(q))
-      );
+      // The same reader the members list uses, so "1" means M.No 1 here too —
+      // matching every field as a substring used to return every row on file,
+      // since a 1 sits inside almost every phone number. Nothing is hidden on
+      // this page: it selects no hideable column at all.
+      list = list.filter((m) => memberMatches(m, q, "all", () => false));
     }
     return list;
   }, [initialMembers, search, filter]);
@@ -217,7 +219,9 @@ export default function InactiveMembersClient({
                 <div className="adm-rec-ava">{m.name.charAt(0)}</div>
 
                 <div style={{ minWidth: 0, flex: 1 }}>
-                  <div className="adm-rec-id">M.No {m.gymId}</div>
+                  <div className="adm-rec-id">
+                    M.No {formatGymId(m.gymId, m.planType)}
+                  </div>
                   <div className="adm-rec-name">{m.name}</div>
                   <div className="adm-rec-tags">
                     {m.leftGym ? (
@@ -398,7 +402,8 @@ function MarkLeftModal({
     <Sheet onClose={onClose} title="Mark as Left Gym">
       <p className="adm-hint" style={{ marginBottom: 16 }}>
         Marking <strong style={{ color: "var(--text)" }}>{member.name}</strong> (M.No{" "}
-        {member.gymId}) as left. They will no longer receive renewal reminders.
+        {formatGymId(member.gymId, member.planType)}) as left. They will no longer
+        receive renewal reminders.
       </p>
 
       <div className="adm-field">

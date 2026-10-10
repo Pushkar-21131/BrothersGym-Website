@@ -29,7 +29,12 @@ import toast from "react-hot-toast";
 import HistoryModal from "./history-modal";
 import { Sheet } from "../sheet";
 import type { MemberGender } from "@/db/schema";
-import { formatINR, istDateString, addDaysIso } from "@/lib/utils";
+import { formatINR, formatGymId, istDateString, addDaysIso } from "@/lib/utils";
+import {
+  memberMatches,
+  SEARCH_SCOPES,
+  type SearchScope,
+} from "@/lib/member-search";
 import {
   buildMemberUpdateMessage,
   buildWhatsAppLink,
@@ -138,6 +143,7 @@ export default function MemberList({
 }: Props) {
   const [historyMember, setHistoryMember] = useState<Member | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [searchScope, setSearchScope] = useState<SearchScope>("all");
   const [filter, setFilter] = useState<FilterKey>("all");
   const [planFilter, setPlanFilter] = useState<PlanFilter>("all");
   const [genderFilter, setGenderFilter] = useState<GenderFilter>("all");
@@ -224,9 +230,14 @@ export default function MemberList({
       headerRow.alignment = { vertical: "middle", horizontal: "left" };
       headerRow.height = 22;
 
-      // Add data
+      // Add data. The M.No is written back in the register's own spelling —
+      // "C-1295" — so an exported sheet and the book it came from read the same,
+      // and so re-importing this file lands each member on the same row.
       initialMembers.forEach((m) => {
-        const row: (string | number)[] = [m.branchName || "", m.gymId];
+        const row: (string | number)[] = [
+          m.branchName || "",
+          formatGymId(m.gymId, m.planType),
+        ];
         if (!hide("feeAmount"))
           row.push(`₹${m.feeAmount.toLocaleString("en-IN")}`);
         row.push(m.name, genderLabel(m.gender));
@@ -273,7 +284,7 @@ export default function MemberList({
     const rows = initialMembers.map((m) => {
       const row: (string | number)[] = [
         m.branchCode || "-",
-        m.gymId,
+        formatGymId(m.gymId, m.planType),
         m.name,
         genderLabel(m.gender),
         m.contactNumber,
@@ -456,22 +467,12 @@ export default function MemberList({
       }
       if (!q) return true;
 
-      return (
-        m.gymId.toString().includes(q) ||
-        m.name.toLowerCase().includes(q) ||
-        (m.email && !hide("email") && m.email.toLowerCase().includes(q)) ||
-        m.contactNumber.includes(q) ||
-        (m.address && !hide("address") && m.address.toLowerCase().includes(q)) ||
-        (m.parentName &&
-          !hide("parentName") &&
-          m.parentName.toLowerCase().includes(q)) ||
-        (m.branchName && m.branchName.toLowerCase().includes(q))
-      );
+      return memberMatches(m, q, searchScope, hide);
     });
     // `hide` and `statusOf` are fresh closures each render but read nothing
     // except hiddenFields and the two date strings.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialMembers, searchQuery, filter, planFilter, genderFilter, hiddenFields, today, soon]);
+  }, [initialMembers, searchQuery, searchScope, filter, planFilter, genderFilter, hiddenFields, today, soon]);
 
   // Column count for the desktop table's empty state
   let visibleColCount = 7; // M.No, Name, Gender, Ph.No, Joining, Due Date, Actions
@@ -552,10 +553,24 @@ export default function MemberList({
       {/* Search sits above the chips: on a phone the owner is usually looking
           for one person by number, not browsing a filtered list.
 
-          The plan filter shares this row rather than joining the chips below,
-          so it costs no extra line on a phone and — unlike a chip — it narrows
-          the list *alongside* the status filter instead of replacing it. */}
-      <div className="adm-search-row">
+          Four controls, laid out by .adm-search-row: the scope, then the box,
+          then the two filters. The filters are selects rather than chips so they
+          narrow the list *alongside* the status filter instead of replacing it,
+          and the scope is there because one box cannot know whether "1" is an
+          M.No, a name or the first digit of a phone number. */}
+      <div className="adm-search-row adm-search-row-filters">
+        <select
+          value={searchScope}
+          onChange={(e) => setSearchScope(e.target.value as SearchScope)}
+          className="adm-select adm-search-scope"
+          aria-label="What to search"
+        >
+          {SEARCH_SCOPES.map((s) => (
+            <option key={s.key} value={s.key}>
+              {s.label}
+            </option>
+          ))}
+        </select>
         <div className="adm-search">
           <Search size={16} />
           <input
@@ -563,7 +578,9 @@ export default function MemberList({
             inputMode="search"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search M.No, name, phone…"
+            placeholder={
+              SEARCH_SCOPES.find((s) => s.key === searchScope)?.placeholder ?? ""
+            }
             aria-label="Search members"
           />
         </div>
@@ -660,7 +677,9 @@ export default function MemberList({
                   <div className="adm-rec-ava">{m.name.charAt(0)}</div>
 
                   <div style={{ minWidth: 0, flex: 1 }}>
-                    <div className="adm-rec-id">M.No {m.gymId}</div>
+                    <div className="adm-rec-id">
+                      M.No {formatGymId(m.gymId, m.planType)}
+                    </div>
                     <div className="adm-rec-name">{m.name}</div>
                     <div className="adm-rec-tags">
                       <StatusTag
@@ -780,7 +799,7 @@ export default function MemberList({
                       </td>
                     )}
                     <td style={{ fontWeight: 700, color: "var(--text)" }}>
-                      {m.gymId}
+                      {formatGymId(m.gymId, m.planType)}
                     </td>
                     {!hide("feeAmount") && (
                       <td style={{ color: "var(--green2)", fontWeight: 700 }}>

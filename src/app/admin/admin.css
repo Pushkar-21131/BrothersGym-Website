@@ -2322,8 +2322,25 @@
   }
 
   /* Swap cards for the table on the one list long enough to want scanning
-     row by row. */
+     row by row.
+
+     It is the MEMBERS list that swaps, but .adm-cardlist belongs to the
+     enquiries list as well, so this hid that one too — and enquiries has no
+     table to swap to, because .adm-list was the class given the laptop grid.
+     The result was 64 enquiries and an empty page on anything wider than a
+     phone. Gated on the table's presence instead of the page: a list with no
+     table keeps its cards, now in the same multi-column grid as .adm-list. */
   .adm-cardlist {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
+    gap: 12px;
+  }
+  /* The grid's gap does the spacing here; the stacked-card margin would add to
+     it and pull the rows out of line. */
+  .adm-cardlist > .adm-rec + .adm-rec {
+    margin-top: 0;
+  }
+  .adm-pagebody:has(.adm-table-wrap) .adm-cardlist {
     display: none;
   }
   .adm-table-wrap {

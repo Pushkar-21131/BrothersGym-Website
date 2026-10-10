@@ -17,13 +17,20 @@ import {
   logLoginAttempt,
 } from "@/lib/security";
 import { verifyTurnstile } from "@/lib/turnstile";
-import { sendPasswordResetEmail } from "@/app/actions/otp";
+import { sendResetCode } from "@/lib/otp-codes";
 import { validatePassword } from "@/lib/password";
 
 /**
  * Who a reset request belongs to.
  *
- * The owner may not exist in app_users at all — the original install is
+ * OWNER ONLY, and enforced here rather than by which form was submitted. The
+ * caller used to pass a `role` from the form, which made the staff flow a
+ * self-service password reset: anyone holding a staff address could mail
+ * themselves a code and set their own password. Staff passwords are the owner's
+ * to set (Admin → Staff Logins), so there is no staff branch to reach at all —
+ * the role is no longer an input from the client.
+ *
+ * The owner may also not exist in app_users: the original install is
  * authenticated purely by ADMIN_EMAIL/ADMIN_PASSWORD from the environment.
  * Before this existed, a reset for the owner address found no row and silently
  * took the "pretend it worked" enumeration branch, so no email was ever sent.
@@ -32,17 +39,14 @@ type ResetTarget =
   | { kind: "db"; id: number; name: string; recipient: string }
   | { kind: "bootstrap-owner"; name: string; recipient: string };
 
-async function resolveResetTarget(
-  email: string,
-  role: "owner" | "staff"
-): Promise<ResetTarget | null> {
+async function resolveResetTarget(email: string): Promise<ResetTarget | null> {
   const users = await db
     .select()
     .from(appUsers)
     .where(
       and(
         eq(appUsers.email, email),
-        eq(appUsers.role, role),
+        eq(appUsers.role, "owner"),
         eq(appUsers.isActive, true)
       )
     )
@@ -60,7 +64,7 @@ async function resolveResetTarget(
   // Env-based owner. The code goes to OWNER_EMAIL (the owner's real inbox),
   // mirroring how login OTPs are routed.
   const adminEmail = (process.env.ADMIN_EMAIL || "").toLowerCase();
-  if (role === "owner" && adminEmail && email === adminEmail) {
+  if (adminEmail && email === adminEmail) {
     const recipient = process.env.OWNER_EMAIL || adminEmail;
     return { kind: "bootstrap-owner", name: "Owner", recipient };
   }
@@ -73,7 +77,6 @@ async function resolveResetTarget(
  */
 export async function requestPasswordReset(formData: FormData) {
   const email = String(formData.get("email") || "").trim().toLowerCase();
-  const role = String(formData.get("role") || "staff") as "owner" | "staff";
   const captchaToken = String(formData.get("captchaToken") || "");
   const { ip } = await getClientInfo();
 
@@ -107,7 +110,7 @@ export async function requestPasswordReset(formData: FormData) {
   }
 
   try {
-    const target = await resolveResetTarget(email, role);
+    const target = await resolveResetTarget(email);
 
     // Generic reply reused below so a capped address is indistinguishable from
     // an unknown one. Saying "too many requests for this address" here would
@@ -121,10 +124,7 @@ export async function requestPasswordReset(formData: FormData) {
     // ⚠️ Security: Always return success even if user doesn't exist
     // (prevents email enumeration attacks)
     if (!target) {
-      console.log(
-        `[Password Reset] Non-existent ${role} email attempted:`,
-        email
-      );
+      console.log("[Password Reset] Non-owner email attempted:", email);
       return GENERIC_SENT;
     }
 
@@ -141,14 +141,14 @@ export async function requestPasswordReset(formData: FormData) {
     }
 
     // Generate a 6-digit OTP from a CSPRNG — see the note on generateOTP in
-    // otp.ts for why Math.random is the wrong source for this value. Bounds are
-    // inclusive/exclusive respectively, so this is 100000–999999.
+    // @/lib/otp-codes for why Math.random is the wrong source for this value.
+    // Bounds are inclusive/exclusive respectively, so this is 100000–999999.
     const otp = randomInt(100000, 1000000).toString();
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
 
     // Invalidate any previous unused OTPs for this email. Unscoped by purpose on
-    // purpose — see the note in otp.ts: at most one code is live per address at a
-    // time, so the newest email is always the only one that works.
+    // purpose — see the note in @/lib/otp-codes: at most one code is live per
+    // address at a time, so the newest email is always the only one that works.
     await db
       .update(loginOtps)
       .set({ used: true })
@@ -169,11 +169,11 @@ export async function requestPasswordReset(formData: FormData) {
     });
 
     // Send email
-    const emailResult = await sendPasswordResetEmail(
-      target.recipient,
+    const emailResult = await sendResetCode({
+      recipient: target.recipient,
       otp,
-      target.name
-    );
+      name: target.name,
+    });
 
     if (emailResult.error) {
       // Deliberately not surfaced to the caller — an attacker must not be able
@@ -211,7 +211,6 @@ export async function resetPasswordWithOTP(formData: FormData) {
   const otp = String(formData.get("otp") || "").trim();
   const newPassword = String(formData.get("newPassword") || "");
   const confirmPassword = String(formData.get("confirmPassword") || "");
-  const role = String(formData.get("role") || "staff") as "owner" | "staff";
   const captchaToken = String(formData.get("captchaToken") || "");
   const { ip } = await getClientInfo();
 
@@ -258,7 +257,7 @@ export async function resetPasswordWithOTP(formData: FormData) {
   }
 
   try {
-    const target = await resolveResetTarget(email, role);
+    const target = await resolveResetTarget(email);
 
     if (!target) {
       await logLoginAttempt({

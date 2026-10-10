@@ -4,11 +4,12 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { db } from "@/db";
 import { appUsers, branches } from "@/db/schema";
-import { eq, and } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import bcrypt from "bcryptjs";
 import {
   checkRateLimit,
   checkAccountRateLimit,
+  checkDailyEmailCap,
   accountRateLimitKey,
   resetRateLimit,
   logLoginAttempt,
@@ -27,8 +28,8 @@ import { sanitizeError } from "@/lib/errors";
 import { sendSecurityAlert } from "@/app/actions/security-alerts";
 import { verifyTurnstile } from "@/lib/turnstile";
 import { validatePassword } from "@/lib/password";
-import { verifyOwnerCredentials } from "@/lib/verify-credentials";
-import { verifyLoginOTP } from "@/app/actions/otp";
+import { verifyOwnerCredentials, verifyStaffCredentials } from "@/lib/verify-credentials";
+import { issueLoginCode, verifyLoginOTP } from "@/lib/otp-codes";
 import {
   createSessionToken,
   sessionCookieOptions,
@@ -38,15 +39,6 @@ import {
 export type AuthRole = "owner" | "staff";
 
 const MAX_ATTEMPTS = 5;
-
-// A real cost-10 bcrypt hash used as a decoy when the submitted email matches
-// no active user. Comparing the password against this (instead of skipping the
-// check) keeps the response time the same whether or not the email exists, so
-// timing can't be used to enumerate accounts. It matches no real password —
-// bcryptjs also short-circuits on a malformed hash, so this must stay a
-// well-formed hash of the same cost as real user hashes (see bcrypt.hash(…, 10)).
-const DUMMY_PASSWORD_HASH =
-  "$2b$10$5IwIbSl6wdqwjjeNK1YI8OItXCbiPQvs/82rRBgkZ0Rw1giKkI4Q2";
 
 /**
  * Set the signed session cookie plus `admin_branch` (the switchable active
@@ -173,114 +165,90 @@ export async function completeOwnerLogin(
   redirect("/admin");
 }
 
-// ===== STAFF LOGIN =====
+// ===== STAFF LOGIN (step 1 of the OTP flow) =====
+/**
+ * Start a staff login: check the password, then email a 6-digit code.
+ *
+ * The staff half of sendLoginOTP, and it shares the `login:` rate-limit buckets
+ * with the owner flow, so attempts against either door count toward one block.
+ * Credentials are verified before anything is emailed, so a wrong password
+ * cannot be used to make the site send mail or to confirm an address exists.
+ */
 export async function staffLoginAction(
-  state: { error?: string } | null,
-  formData: FormData
+  email: string,
+  password: string,
+  deviceInfo: string,
+  captchaToken: string
 ) {
-  const email = String(formData.get("email") || "").trim().toLowerCase();
-  const password = String(formData.get("password") || "");
+  const emailLower = String(email || "").trim().toLowerCase();
   const { ip } = await getClientInfo();
 
   const rateLimit = await checkRateLimit(`login:${ip}`);
   if (!rateLimit.allowed) {
-    await logLoginAttempt({ email, success: false, reason: "rate-limited" });
+    await logLoginAttempt({ email: emailLower, success: false, reason: "rate-limited" });
     return {
       error: `Too many failed attempts. Try again in ${rateLimit.blockMinutesLeft} minutes.`,
     };
   }
 
-  // Same account-keyed bound as the owner login — see checkAccountRateLimit.
+  // Same account-keyed bound as the owner flow — see checkAccountRateLimit.
   // Guarded on a non-empty address for the same reason as there.
-  if (email) {
-    const accountLimit = await checkAccountRateLimit("login", email);
+  if (emailLower) {
+    const accountLimit = await checkAccountRateLimit("login", emailLower);
     if (!accountLimit.allowed) {
-      await logLoginAttempt({ email, success: false, reason: "rate-limited" });
+      await logLoginAttempt({ email: emailLower, success: false, reason: "rate-limited" });
       return {
         error: `Too many failed attempts. Try again in ${accountLimit.blockMinutesLeft} minutes.`,
       };
     }
   }
 
-  // ✅ Verify Cloudflare Turnstile captcha
-  const captchaToken = String(formData.get("captchaToken") || "");
+  // The Turnstile token is single-use, so this is the only step that can redeem
+  // it — step 2 carries no captcha, exactly as on the owner flow.
   const captchaResult = await verifyTurnstile(captchaToken, ip);
   if (!captchaResult.success) {
-    await logLoginAttempt({
-      email,
-      success: false,
-      reason: "captcha-failed",
-    });
+    await logLoginAttempt({ email: emailLower, success: false, reason: "captcha-failed" });
     return { error: captchaResult.error || "Captcha verification failed." };
   }
 
-  if (!email || !password) {
+  if (!emailLower || !password) {
     return { error: "Email and password are required." };
   }
 
-  // One generic reply reused for a missing user AND a wrong password, so the
-  // two are indistinguishable (no account enumeration via the error message).
-  const attemptsLeft = rateLimit.remainingAttempts || 0;
-  const genericWarning =
-    attemptsLeft <= 2 ? ` (${attemptsLeft} attempts left before block)` : "";
-  const invalidCredentials = {
-    error: `Invalid staff email or password.${genericWarning}`,
-  };
+  const check = await verifyStaffCredentials(emailLower, password);
 
-  let user: typeof appUsers.$inferSelect | null = null;
-  try {
-    const users = await db
-      .select()
-      .from(appUsers)
-      .where(and(eq(appUsers.email, email), eq(appUsers.isActive, true)))
-      .limit(1);
-
-    if (users.length > 0) {
-      user = users[0];
-    }
-  } catch (e) {
-    console.error("DB staff login error:", e);
+  if (check.status === "error") {
     return { error: "Server error. Try again." };
   }
 
-  // Always run bcrypt — against the real hash if the user exists, otherwise the
-  // decoy — so a missing/inactive email and a wrong password cost the same time.
-  let passwordOk = false;
-  try {
-    passwordOk = await bcrypt.compare(
-      password,
-      user?.passwordHash ?? DUMMY_PASSWORD_HASH
-    );
-  } catch (e) {
-    console.error("bcrypt error:", e);
-    return { error: "Server error verifying password. Try again." };
-  }
-
-  if (!user || !passwordOk) {
+  if (check.status === "invalid") {
     await logLoginAttempt({
-      email,
+      email: emailLower,
       success: false,
-      reason: user ? "wrong-credentials" : "user-not-found",
+      reason: "wrong-credentials",
     });
-    return invalidCredentials;
+    const attemptsLeft = rateLimit.remainingAttempts || 0;
+    const warning =
+      attemptsLeft <= 2 ? ` (${attemptsLeft} attempts left before block)` : "";
+    return { error: `Invalid staff email or password.${warning}` };
   }
 
-  // Password is now verified, so account-shape problems (wrong login form, no
-  // branch) can be reported specifically: anyone reaching this point already
-  // holds valid credentials, so these messages leak nothing to an attacker,
-  // while a real user finally gets told what's actually wrong.
-  if (user.role !== "staff") {
+  // The password is verified from here on, so the account-shape problems can be
+  // named: whoever is reading this already holds valid credentials, so neither
+  // message leaks anything to an attacker, while a real staff member finally
+  // gets told what is actually wrong.
+  if (check.status === "not-staff") {
     await logLoginAttempt({
-      email,
+      email: emailLower,
       success: false,
       reason: "not-staff-account",
     });
     return { error: "This login is for staff only. Please use the owner login." };
   }
 
-  if (!user.branchId) {
+  if (check.status === "no-branch") {
     await logLoginAttempt({
-      email,
+      email: emailLower,
       success: false,
       reason: "no-branch-assigned",
     });
@@ -289,27 +257,130 @@ export async function staffLoginAction(
     };
   }
 
-  await resetRateLimit(`login:${ip}`);
-  await resetRateLimit(accountRateLimitKey("login", email));
-  await logLoginAttempt({ email, success: true });
-  await setAuthCookies("staff", String(user.id), user.name, user.branchId);
+  // Per-address daily cap — same reasoning as on the owner flow. The IP limit
+  // above is rotatable, this one is not, and the password is known good by now,
+  // so this exists to stop a leaked password being spent on exhausting the
+  // Resend quota rather than to slow down guessing.
+  const cap = await checkDailyEmailCap(emailLower);
+  if (!cap.allowed) {
+    await logLoginAttempt({
+      email: emailLower,
+      success: false,
+      reason: "daily-email-cap",
+    });
+    return {
+      error: `Too many login codes requested for this address. Try again in ${cap.hoursLeft} hours.`,
+    };
+  }
 
+  // A staff member's code goes to their own address. There is no forwarding
+  // address for them the way OWNER_EMAIL forwards for the owner — that exists
+  // so the admin address can stay out of the owner's daily inbox, and staff
+  // sign in with the address the owner created for them in the first place.
+  const sent = await issueLoginCode({
+    email: emailLower,
+    recipient: emailLower,
+    deviceInfo,
+  });
+  if (sent.error) return { error: sent.error };
+
+  return { otpSent: true as const };
+}
+
+// ===== STAFF LOGIN (step 2 of the OTP flow) =====
+/**
+ * Finish the staff login started by staffLoginAction.
+ *
+ * No captcha check: the Turnstile token was single-use and was already redeemed
+ * in step 1. Credentials are re-verified so a valid code on its own is useless
+ * — the code and the password each have to be right in the same request.
+ */
+export async function completeStaffLogin(
+  email: string,
+  password: string,
+  otp: string
+) {
+  const emailLower = String(email || "").trim().toLowerCase();
+  const { ip } = await getClientInfo();
+
+  const rateLimit = await checkRateLimit(`login:${ip}`);
+  if (!rateLimit.allowed) {
+    await logLoginAttempt({ email: emailLower, success: false, reason: "rate-limited" });
+    return {
+      error: `Too many failed attempts. Try again in ${rateLimit.blockMinutesLeft} minutes.`,
+    };
+  }
+
+  if (emailLower) {
+    const accountLimit = await checkAccountRateLimit("login", emailLower);
+    if (!accountLimit.allowed) {
+      await logLoginAttempt({ email: emailLower, success: false, reason: "rate-limited" });
+      return {
+        error: `Too many failed attempts. Try again in ${accountLimit.blockMinutesLeft} minutes.`,
+      };
+    }
+  }
+
+  const check = await verifyStaffCredentials(emailLower, password);
+
+  // not-staff and no-branch collapse into the generic reply here: step 1 already
+  // reported them specifically, so the only way to be in this branch is to have
+  // changed the submitted credentials between the two steps.
+  if (check.status !== "ok") {
+    await logLoginAttempt({
+      email: emailLower,
+      success: false,
+      reason: check.status === "error" ? "server-error" : "wrong-credentials",
+    });
+    return { error: "Invalid staff email or password." };
+  }
+
+  const otpResult = await verifyLoginOTP(emailLower, otp);
+  if (otpResult.error) {
+    await logLoginAttempt({
+      email: emailLower,
+      success: false,
+      reason: "invalid-otp",
+    });
+    return { error: otpResult.error };
+  }
+
+  await resetRateLimit(`login:${ip}`);
+  await resetRateLimit(accountRateLimitKey("login", emailLower));
+  await logLoginAttempt({ email: emailLower, success: true });
+  await setAuthCookies("staff", String(check.id), check.name, check.branchId);
   redirect("/admin/members");
 }
 
 // ===== LOGOUT =====
+/**
+ * Clear every session cookie. Does NOT navigate — the caller does, with a full
+ * page load.
+ *
+ * `set(name, "", { maxAge: 0 })` rather than `delete()`: delete() emits a
+ * Set-Cookie carrying only Path, while the session it is replacing is HttpOnly,
+ * SameSite=lax and — in production — Secure. Writing the clear with the same
+ * attributes means the browser sees one cookie being replaced, not two
+ * differently-marked cookies of the same name.
+ *
+ * Nothing writes `last_activity` any more (the idle timer moved into the signed
+ * token), but browsers from before that change still hold one, and the plaintext
+ * `admin_*` cookies predate the signed session entirely.
+ */
 export async function logoutAction() {
   const cookieStore = await cookies();
-  cookieStore.delete(SESSION_COOKIE);
-  cookieStore.delete("admin_branch");
-  // Nothing writes `last_activity` any more (the idle timer moved into the
-  // signed token), but browsers from before that change still hold one.
-  cookieStore.delete("last_activity");
-  // Remove any legacy plaintext auth cookies left from before the session fix.
-  cookieStore.delete("admin_token");
-  cookieStore.delete("admin_role");
-  cookieStore.delete("admin_name");
-  redirect("/");
+  const gone = { ...sessionCookieOptions(), maxAge: 0 };
+
+  for (const name of [
+    SESSION_COOKIE,
+    "admin_branch",
+    "last_activity",
+    "admin_token",
+    "admin_role",
+    "admin_name",
+  ]) {
+    cookieStore.set(name, "", gone);
+  }
 }
 
 // ===== SWITCH BRANCH =====

@@ -17,8 +17,6 @@ export default function ResetPasswordForm() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const email = searchParams.get("email") || "";
-  const roleParam = searchParams.get("role");
-  const role: "owner" | "staff" = roleParam === "owner" ? "owner" : "staff";
 
   const [otp, setOtp] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -62,7 +60,6 @@ export default function ResetPasswordForm() {
     formData.set("otp", otp);
     formData.set("newPassword", newPassword);
     formData.set("confirmPassword", confirmPassword);
-    formData.set("role", role);
     formData.set("captchaToken", captchaToken);
 
     const result = await resetPasswordWithOTP(formData);
@@ -257,7 +254,7 @@ export default function ResetPasswordForm() {
 
       <div className="mt-6 pt-6 border-t border-zinc-800 text-center space-y-2">
         <Link
-          href={`/forgot-password?role=${role}`}
+          href="/forgot-password"
           className="text-yellow-500 hover:text-yellow-400 text-xs font-medium block"
         >
           Didn&apos;t get the code? Request a new one

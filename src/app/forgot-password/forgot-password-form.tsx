@@ -1,17 +1,14 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { useSearchParams, useRouter } from "next/navigation";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { requestPasswordReset } from "@/app/actions/password-reset";
 import TurnstileWidget from "@/app/components/turnstile-widget";
 import { Mail, ArrowLeft, AlertTriangle, CheckCircle2 } from "lucide-react";
 
 export default function ForgotPasswordForm() {
-  const searchParams = useSearchParams();
   const router = useRouter();
-  const roleParam = searchParams.get("role");
-  const role: "owner" | "staff" = roleParam === "owner" ? "owner" : "staff";
 
   const [email, setEmail] = useState("");
   const [captchaToken, setCaptchaToken] = useState("");
@@ -43,7 +40,6 @@ export default function ForgotPasswordForm() {
 
     const formData = new FormData();
     formData.set("email", email);
-    formData.set("role", role);
     formData.set("captchaToken", captchaToken);
 
     const result = await requestPasswordReset(formData);
@@ -61,9 +57,7 @@ export default function ForgotPasswordForm() {
       setSubmitted(true);
       // Redirect to reset password page after 2 seconds
       redirectTimer.current = setTimeout(() => {
-        router.push(
-          `/reset-password?email=${encodeURIComponent(email)}&role=${role}`
-        );
+        router.push(`/reset-password?email=${encodeURIComponent(email)}`);
       }, 2000);
     }
   }
@@ -80,12 +74,12 @@ export default function ForgotPasswordForm() {
           <Mail size={28} className="text-yellow-500" />
         </div>
         <p className="text-xs font-bold uppercase tracking-[0.35em] text-yellow-500 mb-2">
-          {role === "owner" ? "Owner" : "Staff"} Password Reset
+          Owner Password Reset
         </p>
         <h1 className="text-2xl md:text-3xl font-black">Forgot Password?</h1>
         <p className="text-sm text-zinc-400 mt-3">
-          Enter your registered email and we&apos;ll send you a code to reset your
-          password.
+          Enter your registered owner email and we&apos;ll send you a code to
+          reset your password.
         </p>
       </div>
 
@@ -103,7 +97,7 @@ export default function ForgotPasswordForm() {
         <form onSubmit={handleSubmit} className="space-y-5">
           <div>
             <label htmlFor="reset-email" className="block text-sm font-medium mb-2">
-              {role === "owner" ? "Owner Email" : "Staff Email"}
+              Owner Email
             </label>
             <input
               id="reset-email"
@@ -114,9 +108,7 @@ export default function ForgotPasswordForm() {
               onChange={(e) => setEmail(e.target.value)}
               required
               autoFocus
-              placeholder={
-                role === "owner" ? "owner@gmail.com" : "staff@brothersgym.com"
-              }
+              placeholder="owner@gmail.com"
               className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-4 py-3 focus:outline-none focus:border-yellow-500"
             />
           </div>
@@ -152,6 +144,10 @@ export default function ForgotPasswordForm() {
       )}
 
       <div className="mt-6 pt-6 border-t border-zinc-800 text-center">
+        <p className="text-xs text-zinc-500 mb-4">
+          Staff passwords are set by the gym owner, not from here. Ask the owner
+          if you need yours changed.
+        </p>
         <Link
           href={backLink}
           className="text-yellow-500 hover:text-yellow-400 text-sm font-medium inline-flex items-center gap-1"

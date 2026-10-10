@@ -13,6 +13,12 @@ import { logoutAction } from "@/app/actions/auth";
  * a detached form and logs "Form submission canceled because the form is not
  * connected". Calling the server action directly from a transition has no form
  * to detach, so it works the same in the sidebar and in the menu.
+ *
+ * The `window.location.assign` is not decoration. The action clears the cookie,
+ * but a client-side `router.push` would leave the document — and its router
+ * cache and any in-flight prefetch — alive. A prefetch response landing after
+ * the clear can put the session cookie back, which is exactly how logout used
+ * to fail on the deployed site. A full load discards all of it.
  */
 export default function LogoutButton({
   className,
@@ -30,6 +36,7 @@ export default function LogoutButton({
       onClick={() =>
         startTransition(async () => {
           await logoutAction();
+          window.location.assign("/");
         })
       }
       className={className}

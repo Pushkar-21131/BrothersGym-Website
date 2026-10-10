@@ -12,6 +12,34 @@ export type OwnerIdentity = {
 };
 
 /**
+ * A real cost-10 bcrypt hash used as a decoy when the submitted email matches
+ * no active user. Comparing the password against this (instead of skipping the
+ * check) keeps the response time the same whether or not the email exists, so
+ * timing can't be used to enumerate accounts. It matches no real password —
+ * bcryptjs also short-circuits on a malformed hash, so this must stay a
+ * well-formed hash of the same cost as real user hashes (see bcrypt.hash(…, 10)).
+ */
+const DUMMY_PASSWORD_HASH =
+  "$2b$10$5IwIbSl6wdqwjjeNK1YI8OItXCbiPQvs/82rRBgkZ0Rw1giKkI4Q2";
+
+/**
+ * What checking a staff email + password produced.
+ *
+ * The three failures are separated because, by the time any of them can be
+ * returned, the password has already been verified — so whoever is asking
+ * holds valid credentials and the specific message leaks nothing, while a real
+ * staff member finally gets told what is actually wrong. Anything that fails
+ * BEFORE the password check collapses to "invalid", which is what keeps the
+ * reply for an unknown address and a wrong password identical.
+ */
+export type StaffCredentialCheck =
+  | { status: "ok"; id: number; name: string; branchId: number }
+  | { status: "not-staff" }
+  | { status: "no-branch" }
+  | { status: "invalid" }
+  | { status: "error" };
+
+/**
  * Constant-time comparison of two strings.
  *
  * `a === b` stops at the first differing character, so the time it takes to
@@ -91,4 +119,56 @@ export async function verifyOwnerCredentials(
   }
 
   return null;
+}
+
+/**
+ * Check a staff email + password pair, and report the account shape once the
+ * password is known good.
+ *
+ * The staff counterpart of verifyOwnerCredentials, and in this module for the
+ * same reason: every export of a "use server" file is a publicly callable
+ * server action, and this must only be reachable through the login action that
+ * gates it.
+ *
+ * Deliberately does NOT fall back to ADMIN_EMAIL/ADMIN_PASSWORD the way the
+ * owner check does. Those credentials are the super-admin's; accepting them
+ * here would let the owner sign in through the staff door and get a
+ * branch-scoped session instead of their own.
+ */
+export async function verifyStaffCredentials(
+  email: string,
+  password: string
+): Promise<StaffCredentialCheck> {
+  let user: typeof appUsers.$inferSelect | null = null;
+  try {
+    const users = await db
+      .select()
+      .from(appUsers)
+      .where(and(eq(appUsers.email, email), eq(appUsers.isActive, true)))
+      .limit(1);
+    if (users.length > 0) user = users[0];
+  } catch (e) {
+    console.error("Staff credential lookup failed:", e);
+    return { status: "error" };
+  }
+
+  // Always run bcrypt — against the real hash if the user exists, otherwise the
+  // decoy — so a missing/inactive email and a wrong password cost the same time.
+  let passwordOk = false;
+  try {
+    passwordOk = await bcrypt.compare(
+      password,
+      user?.passwordHash ?? DUMMY_PASSWORD_HASH
+    );
+  } catch (e) {
+    console.error("bcrypt error:", e);
+    return { status: "error" };
+  }
+
+  if (!user || !passwordOk) return { status: "invalid" };
+
+  if (user.role !== "staff") return { status: "not-staff" };
+  if (!user.branchId) return { status: "no-branch" };
+
+  return { status: "ok", id: user.id, name: user.name, branchId: user.branchId };
 }

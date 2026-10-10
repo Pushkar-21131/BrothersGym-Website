@@ -127,7 +127,7 @@ export default function OwnerAccessPage() {
                   Password
                 </label>
                 <Link
-                  href="/forgot-password?role=owner"
+                  href="/forgot-password"
                   className="text-xs text-yellow-500 hover:text-yellow-400 font-medium"
                 >
                   Forgot password?

@@ -17,7 +17,7 @@ const SESSION_TIMEOUT_MS = 3 * 24 * 60 * 60 * 1000; // 3 days of inactivity
 // the actual login form:
 //
 //   OWNER_LOGIN_PATH  →  /owner-login   (owner: password + email OTP)
-//   STAFF_LOGIN_PATH  →  /login         (staff: password only)
+//   STAFF_LOGIN_PATH  →  /login         (staff: password + email OTP)
 //
 // When the env var is SET (production): middleware rewrites the secret path
 // onto the internal route, and blocks any direct hit on the internal route by
@@ -63,13 +63,22 @@ function applySecurityHeaders(response: NextResponse): NextResponse {
 }
 
 function clearSessionCookies(response: NextResponse) {
-  response.cookies.delete(SESSION_COOKIE);
-  response.cookies.delete("admin_branch");
-  response.cookies.delete("last_activity");
-  // Legacy plaintext cookies from before the signed-session migration.
-  response.cookies.delete("admin_token");
-  response.cookies.delete("admin_role");
-  response.cookies.delete("admin_name");
+  // maxAge:0 rather than delete(). delete() emits a Set-Cookie with no Secure,
+  // while the cookie it is replacing carries one in production — so the two do
+  // not match, and the clear is only as reliable as the browser's willingness
+  // to let an unmarked cookie overwrite a marked one.
+  const gone = { ...sessionCookieOptions(), maxAge: 0 };
+  for (const name of [
+    SESSION_COOKIE,
+    "admin_branch",
+    "last_activity",
+    // Legacy plaintext cookies from before the signed-session migration.
+    "admin_token",
+    "admin_role",
+    "admin_name",
+  ]) {
+    response.cookies.set(name, "", gone);
+  }
 }
 
 export async function middleware(request: NextRequest) {
@@ -175,17 +184,45 @@ export async function middleware(request: NextRequest) {
   }
 
   // ===== 6. Slide the session forward on admin activity =====
-  // Re-issue the signed token on every admin request, each with a fresh 3-day
-  // window and a fresh `iat` — which is what section 1 reads. A user who keeps
-  // using the panel never gets logged out; 3 days with no request does.
+  // Re-issue the signed token, with a fresh 3-day window and a fresh `iat` —
+  // which is what section 1 reads. A user who keeps using the panel never gets
+  // logged out; 3 days without opening it does.
   // `session` is the already-verified payload, so this re-signs the same
   // identity — no privilege change.
   //
-  // No `last_activity` cookie is written any more. It was the input to the idle
-  // check and the client could delete it to skip that check; the timestamp now
-  // travels inside the signature instead. clearSessionCookies still deletes the
-  // cookie so browsers holding one from an older session are cleaned up.
-  if (session && pathname.startsWith("/admin")) {
+  // PAID-UP PAGE LOADS ONLY, and that restriction is the whole point.
+  //
+  // Re-issuing on every /admin request meant every background request was a new
+  // session cookie, and the router makes plenty of those: `next/link` prefetches
+  // each visible link, so a dozen RSC requests for /admin/* are in flight the
+  // moment the sidebar paints or the drawer opens on a phone. A response that
+  // landed after the user pressed Logout put the session straight back — logout
+  // looked like it had done nothing. It also made the idle window unexpireable,
+  // since sitting on one page kept re-stamping `iat`.
+  //
+  // The obvious guard is the header Next sets on those requests
+  // (`next-router-prefetch`) and it does NOT work here: it is one of the flight
+  // headers, and in the Node middleware runtime Next deletes all of them from
+  // the request before middleware runs — see the FLIGHT_HEADERS loop in
+  // node_modules/next/dist/server/web/adapter.js. Verified: it is never present.
+  //
+  // What IS visible is the request's shape. A prefetch and a client-side
+  // navigation are both `fetch()` — Sec-Fetch-Dest: empty — so no cookie ever
+  // comes back on one. A real page load is Sec-Fetch-Dest: document. Falling
+  // back to Accept covers browsers that predate Sec-Fetch-*; a navigation
+  // always asks for text/html.
+  //
+  // The cost is that soft navigation no longer slides the window: `iat` is
+  // stamped by page loads. Opening the panel is a page load, which is what a
+  // day's work starts with — but a tab left open for three days of pure
+  // link-clicking will time out, and that is the honest reading of "3 days of
+  // inactivity" rather than a bug.
+  const dest = request.headers.get("sec-fetch-dest");
+  const isPageLoad = dest
+    ? dest === "document"
+    : (request.headers.get("accept") || "").includes("text/html");
+
+  if (session && pathname.startsWith("/admin") && isPageLoad) {
     const response = NextResponse.next();
     const freshToken = await createSessionToken(session);
     response.cookies.set(SESSION_COOKIE, freshToken, sessionCookieOptions());

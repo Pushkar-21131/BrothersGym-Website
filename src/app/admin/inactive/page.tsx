@@ -5,7 +5,7 @@ import { getBranchScope, getAllBranches } from "@/lib/branch";
 import InactiveMembersClient, { type Member } from "./inactive-client";
 import { redirect } from "next/navigation";
 import { getVerifiedRole, hasPermission } from "@/lib/auth-check";
-import { istDateString } from "@/lib/utils";
+import { istDateString, requestNow } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
@@ -21,6 +21,8 @@ export default async function InactivePage() {
   
   const scope = await getBranchScope();
   const today = istDateString();
+  // One clock for both renders — a second one in the client flips rows in and out.
+  const now = requestNow();
 
   // Fetch expired + left members for the current scope, alongside the branch
   // list they do not depend on — see the note in admin/members/page.tsx. Both
@@ -89,6 +91,7 @@ export default async function InactivePage() {
       <InactiveMembersClient
         initialMembers={rows}
         showBranchColumn={showBranchColumn}
+        now={now}
       />
     </>
   );

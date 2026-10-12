@@ -62,6 +62,11 @@ export function istDateString(d: Date = new Date()): string {
   return `${get("year")}-${get("month")}-${get("day")}`;
 }
 
+/** This request's instant in ms — see inactive/page.tsx for why it is passed down. */
+export function requestNow(d: Date = new Date()): number {
+  return d.getTime();
+}
+
 /**
  * Add whole days to a "YYYY-MM-DD" date, returning "YYYY-MM-DD".
  *

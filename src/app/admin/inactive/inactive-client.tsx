@@ -58,6 +58,8 @@ export type Member = {
 type Props = {
   initialMembers: Member[];
   showBranchColumn: boolean;
+  /** Server clock in ms — passed in so the SSR pass and hydration cannot disagree. */
+  now: number;
 };
 
 const REASON_LABELS: Record<string, string> = {
@@ -116,6 +118,7 @@ function baseDate(m: Member): string {
 export default function InactiveMembersClient({
   initialMembers,
   showBranchColumn,
+  now,
 }: Props) {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<"expired" | "left" | "won_back" | "all">(
@@ -133,10 +136,6 @@ export default function InactiveMembersClient({
   const [undoBatch, setUndoBatch] = useState<number[] | null>(null);
   const [undoBusy, setUndoBusy] = useState(false);
   const router = useRouter();
-
-  // Read the clock once on mount (lazy initial state) so every row and stat uses
-  // the same reference point and render stays pure.
-  const [now] = useState(() => Date.now());
 
   const suggestDays =
     AGE_STEPS.find((s) => s.key === age)?.days ?? DEFAULT_SUGGEST_DAYS;

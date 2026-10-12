@@ -178,6 +178,9 @@ export async function assertSuperAdmin(): Promise<void> {
  * isSuperAdmin() instead, so check that first.
  */
 export async function isBrandContentBranch(): Promise<boolean> {
+  // A missing session is false, not a throw — the layout asks this mid-logout.
+  if (!(await getCurrentUser())) return false;
+
   const scope = await getBranchScope();
   return (
     scope.type === "single" &&

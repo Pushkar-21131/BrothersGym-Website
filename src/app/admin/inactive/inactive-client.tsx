@@ -6,6 +6,8 @@ import toast from "react-hot-toast";
 import {
   markMemberLeftAction,
   unmarkMemberLeftAction,
+  bulkMarkMembersLeftAction,
+  bulkRestoreMembersAction,
 } from "@/app/actions/members";
 import {
   Search,
@@ -15,6 +17,8 @@ import {
   AlertTriangle,
   Trophy,
   Phone,
+  Undo2,
+  ListChecks,
 } from "lucide-react";
 import { Sheet } from "../sheet";
 import { hasDialablePhone } from "@/lib/whatsapp";
@@ -64,6 +68,51 @@ const REASON_LABELS: Record<string, string> = {
   other: "Other",
 };
 
+type Reason = "shifted" | "not_interested" | "health" | "financial" | "other";
+
+/** Most common first, which is why "Not Interested" leads. */
+const REASON_ORDER: Reason[] = [
+  "not_interested",
+  "shifted",
+  "health",
+  "financial",
+  "other",
+];
+
+const AGE_STEPS = [
+  { key: "7", days: 7, label: "7+ days ago" },
+  { key: "30", days: 30, label: "30+ days ago" },
+  { key: "60", days: 60, label: "60+ days ago" },
+  { key: "90", days: 90, label: "90+ days ago" },
+  { key: "180", days: 180, label: "6+ months ago" },
+  { key: "365", days: 365, label: "1+ year ago" },
+];
+
+/** The age the ⚠ tag has always used. The tag and the filter must not disagree. */
+const DEFAULT_SUGGEST_DAYS = 60;
+
+/**
+ * Whole days between a stored "YYYY-MM-DD" and now.
+ *
+ * Module scope, taking `now` as an argument, so it can be called from a `useMemo`
+ * without becoming a dependency. The date string parses as UTC midnight while
+ * `now` is local, so in IST this floors to 0 for a date of today and 1 for
+ * yesterday — the same arithmetic the page has always used.
+ */
+function daysSince(iso: string, now: number): number {
+  return Math.floor((now - new Date(iso).getTime()) / 86400000);
+}
+
+/**
+ * The date the age filter measures from: the day a left member left, and
+ * otherwise the day their membership ran out. Measuring left rows from
+ * `membershipExpiry` instead would bury the batch you just marked under people
+ * who expired years ago.
+ */
+function baseDate(m: Member): string {
+  return m.leftGym ? m.leftGymDate ?? m.membershipExpiry : m.membershipExpiry;
+}
+
 export default function InactiveMembersClient({
   initialMembers,
   showBranchColumn,
@@ -72,28 +121,35 @@ export default function InactiveMembersClient({
   const [filter, setFilter] = useState<"expired" | "left" | "won_back" | "all">(
     "expired"
   );
+  const [age, setAge] = useState("any");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [selected, setSelected] = useState<Set<number>>(() => new Set());
+  const [bulkMode, setBulkMode] = useState<"mark" | "restore" | null>(null);
   const [markingId, setMarkingId] = useState<number | null>(null);
   const [markLeftMember, setMarkLeftMember] = useState<Member | null>(null);
+  // The ids a bulk mark just changed, so the one tap that undoes it is exact
+  // rather than "filter by today's date and hope".
+  const [undoBatch, setUndoBatch] = useState<number[] | null>(null);
+  const [undoBusy, setUndoBusy] = useState(false);
   const router = useRouter();
 
   // Read the clock once on mount (lazy initial state) so every row and stat uses
   // the same reference point and render stays pure.
   const [now] = useState(() => Date.now());
 
-  function daysExpired(expiry: string): number {
-    return Math.floor((now - new Date(expiry).getTime()) / (1000 * 60 * 60 * 24));
-  }
+  const suggestDays =
+    AGE_STEPS.find((s) => s.key === age)?.days ?? DEFAULT_SUGGEST_DAYS;
 
   const stats = useMemo(() => {
     const expired = initialMembers.filter((m) => !m.leftGym).length;
     const left = initialMembers.filter((m) => m.leftGym).length;
     const wonBack = initialMembers.filter((m) => m.wonBackAt).length;
     const autoSuggest = initialMembers.filter(
-      (m) => !m.leftGym && daysExpired(m.membershipExpiry) > 60
+      (m) => !m.leftGym && daysSince(m.membershipExpiry, now) > suggestDays
     ).length;
     return { expired, left, wonBack, autoSuggest };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialMembers, now]);
+  }, [initialMembers, now, suggestDays]);
 
   const filtered = useMemo(() => {
     let list = initialMembers;
@@ -110,8 +166,51 @@ export default function InactiveMembersClient({
       // this page: it selects no hideable column at all.
       list = list.filter((m) => memberMatches(m, q, "all", () => false));
     }
+
+    // The grace period matters here: a membership that ran out last week can
+    // still be renewed, so "7+ days" is the earliest group worth acting on.
+    if (age === "custom") {
+      // ISO strings compare correctly as strings, so no Date round trip.
+      if (from) list = list.filter((m) => baseDate(m) >= from);
+      if (to) list = list.filter((m) => baseDate(m) <= to);
+    } else if (age !== "any") {
+      const step = AGE_STEPS.find((s) => s.key === age);
+      if (step) list = list.filter((m) => daysSince(baseDate(m), now) >= step.days);
+    }
+
     return list;
-  }, [initialMembers, search, filter]);
+  }, [initialMembers, search, filter, age, from, to, now]);
+
+  // Derived from `filtered`, never from `selected` alone. That is what makes the
+  // counter un-abusable: an id that is no longer on screen cannot be in this
+  // list, so it cannot be sent, however the ticks got there.
+  const picked = useMemo(
+    () => filtered.filter((m) => selected.has(m.id)),
+    [filtered, selected]
+  );
+  const toMark = picked.filter((m) => !m.leftGym);
+  const toRestore = picked.filter((m) => m.leftGym);
+  const allShownPicked = filtered.length > 0 && picked.length === filtered.length;
+
+  // Ticks are cleared by anything that changes what is on screen, so what is
+  // counted is always what is visible. The `picked` derivation above is the
+  // backstop; this is what keeps the number from being merely correct.
+  function resetPick() {
+    setSelected((prev) => (prev.size === 0 ? prev : new Set()));
+  }
+
+  function toggleOne(id: number) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleAll() {
+    setSelected(allShownPicked ? new Set() : new Set(filtered.map((m) => m.id)));
+  }
 
   async function handleUnmark(m: Member) {
     if (!confirm(`Restore "${m.name}" to active members list?`)) return;
@@ -125,9 +224,61 @@ export default function InactiveMembersClient({
     }
   }
 
+  /** Runs whichever bulk action the sheet was opened for. Returns true if the
+   *  sheet should close. */
+  async function runBulk(mode: "mark" | "restore", reason?: Reason, note?: string) {
+    const targets = mode === "mark" ? toMark : toRestore;
+    const ids = targets.map((m) => m.id);
+    if (ids.length === 0) {
+      toast.error("Nothing to do — those members are already in that state");
+      return false;
+    }
+
+    const r =
+      mode === "mark"
+        ? await bulkMarkMembersLeftAction(ids, reason as Reason, note)
+        : await bulkRestoreMembersAction(ids);
+
+    if (!r.success) {
+      toast.error(r.error);
+      return false;
+    }
+
+    // `skipped` is what the server's own filter refused — already in the target
+    // state, or outside this account's branches. Saying so is more honest than
+    // reporting the number that was asked for.
+    const skipped = r.skipped > 0 ? ` · ${r.skipped} skipped` : "";
+    toast.success(
+      mode === "mark"
+        ? `${r.changed} marked as left${skipped}`
+        : `${r.changed} restored to active${skipped}`
+    );
+
+    setSelected(new Set());
+    // Undo is offered for the mark only, and holding the ids we sent is exact.
+    // If any were skipped, restore's own `leftGym = true` guard ignores them.
+    setUndoBatch(mode === "mark" ? ids : null);
+    router.refresh();
+    return true;
+  }
+
+  async function undoLast() {
+    if (!undoBatch) return;
+    const ids = undoBatch;
+    setUndoBatch(null);
+    setUndoBusy(true);
+    const r = await bulkRestoreMembersAction(ids);
+    setUndoBusy(false);
+    if (!r.success) toast.error(r.error);
+    else {
+      toast.success(`${r.changed} restored`);
+      router.refresh();
+    }
+  }
+
   function whatsappLink(m: Member) {
     const phone = m.contactNumber.replace(/\D/g, "").slice(-10);
-    const days = daysExpired(m.membershipExpiry);
+    const days = daysSince(m.membershipExpiry, now);
     const msg = encodeURIComponent(
       `Hi ${m.name}, we noticed your Brothers Gym membership expired ${days} days ago on ${m.membershipExpiry}. ` +
         `We'd love to welcome you back! Renew now to continue your fitness journey. 💪`
@@ -148,7 +299,7 @@ export default function InactiveMembersClient({
         <QStat tone="red" value={stats.expired} label="Expired" />
         <QStat tone="orange" value={stats.left} label="Left Gym" />
         <QStat tone="green" value={stats.wonBack} label="Won Back" />
-        <QStat tone="gold" value={stats.autoSuggest} label="Over 60d" />
+        <QStat tone="gold" value={stats.autoSuggest} label={`Over ${suggestDays}d`} />
       </div>
 
       <div className="adm-search">
@@ -157,7 +308,10 @@ export default function InactiveMembersClient({
           type="search"
           inputMode="search"
           value={search}
-          onChange={(e) => setSearch(e.target.value)}
+          onChange={(e) => {
+            setSearch(e.target.value);
+            resetPick();
+          }}
           placeholder="Search M.No, name, phone…"
           aria-label="Search inactive members"
         />
@@ -170,7 +324,10 @@ export default function InactiveMembersClient({
             type="button"
             role="tab"
             aria-selected={filter === f.key}
-            onClick={() => setFilter(f.key)}
+            onClick={() => {
+              setFilter(f.key);
+              resetPick();
+            }}
             className={`adm-chip${filter === f.key ? " active" : ""}`}
           >
             {f.label} {f.count > 0 && `· ${f.count}`}
@@ -178,21 +335,173 @@ export default function InactiveMembersClient({
         ))}
       </div>
 
-      {/* Long-expired members are the ones still eating the reminder quota, so
-          the nudge to clean them up sits above the list, not inside it. */}
-      {stats.autoSuggest > 0 && filter === "expired" && (
-        <section className="adm-card adm-note" style={{ marginBottom: 12 }}>
-          <AlertTriangle size={17} style={{ color: "var(--gold)", flex: "0 0 auto" }} />
-          <div>
-            <p className="adm-note-title">
-              {stats.autoSuggest} haven&apos;t renewed in over 60 days
-            </p>
-            <p className="adm-note-text">
-              Mark them as left to stop sending reminders. Look for the ⚠ tag.
-            </p>
+      {/* The age select and select-all share one row: on a phone a second row of
+          chips here would be chrome the list has to scroll past. */}
+      <div className="adm-frow">
+        <select
+          className="adm-agesel"
+          value={age}
+          onChange={(e) => {
+            setAge(e.target.value);
+            resetPick();
+          }}
+          aria-label="Filter by how long ago"
+        >
+          <option value="any">Any age</option>
+          {AGE_STEPS.map((s) => (
+            <option key={s.key} value={s.key}>
+              {s.label}
+            </option>
+          ))}
+          <option value="custom">Custom dates…</option>
+        </select>
+
+        {filtered.length > 0 && (
+          <button
+            type="button"
+            className="adm-btn sm"
+            onClick={toggleAll}
+            aria-pressed={allShownPicked}
+          >
+            <ListChecks size={14} />
+            {allShownPicked ? "Clear" : `All ${filtered.length}`}
+          </button>
+        )}
+      </div>
+
+      {age === "custom" && (
+        <>
+          <div className="adm-dategrid">
+            <div>
+              <label className="adm-label" htmlFor="flt-from">
+                From
+              </label>
+              <input
+                id="flt-from"
+                type="date"
+                className="adm-input"
+                value={from}
+                onChange={(e) => {
+                  setFrom(e.target.value);
+                  resetPick();
+                }}
+              />
+            </div>
+            <div>
+              <label className="adm-label" htmlFor="flt-to">
+                To
+              </label>
+              <input
+                id="flt-to"
+                type="date"
+                className="adm-input"
+                value={to}
+                onChange={(e) => {
+                  setTo(e.target.value);
+                  resetPick();
+                }}
+              />
+            </div>
+          </div>
+          {/* Which date these compare against depends on the tab, and getting it
+              wrong filters the wrong members silently. */}
+          <p className="adm-hint" style={{ marginTop: -4, marginBottom: 11 }}>
+            {filter === "left"
+              ? "Matches the day they were marked left."
+              : "Matches the membership expiry date."}
+          </p>
+        </>
+      )}
+
+      {picked.length > 0 && (
+        <section className="adm-card adm-bulkbar">
+          <p className="adm-bulkbar-n">
+            {picked.length} selected
+            <span>
+              {toMark.length > 0 && `${toMark.length} to mark`}
+              {toMark.length > 0 && toRestore.length > 0 && " · "}
+              {toRestore.length > 0 && `${toRestore.length} to restore`}
+            </span>
+          </p>
+          <div className="adm-bulkbar-acts">
+            <button
+              type="button"
+              className="adm-btn danger"
+              disabled={toMark.length === 0}
+              onClick={() => setBulkMode("mark")}
+            >
+              Mark as Left
+            </button>
+            <button
+              type="button"
+              className="adm-btn"
+              disabled={toRestore.length === 0}
+              onClick={() => setBulkMode("restore")}
+            >
+              Restore to active
+            </button>
           </div>
         </section>
       )}
+
+      {undoBatch && picked.length === 0 && (
+        <section className="adm-card adm-note good" style={{ marginBottom: 12 }}>
+          <Trophy size={17} style={{ color: "var(--green2)", flex: "0 0 auto" }} />
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <p className="adm-note-title">Batch marked as left</p>
+            <p className="adm-note-text">
+              Renewal reminders to them have stopped. Undo puts all of them back.
+            </p>
+          </div>
+          <button
+            type="button"
+            className="adm-btn sm"
+            onClick={undoLast}
+            disabled={undoBusy}
+            style={{ flex: "0 0 auto" }}
+          >
+            <Undo2 size={14} />
+            {undoBusy ? "Undoing…" : "Undo"}
+          </button>
+        </section>
+      )}
+
+      {/* Long-expired members are the ones still eating the reminder quota, so
+          the nudge to clean them up sits above the list, not inside it. It only
+          shows while the age filter is untouched — once it is set, the ⚠ tags
+          and the select-all button are already the answer. */}
+      {stats.autoSuggest > 0 &&
+        filter === "expired" &&
+        age === "any" &&
+        !search.trim() &&
+        picked.length === 0 && (
+          <section className="adm-card adm-note" style={{ marginBottom: 12 }}>
+            <AlertTriangle
+              size={17}
+              style={{ color: "var(--gold)", flex: "0 0 auto" }}
+            />
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <p className="adm-note-title">
+                {stats.autoSuggest} haven&apos;t renewed in over{" "}
+                {DEFAULT_SUGGEST_DAYS} days
+              </p>
+              <p className="adm-note-text">
+                Mark them as left to stop sending reminders.
+              </p>
+            </div>
+            <button
+              type="button"
+              className="adm-btn sm"
+              onClick={() => {
+                setAge(String(DEFAULT_SUGGEST_DAYS));
+                resetPick();
+              }}
+              style={{ flex: "0 0 auto" }}
+            >
+              Show them
+            </button>
+          </section>
+        )}
 
       {filtered.length === 0 ? (
         <div className="adm-empty">
@@ -205,15 +514,16 @@ export default function InactiveMembersClient({
       ) : (
         <div className="adm-list">
         {filtered.map((m) => {
-          const days = daysExpired(m.membershipExpiry);
+          const days = daysSince(m.membershipExpiry, now);
           const months = Math.floor(days / 30);
-          const autoSuggest = !m.leftGym && days > 60;
+          const autoSuggest = !m.leftGym && days > suggestDays;
+          const isPicked = selected.has(m.id);
 
           return (
             <article
               key={m.id}
-              className="adm-rec"
-              style={m.leftGym ? { opacity: 0.68 } : undefined}
+              className={`adm-rec${isPicked ? " picked" : ""}`}
+              style={m.leftGym && !isPicked ? { opacity: 0.68 } : undefined}
             >
               <div className="adm-rec-top">
                 <div className="adm-rec-ava">{m.name.charAt(0)}</div>
@@ -239,7 +549,7 @@ export default function InactiveMembersClient({
                     {autoSuggest && (
                       <span
                         className="adm-tag gold"
-                        title="Expired more than 60 days ago — consider marking as left"
+                        title={`Expired more than ${suggestDays} days ago — consider marking as left`}
                       >
                         ⚠ Suggest left
                       </span>
@@ -249,6 +559,15 @@ export default function InactiveMembersClient({
                     )}
                   </div>
                 </div>
+
+                <label className="adm-tick" title="Select this member">
+                  <input
+                    type="checkbox"
+                    checked={isPicked}
+                    onChange={() => toggleOne(m.id)}
+                    aria-label={`Select ${m.name}`}
+                  />
+                </label>
               </div>
 
               <div className="adm-rec-grid">
@@ -348,6 +667,15 @@ export default function InactiveMembersClient({
           }}
         />
       )}
+
+      {bulkMode && (
+        <BulkSheet
+          mode={bulkMode}
+          targets={bulkMode === "mark" ? toMark : toRestore}
+          onClose={() => setBulkMode(null)}
+          onConfirm={(reason, note) => runBulk(bulkMode, reason, note)}
+        />
+      )}
     </div>
   );
 }
@@ -372,6 +700,162 @@ function QStat({
   );
 }
 
+/**
+ * How many names the confirm sheet lists before switching to a count. Kept low
+ * and the list is never scrolled: a scrollable box of names hides the ones below
+ * the fold with nothing to say they are there, which is the opposite of what a
+ * last look before a 1,400-row write should do.
+ */
+const SAMPLE_SIZE = 6;
+
+function BulkSheet({
+  mode,
+  targets,
+  onClose,
+  onConfirm,
+}: {
+  mode: "mark" | "restore";
+  targets: Member[];
+  onClose: () => void;
+  onConfirm: (reason?: Reason, note?: string) => Promise<boolean>;
+}) {
+  const [reason, setReason] = useState<Reason>("not_interested");
+  const [note, setNote] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const marking = mode === "mark";
+  const sample = targets.slice(0, SAMPLE_SIZE);
+  const rest = targets.length - sample.length;
+
+  async function handleSave() {
+    setLoading(true);
+    const ok = await onConfirm(marking ? reason : undefined, note);
+    setLoading(false);
+    if (ok) onClose();
+  }
+
+  return (
+    <Sheet
+      onClose={onClose}
+      title={marking ? `Mark ${targets.length} as Left` : `Restore ${targets.length}`}
+    >
+      <p className="adm-hint" style={{ marginBottom: 14 }}>
+        {marking ? (
+          <>
+            Marking <strong style={{ color: "var(--text)" }}>{targets.length}</strong>{" "}
+            {targets.length === 1 ? "member" : "members"} as left. Renewal reminders
+            to them stop immediately. Whoever joins again is un-marked
+            automatically.
+          </>
+        ) : (
+          <>
+            Returning{" "}
+            <strong style={{ color: "var(--text)" }}>{targets.length}</strong>{" "}
+            {targets.length === 1 ? "member" : "members"} to the active list. They
+            start receiving renewal reminders again.
+          </>
+        )}
+      </p>
+
+      <div className="adm-card" style={{ marginBottom: 14 }}>
+        {sample.map((m) => (
+          <div
+            key={m.id}
+            style={{ display: "flex", gap: 8, fontSize: 12, padding: "2px 0" }}
+          >
+            <span
+              className="adm-rec-id"
+              style={{ flex: "0 0 auto", minWidth: 52 }}
+            >
+              M.No {formatGymId(m.gymId, m.planType)}
+            </span>
+            <span
+              style={{
+                minWidth: 0,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {m.name}
+            </span>
+          </div>
+        ))}
+        {rest > 0 && (
+          <p className="adm-hint" style={{ marginTop: 6 }}>
+            …and {rest} more
+          </p>
+        )}
+      </div>
+
+      {marking && (
+        <>
+          <div className="adm-field">
+            <label className="adm-label" htmlFor="bulk-reason">
+              Reason for all of them *
+            </label>
+            <select
+              id="bulk-reason"
+              value={reason}
+              onChange={(e) => setReason(e.target.value as Reason)}
+              className="adm-select"
+            >
+              {REASON_ORDER.map((r) => (
+                <option key={r} value={r}>
+                  {REASON_LABELS[r]}
+                </option>
+              ))}
+            </select>
+            {/* One reason is stored on every row in the batch. Marking a group
+                with mixed reasons means running the batch more than once — the
+                field is per-member, and a shared value would be a guess. */}
+          </div>
+
+          <div className="adm-field">
+            <label className="adm-label" htmlFor="bulk-note">
+              Note (optional)
+            </label>
+            <textarea
+              id="bulk-note"
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              rows={2}
+              maxLength={300}
+              placeholder="Copied onto every member in this batch"
+              className="adm-textarea"
+            />
+          </div>
+        </>
+      )}
+
+      <p className="adm-hint" style={{ marginBottom: 14 }}>
+        {marking
+          ? "Undo is one tap right after this, or filter Left by the date to find them later."
+          : "Left-on dates and reasons are cleared. Anyone previously won back keeps that record."}
+      </p>
+
+      <div style={{ display: "flex", gap: 9, marginTop: 16 }}>
+        <button type="button" onClick={onClose} className="adm-btn" style={{ flex: 1 }}>
+          Cancel
+        </button>
+        <button
+          type="button"
+          onClick={handleSave}
+          disabled={loading}
+          className={marking ? "adm-btn danger" : "adm-btn primary"}
+          style={{ flex: 2 }}
+        >
+          {loading
+            ? "Saving…"
+            : marking
+              ? `Mark ${targets.length} as Left`
+              : `Restore ${targets.length}`}
+        </button>
+      </div>
+    </Sheet>
+  );
+}
+
 function MarkLeftModal({
   member,
   onClose,
@@ -381,9 +865,7 @@ function MarkLeftModal({
   onClose: () => void;
   onDone: () => void;
 }) {
-  const [reason, setReason] = useState<
-    "shifted" | "not_interested" | "health" | "financial" | "other"
-  >("not_interested");
+  const [reason, setReason] = useState<Reason>("not_interested");
   const [note, setNote] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -413,14 +895,14 @@ function MarkLeftModal({
         <select
           id="ml-reason"
           value={reason}
-          onChange={(e) => setReason(e.target.value as typeof reason)}
+          onChange={(e) => setReason(e.target.value as Reason)}
           className="adm-select"
         >
-          <option value="not_interested">Not Interested</option>
-          <option value="shifted">Shifted / Moved</option>
-          <option value="health">Health Issue</option>
-          <option value="financial">Financial Reasons</option>
-          <option value="other">Other</option>
+          {REASON_ORDER.map((r) => (
+            <option key={r} value={r}>
+              {REASON_LABELS[r]}
+            </option>
+          ))}
         </select>
       </div>
 

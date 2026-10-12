@@ -1080,6 +1080,13 @@
 .adm-btn.block {
   width: 100%;
 }
+/* Sits in a row of its own controls rather than as a page action — the select-all
+   toggle and the undo offer, both of which must not out-weigh the list. */
+.adm-btn.sm {
+  min-height: 34px;
+  padding: 0 12px;
+  font-size: 12.5px;
+}
 
 /* Floating action button — the primary create action for the page it is on.
    Sits above the tab bar, thumb-reachable on the right. */
@@ -2120,6 +2127,141 @@
   margin-top: 14px;
 }
 
+/* ===== Inactive & Left: picking a batch =====
+   The page's only way to act on more than one member at a time. Two controls
+   share the one row so the list does not have to scroll past a second row of
+   chrome on a phone. */
+.adm-frow {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 11px;
+}
+.adm-agesel {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 34px;
+  padding: 0 10px;
+  border-radius: var(--radius-xs);
+  background: var(--surface2);
+  border: 1px solid var(--border2);
+  color: var(--text2);
+  font-size: 12px;
+  font-weight: 600;
+}
+.adm-agesel:focus {
+  outline: none;
+  border-color: var(--gold-glow);
+  box-shadow: 0 0 0 3px var(--gold-soft);
+}
+/* Same fault and same reason as .adm-select option: the popup is the browser's. */
+.adm-agesel option {
+  background: var(--surface2);
+  color: var(--text);
+}
+
+/* The custom date range. Two columns rather than one row of bare inputs: an
+   unlabelled pair reads as interchangeable, and picking the wrong one silently
+   filters the wrong members. */
+.adm-dategrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.adm-dategrid .adm-label {
+  margin-bottom: 5px;
+}
+
+/* The confirm bar for a selection. Gold, like the nudge it replaces, because it
+   is the same job being finished rather than a new one starting. */
+.adm-bulkbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 12px;
+  background: var(--gold-soft);
+  border-color: var(--gold-glow);
+}
+.adm-bulkbar-n {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--gold2);
+}
+/* What the selection splits into. Never hidden: "3 of these are already left"
+   is exactly the thing that should stop a wrong confirm. */
+.adm-bulkbar-n span {
+  display: block;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text2);
+  margin-top: 2px;
+}
+.adm-bulkbar-acts {
+  display: flex;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+/* The per-row tick. There is no generic checkbox in the admin — only .adm-switch,
+   which hides its input — so this is its own thing. .adm-rec carries 13px of
+   padding, and the negative margins claw the box back so the header row is no
+   taller than it was before the tick existed. */
+.adm-tick {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  margin: -5px -5px 0 0;
+  cursor: pointer;
+}
+.adm-tick input {
+  appearance: none;
+  width: 21px;
+  height: 21px;
+  border-radius: 6px;
+  background: var(--surface2);
+  border: 1.5px solid var(--border3);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.adm-tick input:checked {
+  background: var(--gold);
+  border-color: var(--gold);
+}
+.adm-tick input:checked::after {
+  content: "";
+  width: 5px;
+  height: 10px;
+  border: solid #000;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg) translate(-1px, -1px);
+}
+/* A picked row reads as picked without repainting 1,400 cards: a gold edge and a
+   spine, which survive the .adm-rec hover rule below. */
+.adm-rec.picked {
+  border-color: var(--gold-glow);
+  box-shadow: inset 3px 0 0 var(--gold);
+}
+
+/* No phone is wide enough to hold the count and both bulk buttons on one line,
+   and the count is the part that must not be the one that gets clipped. */
+@media (max-width: 560px) {
+  .adm-bulkbar-acts {
+    flex: 1 1 100%;
+  }
+  .adm-bulkbar-acts .adm-btn {
+    flex: 1 1 0;
+    padding: 0 10px;
+  }
+}
+
 /* Dashboard columns. Plain blocks on a phone, so the sections stack in
    exactly the order they are written. */
 .adm-dash-col {
@@ -2366,6 +2508,15 @@
   }
   .adm-bulk {
     grid-template-columns: repeat(auto-fit, minmax(190px, 270px));
+  }
+
+  /* A filter control, not a form field: full width here would be a dropdown the
+     length of the page with the select-all button orphaned at the far end. */
+  .adm-agesel {
+    max-width: 260px;
+  }
+  .adm-dategrid {
+    max-width: 420px;
   }
 
   /* Dashboard: the money on the left, the things worth clicking on the right,

@@ -2,7 +2,7 @@
 
 import { db } from "@/db";
 import { members, payments, onlineJoins, smsLogs } from "@/db/schema";
-import { eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { getBranchScope, requireSingleBranch } from "@/lib/branch";
 import { sanitizeError } from "@/lib/errors";
@@ -607,4 +607,166 @@ export async function unmarkMemberLeftAction(id: number) {
   } catch (error) {
     return { error: sanitizeError(error, "Failed to unmark member") };
   }
+}
+
+// ===== BULK MARK / RESTORE =====
+// Unexported on purpose: only async functions may be exported from a "use server"
+// file, and every export of one becomes a publicly callable endpoint besides.
+// The client keeps its own copy of this union in inactive-client.tsx.
+const LEFT_REASONS = [
+  "shifted",
+  "not_interested",
+  "health",
+  "financial",
+  "other",
+] as const;
+type LeftReason = (typeof LEFT_REASONS)[number];
+
+/**
+ * How many ids go into one UPDATE.
+ *
+ * Not a tuning knob. A round trip to Neon measures ~78ms and Netlify kills a
+ * synchronous function at 10s, which is the same budget that forced the register
+ * import to be chunked — a per-member loop there died around row 126 and lost
+ * two thirds of the register. Marking 1,500 members is three statements at this
+ * size, ~250ms, against a per-row loop that would never finish.
+ */
+const BULK_CHUNK = 500;
+/** The whole book is ~1,500 rows. This only exists to refuse a runaway payload. */
+const BULK_MAX = 5000;
+/** One note is copied onto every row in the batch, so it stays short. */
+const BULK_NOTE_MAX = 300;
+
+/**
+ * Shared by both bulk actions, so the guard, the branch filter and the chunking
+ * can only ever be written once.
+ *
+ * `marking` picks the direction. Branch scope and the member's *current* state
+ * both live in the WHERE clause rather than in a per-row read: an id from
+ * another branch, or one already in the target state, simply does not match, and
+ * nothing is revealed by probing with one. It also makes a re-run a no-op.
+ *
+ * Returns a discriminated result rather than the bare `{ error }` the
+ * single-member actions use. Those have nothing to report on success, so
+ * `if (r.error)` reads fine; here a caller has counts to read afterwards, and
+ * narrowing on a plain `error: string` cannot eliminate the failure branch —
+ * the empty string is falsy.
+ */
+async function bulkSetLeft(
+  ids: number[],
+  marking: boolean,
+  reason?: LeftReason,
+  note?: string
+): Promise<
+  | { success: true; changed: number; skipped: number }
+  | { success: false; error: string }
+> {
+  try {
+    const role = await assertAuthenticated();
+    if (role !== "owner") {
+      await assertPermission("members", "canEdit");
+    }
+  } catch (e) {
+    return {
+      success: false,
+      error: sanitizeError(e, "Not authorized to modify members"),
+    };
+  }
+
+  try {
+    // Validated before it reaches SQL — a client may send anything, and one NaN
+    // in the list fails the whole statement rather than that one row.
+    const wanted = Array.from(
+      new Set(ids.filter((id) => Number.isInteger(id) && id > 0))
+    );
+    if (wanted.length === 0) {
+      return { success: false, error: "No members selected" };
+    }
+    if (wanted.length > BULK_MAX) {
+      return {
+        success: false,
+        error: `Too many members in one go (limit ${BULK_MAX})`,
+      };
+    }
+
+    const scope = await getBranchScope();
+    const branchIds = scope.type === "all" ? scope.branchIds : [scope.branchId];
+
+    let changed = 0;
+    for (let i = 0; i < wanted.length; i += BULK_CHUNK) {
+      const chunk = wanted.slice(i, i + BULK_CHUNK);
+      const rows = await db
+        .update(members)
+        .set(
+          marking
+            ? {
+                leftGym: true,
+                leftGymDate: istDateString(),
+                leftGymReason: reason,
+                leftGymNote: note || null,
+              }
+            : {
+                // Same four fields the single-member restore writes, and it
+                // leaves wonBackAt alone for the same reason: that date records
+                // that the member came back once, and undoing a mark does not
+                // un-happen it.
+                leftGym: false,
+                leftGymDate: null,
+                leftGymReason: null,
+                leftGymNote: null,
+              }
+        )
+        .where(
+          and(
+            inArray(members.id, chunk),
+            inArray(members.branchId, branchIds),
+            eq(members.leftGym, !marking)
+          )
+        )
+        .returning({ id: members.id });
+      changed += rows.length;
+    }
+
+    revalidatePath("/admin/members");
+    revalidatePath("/admin/inactive");
+    revalidatePath("/admin/reminders");
+    revalidatePath("/admin");
+
+    // What the WHERE clause refused, so the caller can report the difference
+    // instead of a number that does not match what it asked for.
+    return { success: true, changed, skipped: wanted.length - changed };
+  } catch (error) {
+    return {
+      success: false,
+      error: sanitizeError(
+        error,
+        marking ? "Failed to mark members as left" : "Failed to restore members"
+      ),
+    };
+  }
+}
+
+/**
+ * Mark a whole batch as left with one reason.
+ *
+ * Takes an explicit id list rather than filter criteria on purpose: the caller
+ * sends what it can see, so the operation is exactly what was on screen and
+ * cannot sweep up a member whose state changed while the list was open.
+ */
+export async function bulkMarkMembersLeftAction(
+  ids: number[],
+  reason: LeftReason,
+  note?: string
+) {
+  // Typed at the call site, but this arrives over the wire — the column is a
+  // bare text and would happily store anything.
+  if (!LEFT_REASONS.includes(reason)) {
+    return { success: false as const, error: "Invalid reason" };
+  }
+  return bulkSetLeft(ids, true, reason, note?.trim().slice(0, BULK_NOTE_MAX));
+}
+
+/** Undo a batch. Mirrors unmarkMemberLeftAction, without the wonBackAt reset. */
+export async function bulkRestoreMembersAction(ids: number[]) {
+  return bulkSetLeft(ids, false);
 }

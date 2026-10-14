@@ -513,8 +513,17 @@ export async function renewMemberAction(
     if ("error" in outcome) return outcome;
 
     // After the transaction commits, so a re-render can never read the old row.
-    revalidatePath("/admin/members");
-    revalidatePath("/admin");
+    // Its failure is not a failed renewal, though: the payment and the new expiry
+    // are already committed, and coming back as "Failed to renew membership" is
+    // what gets the button pressed again — which charges the member a second
+    // time. The pages here are force-dynamic, so the worst case is the owner's
+    // own list refreshes itself a moment later instead.
+    try {
+      revalidatePath("/admin/members");
+      revalidatePath("/admin");
+    } catch {
+      // Stale list at worst.
+    }
     return outcome;
   } catch (error) {
     return { error: sanitizeError(error, "Failed to renew membership") };

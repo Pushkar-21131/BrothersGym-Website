@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   addMemberAction,
@@ -152,6 +152,11 @@ export default function MemberList({
   const [showRenewModal, setShowRenewModal] = useState<Member | null>(null);
   const [editingMember, setEditingMember] = useState<Member | null>(null);
   const [loading, setLoading] = useState(false);
+  // One press can reach the server twice: a ghost click, or a second press before
+  // `loading` has re-rendered the button. A ref is the only lock that closes
+  // before the next event does — and every form here writes, so the second call
+  // is a second member, a second edit, or a second renewal and its payment row.
+  const inFlight = useRef(false);
   const [deletingId, setDeletingId] = useState<number | null>(null);
   // Drives the "send them the update" sheet. Set after an edit or a renewal
   // that actually changed something, and with no changes at all by the standing
@@ -303,68 +308,86 @@ export default function MemberList({
   };
 
   async function handleAdd(formData: FormData) {
+    if (inFlight.current) return;
+    inFlight.current = true;
     setLoading(true);
-    const result = await addMemberAction(formData);
-    setLoading(false);
+    try {
+      const result = await addMemberAction(formData);
 
-    if (result.error) toast.error(result.error);
-    else {
-      // The enquiry that sent us here counts as joined only now that the member
-      // exists, so the link back to them is written here rather than on the
-      // button that started this. A refusal is reported instead of swallowed —
-      // otherwise the enquiry stays on the call list with nothing to explain it.
-      if (enquiryId && "memberId" in result && result.memberId) {
-        const marked = await markEnquiryStatusAction(
-          enquiryId,
-          "joined",
-          result.memberId
-        );
-        if ("error" in marked) {
-          toast.error(`Member added, but the enquiry is still open: ${marked.error}`);
+      if (result.error) toast.error(result.error);
+      else {
+        // The enquiry that sent us here counts as joined only now that the member
+        // exists, so the link back to them is written here rather than on the
+        // button that started this. A refusal is reported instead of swallowed —
+        // otherwise the enquiry stays on the call list with nothing to explain it.
+        if (enquiryId && "memberId" in result && result.memberId) {
+          const marked = await markEnquiryStatusAction(
+            enquiryId,
+            "joined",
+            result.memberId
+          );
+          if ("error" in marked) {
+            toast.error(`Member added, but the enquiry is still open: ${marked.error}`);
+          }
         }
+        toast.success("Member added successfully!");
+        setShowAddModal(false);
+        setPrefill(null);
+        setEnquiryId(null);
+        router.refresh();
       }
-      toast.success("Member added successfully!");
-      setShowAddModal(false);
-      setPrefill(null);
-      setEnquiryId(null);
-      router.refresh();
+    } catch {
+      // Silence here reads as "nothing was saved" — the one answer that gets the
+      // form submitted a second time, which is how a member gets added twice.
+      toast.error("No answer from the server — check the members list before saving again.");
+    } finally {
+      inFlight.current = false;
+      setLoading(false);
     }
   }
 
   async function handleUpdate(id: number, formData: FormData) {
+    if (inFlight.current) return;
+    inFlight.current = true;
     setLoading(true);
-    const result = await updateMemberAction(id, formData);
-    setLoading(false);
+    try {
+      const result = await updateMemberAction(id, formData);
 
-    // Narrowed rather than read optimistically: updateMemberAction returns a
-    // real union, so `changes` does not exist on the error branch.
-    if ("error" in result) toast.error(result.error);
-    else {
-      toast.success("Member updated successfully!");
-      const member = editingMember;
-      setShowEditModal(false);
-      setEditingMember(null);
+      // Narrowed rather than read optimistically: updateMemberAction returns a
+      // real union, so `changes` does not exist on the error branch.
+      if ("error" in result) toast.error(result.error);
+      else {
+        toast.success("Member updated successfully!");
+        const member = editingMember;
+        setShowEditModal(false);
+        setEditingMember(null);
 
-      // Offered only when something actually changed. `changes` is computed on
-      // the server, so a field this account cannot write is never announced.
-      if (member && result.changes.length > 0) {
-        setUpdatePrompt({
-          member: {
-            ...member,
-            contactNumber: String(
-              formData.get("contactNumber") || member.contactNumber
+        // Offered only when something actually changed. `changes` is computed on
+        // the server, so a field this account cannot write is never announced.
+        if (member && result.changes.length > 0) {
+          setUpdatePrompt({
+            member: {
+              ...member,
+              contactNumber: String(
+                formData.get("contactNumber") || member.contactNumber
+              ),
+            },
+            changes: result.changes,
+            expiry: String(
+              formData.get("membershipExpiry") || member.membershipExpiry
             ),
-          },
-          changes: result.changes,
-          expiry: String(
-            formData.get("membershipExpiry") || member.membershipExpiry
-          ),
-          feeAmount: hide("feeAmount")
-            ? undefined
-            : Number(formData.get("feeAmount")) || member.feeAmount,
-        });
+            feeAmount: hide("feeAmount")
+              ? undefined
+              : Number(formData.get("feeAmount")) || member.feeAmount,
+          });
+        }
+        router.refresh();
       }
-      router.refresh();
+    } catch {
+      toast.error("No answer from the server — the edit may not have been saved.");
+    } finally {
+      inFlight.current = false;
+      setLoading(false);
     }
   }
 
@@ -383,37 +406,46 @@ export default function MemberList({
   }
 
   async function handleRenewSubmit(formData: FormData) {
-    if (!showRenewModal) return;
+    if (!showRenewModal || inFlight.current) return;
+    const member = showRenewModal;
     const amount = Number(formData.get("amount"));
     const duration = Number(formData.get("duration"));
     const planType = formData.get("planType") as "full" | "no_cardio" | "offline";
     const method = formData.get("method") as "cash" | "upi" | "razorpay" | "other";
 
+    inFlight.current = true;
     setLoading(true);
-    const r = await renewMemberAction(
-      showRenewModal.id,
-      amount,
-      duration,
-      planType,
-      method
-    );
-    setLoading(false);
+    try {
+      const r = await renewMemberAction(
+        member.id,
+        amount,
+        duration,
+        planType,
+        method
+      );
 
-    // Narrowed rather than read optimistically: renewMemberAction returns a
-    // real union now that its body is a transaction, so `r.error` is not
-    // guaranteed to exist on the success branch.
-    if ("error" in r && r.error) toast.error(r.error);
-    else if ("newExpiry" in r) {
-      toast.success(`Renewed till ${r.newExpiry}`);
-      const member = showRenewModal;
-      setShowRenewModal(null);
-      setUpdatePrompt({
-        member,
-        changes: r.changes,
-        expiry: r.newExpiry,
-        feeAmount: amount,
-      });
-      router.refresh();
+      // Narrowed rather than read optimistically: renewMemberAction returns a
+      // real union now that its body is a transaction, so `r.error` is not
+      // guaranteed to exist on the success branch.
+      if ("error" in r && r.error) toast.error(r.error);
+      else if ("newExpiry" in r) {
+        toast.success(`Renewed till ${r.newExpiry}`);
+        setShowRenewModal(null);
+        setUpdatePrompt({
+          member,
+          changes: r.changes,
+          expiry: r.newExpiry,
+          feeAmount: amount,
+        });
+        router.refresh();
+      }
+    } catch {
+      // A call that never answered says nothing about whether the renewal was
+      // recorded, so it must not read as "nothing happened, press it again".
+      toast.error("No answer from the server — check the due date before renewing again.");
+    } finally {
+      inFlight.current = false;
+      setLoading(false);
     }
   }
 

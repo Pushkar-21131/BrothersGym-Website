@@ -13,7 +13,12 @@
  * date is derived rather than written down as "the 14th".
  */
 
-import { gymCycle, addMonthsIso, CYCLE_START_DAY } from "../src/lib/utils.ts";
+import {
+  gymCycle,
+  addMonthsIso,
+  salaryPayday,
+  CYCLE_START_DAY,
+} from "../src/lib/utils.ts";
 
 let failures = 0;
 let checks = 0;
@@ -94,6 +99,81 @@ ok("forward one", addMonthsIso("2026-10-15", 1), "2026-11-15");
 ok("back across January", addMonthsIso("2027-01-15", -1), "2026-12-15");
 ok("forward across December", addMonthsIso("2026-12-15", 1), "2027-01-15");
 ok("a year", addMonthsIso("2026-10-15", 12), "2027-10-15");
+
+group("The day a salary falls due, from the person's joining date");
+// The owner pays each person on the day-of-month they joined, so the joining
+// date's day number is the payday. Inside a 15th-to-14th cycle there is exactly
+// one such day per person, and this is where it lands.
+const pay = (joinDate, cycleStart) =>
+  salaryPayday(joinDate, gymCycle(cycleStart));
+
+ok("paid on the 10th, inside the cycle that opened on the 15th of September",
+  pay("2024-05-10", "2026-09-20"), "2026-10-10");
+ok("paid on the 20th, in the month that opened the cycle",
+  pay("2024-05-20", "2026-09-20"), "2026-09-20");
+ok("the 15th is the cycle's first day", pay("2024-05-15", "2026-09-20"), "2026-09-15");
+ok("the 14th is its last", pay("2024-05-14", "2026-09-20"), "2026-10-14");
+ok("the 1st lands two weeks before the cycle closes",
+  pay("2024-05-01", "2026-09-20"), "2026-10-01");
+ok("across New Year, a later payday stays in December",
+  pay("2024-05-25", "2026-12-20"), "2026-12-25");
+ok("...and an earlier one falls in January",
+  pay("2024-05-05", "2026-12-20"), "2027-01-05");
+
+group("Paydays that fall on days a month does not have");
+// A 31st payday has to land somewhere: the last day of the month that owns it,
+// which is the only choice that keeps it inside the cycle.
+ok("the 31st, in a 30-day opening month", pay("2024-05-31", "2026-09-20"), "2026-09-30");
+ok("the 31st, in a 31-day opening month", pay("2024-05-31", "2026-10-20"), "2026-10-31");
+ok("the 31st, in a 28-day February", pay("2024-05-31", "2027-02-20"), "2027-02-28");
+ok("the 31st, in a 29-day February", pay("2024-05-31", "2028-02-20"), "2028-02-29");
+ok("the 30th, in a 28-day February", pay("2024-05-30", "2027-02-20"), "2027-02-28");
+ok("the 29th survives the leap year", pay("2024-05-29", "2028-02-20"), "2028-02-29");
+
+group("One payday per person per cycle, and none outside it");
+// The invariant the dashboard rests on: whoever is on the roster is charged
+// exactly once in every full cycle, so a full cycle still comes to one month's
+// wages no matter how long it is — and no payday ever lands outside its cycle,
+// which is what stops a cycle from being charged a wage it cannot show a date for.
+const strayPaydays = [];
+const collisions = [];
+const cycleCounts = [];
+for (let day = 1; day <= 31; day++) {
+  const joinDate = `2024-05-${String(day).padStart(2, "0")}`;
+  const starts = new Set();
+  const paydays = new Set();
+  let lastStart = "";
+  let cursor = "2026-01-01";
+  for (let i = 0; i < 365 * 3; i++) {
+    const c = gymCycle(cursor);
+    const p = salaryPayday(joinDate, c);
+    if (!(c.start <= p && p <= c.end)) strayPaydays.push([joinDate, p, c.start, c.end]);
+    if (c.start !== lastStart) {
+      starts.add(c.start);
+      paydays.add(p);
+      lastStart = c.start;
+    }
+    cursor = shiftDay(cursor);
+  }
+  cycleCounts.push(starts.size);
+  // One payday for each cycle the person was on the roster for, never two.
+  if (paydays.size !== starts.size) collisions.push([joinDate, paydays.size, starts.size]);
+}
+ok("no payday falls outside its cycle", strayPaydays.slice(0, 5), []);
+ok("every cycle gets its own payday", collisions.slice(0, 5), []);
+// 1095 days opens and closes inside a cycle, so it touches 37 of them: two
+// partial at the edges and 35 whole. What matters is that each joining day saw
+// the same 37 — no payday loop can be short of cycles by accident.
+ok("every joining day walked the same cycles", [
+  Math.min(...cycleCounts),
+  Math.max(...cycleCounts),
+], [37, 37]);
+
+// The join year itself is irrelevant — only the day-of-month is read. A person
+// who joined on the 3rd of any month is paid on the 3rd.
+ok("the joining year does not move the payday",
+  [pay("1998-01-07", "2026-09-20"), pay("2026-08-07", "2026-09-20")],
+  ["2026-10-07", "2026-10-07"]);
 
 console.log(`\n${failures === 0 ? "PASS" : "FAIL"} — ${checks - failures}/${checks} checks`);
 process.exit(failures === 0 ? 0 : 1);

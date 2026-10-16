@@ -24,6 +24,7 @@ import {
   istDateString,
   addDaysIso,
   gymCycle,
+  salaryPayday,
 } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -67,10 +68,11 @@ async function getBranchStats(
           lte(equipmentExpenses.date, cycle.end)
         )
       ),
-    // One month of payroll against a one-month window — subtracting it is only
-    // arithmetic the owner can check because the window is a month too.
+    // Who has been paid inside this cycle — which is not the whole roster. The
+    // salary is charged from the person's own payday (the day of the month they
+    // joined), so a cycle that opened yesterday carries nobody's wages yet.
     db
-      .select({ salary: staff.salary })
+      .select({ salary: staff.salary, joinDate: staff.joinDate })
       .from(staff)
       .where(and(eq(staff.branchId, branchId), eq(staff.isActive, true))),
     db
@@ -96,19 +98,25 @@ async function getBranchStats(
   const totalMembers = Number(m[0]?.count) || 0;
   const totalRevenue = Number(p[0]?.total) || 0;
   const totalExpenses = Number(e[0]?.total) || 0;
-  const totalStaffSalaries = s.reduce(
-    (sum, item) => sum + (Number(item.salary) || 0),
+  // Paid once the payday has arrived, not before: on the 16th of a cycle that
+  // opened on the 15th this is nobody, which is the number the owner can check
+  // against his own pocket.
+  const salariesDue = s.reduce(
+    (sum, item) =>
+      salaryPayday(item.joinDate, cycle) <= today
+        ? sum + (Number(item.salary) || 0)
+        : sum,
     0
   );
   const expiredCount = Number(expired[0]?.count) || 0;
   const expiringCount = Number(expiring[0]?.count) || 0;
-  const profit = totalRevenue - totalExpenses - totalStaffSalaries;
+  const profit = totalRevenue - totalExpenses - salariesDue;
 
   return {
     totalMembers,
     totalRevenue,
     totalExpenses,
-    totalStaffSalaries,
+    salariesDue,
     profit,
     expiredCount,
     expiringCount,
@@ -158,7 +166,7 @@ export default async function AdminDashboard() {
       totalMembers: acc.totalMembers + r.stats.totalMembers,
       totalRevenue: acc.totalRevenue + r.stats.totalRevenue,
       totalExpenses: acc.totalExpenses + r.stats.totalExpenses,
-      totalStaffSalaries: acc.totalStaffSalaries + r.stats.totalStaffSalaries,
+      salariesDue: acc.salariesDue + r.stats.salariesDue,
       profit: acc.profit + r.stats.profit,
       expiredCount: acc.expiredCount + r.stats.expiredCount,
       expiringCount: acc.expiringCount + r.stats.expiringCount,
@@ -167,7 +175,7 @@ export default async function AdminDashboard() {
       totalMembers: 0,
       totalRevenue: 0,
       totalExpenses: 0,
-      totalStaffSalaries: 0,
+      salariesDue: 0,
       profit: 0,
       expiredCount: 0,
       expiringCount: 0,
@@ -177,7 +185,7 @@ export default async function AdminDashboard() {
   const scopeLabel =
     scope.type === "single" ? scope.branchName : "All Branches";
 
-  const outgoings = combined.totalExpenses + combined.totalStaffSalaries;
+  const outgoings = combined.totalExpenses + combined.salariesDue;
   const barTotal = combined.totalRevenue + outgoings;
   const revenueShare = barTotal > 0 ? (combined.totalRevenue / barTotal) * 100 : 0;
 
@@ -198,11 +206,9 @@ export default async function AdminDashboard() {
       <div className="adm-dash">
         <div className="adm-dash-col">
       {/* Net profit is the one number worth opening the app for, so it gets
-          the whole first screen. It is a cycle's net, not a lifetime one: the
-          salary line is this month's payroll and nothing stores what was paid
-          in earlier months, so an "All Time" net was a month of wages taken off
-          a year of dues. The label names the window so the number cannot be
-          read as a running total. */}
+          the whole first screen. It is a cycle's net, not a lifetime one, and
+          the wage line in it is what falls due inside that cycle — a person is
+          charged from their own payday, not from the first day of the cycle. */}
       <section className="adm-hero">
         <div className="adm-hero-label">Net Profit · {cycle.label}</div>
         <div
@@ -227,7 +233,7 @@ export default async function AdminDashboard() {
           <div>
             <div className="adm-hero-meta-k">Salaries</div>
             <div className="adm-hero-meta-v" style={{ color: "var(--blue2)" }}>
-              {formatINR(combined.totalStaffSalaries)}
+              {formatINR(combined.salariesDue)}
             </div>
           </div>
         </div>
@@ -300,9 +306,9 @@ export default async function AdminDashboard() {
           </span>
         </div>
         <div className="adm-kv">
-          <span className="adm-kv-k">Staff salaries (monthly)</span>
+          <span className="adm-kv-k">Staff salaries (due so far)</span>
           <span className="adm-kv-v" style={{ color: "var(--blue2)" }}>
-            −{formatINR(combined.totalStaffSalaries)}
+            −{formatINR(combined.salariesDue)}
           </span>
         </div>
         <div className="adm-kv adm-kv-total">
@@ -356,7 +362,7 @@ export default async function AdminDashboard() {
                 <div className="adm-kv">
                   <span className="adm-kv-k">Salaries</span>
                   <span className="adm-kv-v" style={{ color: "var(--blue2)" }}>
-                    −{formatINR(stats.totalStaffSalaries)}
+                    −{formatINR(stats.salariesDue)}
                   </span>
                 </div>
                 <div className="adm-kv adm-kv-total">
@@ -407,7 +413,7 @@ export default async function AdminDashboard() {
           tone="purple"
           icon={<HandCoins size={15} />}
           title="Staff & salaries"
-          sub={`${formatINR(combined.totalStaffSalaries)} per month`}
+          sub={`${formatINR(combined.salariesDue)} due this cycle`}
         />
       </section>
         </div>

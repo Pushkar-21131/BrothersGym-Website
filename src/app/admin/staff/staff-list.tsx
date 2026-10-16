@@ -66,8 +66,9 @@ export default function StaffList({
   const needsBranchPick = currentBranchId === null;
   const today = istDateString();
 
-  // Only active staff are actually being paid, so the payroll figure ignores
-  // inactive rows — the same rule the dashboard's salary total uses.
+  // What the active roster costs for a month — a rate, not what the dashboard
+  // shows. The dashboard charges each person from their own payday, so mid-cycle
+  // its salary line is a part of this figure rather than all of it.
   const payroll = useMemo(
     () =>
       initialStaff
@@ -546,6 +547,10 @@ function StaffForm({
             required
             className="adm-input"
           />
+          <p className="adm-hint">
+            The day of the month is also their payday — the salary starts counting
+            against a month from this day, not from the 15th.
+          </p>
         </div>
 
         <div className="adm-field span2">

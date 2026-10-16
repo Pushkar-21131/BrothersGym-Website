@@ -142,3 +142,32 @@ export function gymCycle(
     label: `${cycleDay(start, withYear)} → ${cycleDay(end, withYear)}`,
   };
 }
+
+/**
+ * The day a staff member's salary lands inside `cycle`.
+ *
+ * There is no salary-payment record to read: the roster holds one monthly figure
+ * per person, and the day of the month it is paid is the day that person joined.
+ * So a cycle's wage bill is not the whole roster — it is the people whose payday
+ * has arrived in it — which is what stops a cycle that opened yesterday from
+ * being charged a month of wages nobody has been paid yet.
+ *
+ * Days 15 and later fall in the month that opened the cycle, days 1-14 in the
+ * month that closes it, so a 15th-to-14th cycle holds exactly one payday per
+ * person and a full cycle still comes to one month's wages.
+ */
+export function salaryPayday(
+  joinDate: string,
+  cycle: { start: string; end: string }
+): string {
+  const day = Number(joinDate.slice(8, 10));
+  const month =
+    day >= Number(cycle.start.slice(8, 10))
+      ? cycle.start.slice(0, 7)
+      : cycle.end.slice(0, 7);
+  const [y, m] = month.split("-").map(Number);
+  // A 31st payday has to land somewhere in a 30-day month, and the last day is
+  // the only answer that keeps it inside the cycle.
+  const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  return `${month}-${String(Math.min(day, lastDay)).padStart(2, "0")}`;
+}

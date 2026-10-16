@@ -4,7 +4,7 @@ import { asc, eq, inArray, and } from "drizzle-orm";
 import { redirect } from "next/navigation";
 import ReminderPanel, { type Member } from "./reminder-panel";
 import { getBranchScope } from "@/lib/branch";
-import { getVerifiedRole, hasPermission } from "@/lib/auth-check";
+import { getVerifiedRole, hasPermission, getFirstAllowedAdminPath, getHiddenFields } from "@/lib/auth-check";
 
 export const dynamic = "force-dynamic";
 
@@ -14,7 +14,7 @@ export default async function RemindersPage() {
 
   if (role !== "owner") {
     const canView = await hasPermission("reminders", "canView");
-    if (!canView) redirect("/admin/members");
+    if (!canView) redirect(await getFirstAllowedAdminPath());
   }
 
   // Fine-grained: can this user send WhatsApp / SMS?
@@ -54,7 +54,21 @@ export default async function RemindersPage() {
   const in7 = new Date();
   in7.setDate(today.getDate() + 7);
 
-  const expiring = allMembers.filter((m) => new Date(m.membershipExpiry) <= in7);
+  // A member's phone number is one field, and `members` is where the owner ticks
+  // it off — but this page is the second place it is rendered, and hiding it on
+  // the members list alone would have left every number readable here. The
+  // default staff permissions grant reminders.canView, so that hole would have
+  // been the normal case rather than an edge one. Blanked at the boundary like
+  // members/page.tsx; lib/whatsapp.ts then reports no dialable number and every
+  // send path refuses of its own accord, which is the honest outcome — an
+  // account that may not see a number cannot address a message to it.
+  const hiddenFields = role === "owner" ? [] : await getHiddenFields("members");
+  const hidden = new Set(hiddenFields);
+  const safeMembers: Member[] = hidden.has("contactNumber")
+    ? allMembers.map((m) => ({ ...m, contactNumber: "" }))
+    : allMembers;
+
+  const expiring = safeMembers.filter((m) => new Date(m.membershipExpiry) <= in7);
 
   const scopeLabel = scope.type === "single" ? scope.branchName : "All Branches";
 
@@ -68,11 +82,12 @@ export default async function RemindersPage() {
       </div>
 
       <ReminderPanel
-        members={allMembers}
+        members={safeMembers}
         expiringMembers={expiring}
         role={role}
         canSendWhatsApp={canSendWhatsApp}
         canSendSMS={canSendSMS}
+        hiddenFields={hiddenFields}
       />
     </>
   );

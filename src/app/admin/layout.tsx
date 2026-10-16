@@ -27,7 +27,7 @@ import {
   isBrandContentBranch,
   isSuperAdmin,
 } from "@/lib/branch";
-import { hasPermission, getCurrentUser } from "@/lib/auth-check";
+import { hasPermission, hasModulePageAccess, getCurrentUser } from "@/lib/auth-check";
 import { istDateString } from "@/lib/utils";
 import BranchSwitcher from "./branch-switcher";
 import LogoutButton from "./logout-button";
@@ -88,10 +88,13 @@ export default async function AdminLayout({ children }: { children: ReactNode })
   const canSeeMembers = isOwner || (await hasPermission("members", "canView"));
   const canSeeReminders =
     isOwner || (await hasPermission("reminders", "canView"));
+  // Enquiries and Equipment can be used add-only, so their links follow the same
+  // predicate as their page guards — a link that shows for a page that then
+  // redirects is how the redirect loop started.
   const canSeeEnquiries =
-    isOwner || (await hasPermission("enquiries", "canView"));
+    isOwner || (await hasModulePageAccess("enquiries"));
   const canSeeEquipment =
-    isOwner || (await hasPermission("equipment", "canView"));
+    isOwner || (await hasModulePageAccess("equipment"));
   const canSeeImport = isOwner || (await hasPermission("import", "canView"));
   // Security is the login log. It has no branch column and cannot get one (an
   // attempt is recorded before anyone is authenticated), so it is main-owner
@@ -136,6 +139,10 @@ export default async function AdminLayout({ children }: { children: ReactNode })
   // Wrapped for the same reason: a DB hiccup must not take the shell down.
   let dueEnquiryCount = 0;
   if (canSeeEnquiries) {
+    // An add-only account counts only its own call list — the gym's total is
+    // exactly the number it is not allowed to read back. `-1` is not a serial
+    // id, so a null id would match nothing rather than everything.
+    const ownOnly = !isOwner && !(await hasPermission("enquiries", "canView"));
     try {
       const rows = await db
         .select({ c: count() })
@@ -147,7 +154,8 @@ export default async function AdminLayout({ children }: { children: ReactNode })
             lte(enquiries.followUpDate, istDateString()),
             currentBranchId === "all"
               ? undefined
-              : eq(enquiries.branchId, currentBranchId)
+              : eq(enquiries.branchId, currentBranchId),
+            ownOnly ? eq(enquiries.createdByUserId, user?.id ?? -1) : undefined
           )
         );
       dueEnquiryCount = Number(rows[0]?.c ?? 0);

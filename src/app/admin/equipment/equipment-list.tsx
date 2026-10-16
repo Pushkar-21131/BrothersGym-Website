@@ -30,6 +30,8 @@ export type Item = {
   equipmentName: string;
   cost: number;
   date: string;
+  /** Who logged it. Null on rows filed before the column existed. */
+  createdByName: string | null;
 };
 
 type Branch = { id: number; code: string; name: string };
@@ -42,6 +44,8 @@ type Props = {
   canAdd?: boolean;
   canEdit?: boolean;
   canDelete?: boolean;
+  /** Add-only: every row here is the viewer's own, so the creator is not shown. */
+  ownOnly?: boolean;
 };
 
 export default function EquipmentList({
@@ -52,12 +56,14 @@ export default function EquipmentList({
   canAdd = true,
   canEdit = true,
   canDelete = true,
+  ownOnly = false,
 }: Props) {
   const [showAdd, setShowAdd] = useState(false);
   const [editing, setEditing] = useState<Item | null>(null);
   const [loading, setLoading] = useState(false);
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [search, setSearch] = useState("");
+  const [creator, setCreator] = useState<string | null>(null);
   const router = useRouter();
 
   const needsBranchPick = currentBranchId === null;
@@ -74,16 +80,29 @@ export default function EquipmentList({
     return { all, thisYear, count: initialItems.length };
   }, [initialItems]);
 
+  // Built from the rows already loaded — no extra query, and worth a row of
+  // chips only once more than one person has actually logged something.
+  const creatorNames = useMemo(() => {
+    const seen = new Set<string>();
+    for (const i of initialItems) {
+      if (i.createdByName) seen.add(i.createdByName);
+    }
+    return [...seen].sort((a, b) => a.localeCompare(b));
+  }, [initialItems]);
+
   const filtered = useMemo(() => {
     const q = search.toLowerCase().trim();
-    if (!q) return initialItems;
-    return initialItems.filter(
+    const byCreator = creator
+      ? initialItems.filter((i) => i.createdByName === creator)
+      : initialItems;
+    if (!q) return byCreator;
+    return byCreator.filter(
       (i) =>
         i.equipmentName.toLowerCase().includes(q) ||
         i.date.includes(q) ||
         (i.branchName && i.branchName.toLowerCase().includes(q))
     );
-  }, [initialItems, search]);
+  }, [initialItems, search, creator]);
 
   async function handleAdd(formData: FormData) {
     setLoading(true);
@@ -176,7 +195,9 @@ export default function EquipmentList({
   return (
     <div className="adm-pagebody">
       <section className="adm-hero">
-        <div className="adm-hero-label">Total Spent · All Time</div>
+        <div className="adm-hero-label">
+          {ownOnly ? "Total Spent · Your Entries" : "Total Spent · All Time"}
+        </div>
         <div className="adm-hero-value" style={{ color: "var(--red2)" }}>
           {formatINR(totals.all)}
         </div>
@@ -213,6 +234,30 @@ export default function EquipmentList({
           aria-label="Search equipment"
         />
       </div>
+
+      {/* Only for an account that sees the whole list, and only once there is
+          more than one author to tell apart. */}
+      {!ownOnly && creatorNames.length > 1 && (
+        <div className="adm-chips" style={{ marginTop: 10 }}>
+          <button
+            type="button"
+            onClick={() => setCreator(null)}
+            className={`adm-chip${creator === null ? " active" : ""}`}
+          >
+            Everyone
+          </button>
+          {creatorNames.map((n) => (
+            <button
+              key={n}
+              type="button"
+              onClick={() => setCreator(n)}
+              className={`adm-chip${creator === n ? " active" : ""}`}
+            >
+              {n}
+            </button>
+          ))}
+        </div>
+      )}
 
       <div className="adm-toolbar">
         {/* Desktop's stand-in for the FAB, on the same row as the exports so
@@ -264,6 +309,7 @@ export default function EquipmentList({
                 <span className="adm-feed-sub" style={{ display: "block" }}>
                   {i.date}
                   {showBranchColumn && i.branchCode && ` · ${i.branchCode}`}
+                  {!ownOnly && i.createdByName && ` · by ${i.createdByName}`}
                 </span>
               </span>
 

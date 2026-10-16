@@ -3,14 +3,14 @@ import { branches } from "@/db/schema";
 import { redirect } from "next/navigation";
 import { desc, eq } from "drizzle-orm";
 import BranchesClient from "./branches-client";
-import { getVerifiedRole } from "@/lib/auth-check";
+import { getVerifiedRole, getFirstAllowedAdminPath } from "@/lib/auth-check";
 import { getBranchScope, isSuperAdmin } from "@/lib/branch";
 
 export const dynamic = "force-dynamic";
 
 export default async function BranchesPage() {
   const role = await getVerifiedRole();
-  if (role !== "owner") redirect("/admin/members");
+  if (role !== "owner") redirect(await getFirstAllowedAdminPath());
 
   // Each row here holds that gym's public address, phone, owner name, owner
   // email and payee details. A branch owner sees only their own — the write

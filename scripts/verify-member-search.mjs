@@ -154,6 +154,22 @@ ok(
   0
 );
 
+// The page blanks the column before it reaches the client, so this is the second
+// layer rather than the only one — but a blank cell and a hidden cell have to be
+// the same thing to the search, or one of the two paths reads the number back.
+group("A hidden phone number is not searchable either");
+const hidePhone = (f) => f === "contactNumber";
+ok("a full number, in the default scope", find("9811234567", "all", hidePhone), []);
+ok("a partial number, in the Phone scope", find("22345", "phone", hidePhone), []);
+ok("a 10-digit query is not rescued by another field", find("9811", "phone", hidePhone), []);
+ok(
+  "and the same two queries still work when it is not hidden",
+  [find("9811234567")[0], find("22345", "phone")[0]],
+  [1, 11]
+);
+ok("an M.No is still findable", find("1295", "all", hidePhone), [1295]);
+ok("and so is a name", find("ravi", "all", hidePhone), [1]);
+
 group("gymIdWanted() itself");
 ok('"1"', gymIdWanted("1"), 1);
 ok('"C-1295"', gymIdWanted("C-1295"), 1295);

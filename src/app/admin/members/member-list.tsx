@@ -218,7 +218,8 @@ export default function MemberList({
       headers.push("Name", "Gender");
       if (!hide("address")) headers.push("Address");
       if (!hide("parentName")) headers.push("Father Name");
-      headers.push("Ph.No", "Joining Date", "Due Date");
+      if (!hide("contactNumber")) headers.push("Ph.No");
+      headers.push("Joining Date", "Due Date");
       if (!hide("email")) headers.push("Email");
       if (!hide("emergencyContact")) headers.push("Emergency Contact");
 
@@ -248,7 +249,8 @@ export default function MemberList({
         row.push(m.name, genderLabel(m.gender));
         if (!hide("address")) row.push(m.address || "");
         if (!hide("parentName")) row.push(m.parentName || "");
-        row.push(m.contactNumber, m.joiningDate, m.membershipExpiry);
+        if (!hide("contactNumber")) row.push(m.contactNumber);
+        row.push(m.joiningDate, m.membershipExpiry);
         if (!hide("email")) row.push(m.email || "");
         if (!hide("emergencyContact")) row.push(m.emergencyContact);
         sheet.addRow(row);
@@ -281,9 +283,9 @@ export default function MemberList({
     const doc = new jsPDF();
     doc.text("Brothers Gym - Members List", 14, 15);
 
-    const cols: string[] = [
-      "Branch", "M.No", "Name", "Gender", "Ph.No", "Joining", "Due Date",
-    ];
+    const cols: string[] = ["Branch", "M.No", "Name", "Gender"];
+    if (!hide("contactNumber")) cols.push("Ph.No");
+    cols.push("Joining", "Due Date");
     if (!hide("feeAmount")) cols.push("Fees");
 
     const rows = initialMembers.map((m) => {
@@ -292,10 +294,9 @@ export default function MemberList({
         formatGymId(m.gymId, m.planType),
         m.name,
         genderLabel(m.gender),
-        m.contactNumber,
-        m.joiningDate,
-        m.membershipExpiry,
       ];
+      if (!hide("contactNumber")) row.push(m.contactNumber);
+      row.push(m.joiningDate, m.membershipExpiry);
       if (!hide("feeAmount")) {
         row.push(`₹${m.feeAmount.toLocaleString("en-IN")}`);
       }
@@ -507,8 +508,9 @@ export default function MemberList({
   }, [initialMembers, searchQuery, searchScope, filter, planFilter, genderFilter, hiddenFields, today, soon]);
 
   // Column count for the desktop table's empty state
-  let visibleColCount = 7; // M.No, Name, Gender, Ph.No, Joining, Due Date, Actions
+  let visibleColCount = 6; // M.No, Name, Gender, Joining, Due Date, Actions
   if (showBranchColumn) visibleColCount += 1;
+  if (!hide("contactNumber")) visibleColCount += 1;
   if (!hide("feeAmount")) visibleColCount += 1;
   if (!hide("address")) visibleColCount += 1;
   if (!hide("parentName")) visibleColCount += 1;
@@ -732,21 +734,23 @@ export default function MemberList({
                 </div>
 
                 <div className="adm-rec-grid">
-                  <div>
-                    <div className="adm-rec-k">Phone</div>
-                    {hasDialablePhone(m.contactNumber) ? (
-                      <a
-                        href={`tel:${m.contactNumber}`}
-                        className="adm-rec-v adm-link"
-                      >
-                        <Phone size={11} /> {m.contactNumber}
-                      </a>
-                    ) : (
-                      <div className="adm-rec-v" style={{ color: "var(--text3)" }}>
-                        Not on file
-                      </div>
-                    )}
-                  </div>
+                  {!hide("contactNumber") && (
+                    <div>
+                      <div className="adm-rec-k">Phone</div>
+                      {hasDialablePhone(m.contactNumber) ? (
+                        <a
+                          href={`tel:${m.contactNumber}`}
+                          className="adm-rec-v adm-link"
+                        >
+                          <Phone size={11} /> {m.contactNumber}
+                        </a>
+                      ) : (
+                        <div className="adm-rec-v" style={{ color: "var(--text3)" }}>
+                          Not on file
+                        </div>
+                      )}
+                    </div>
+                  )}
                   <div>
                     <div className="adm-rec-k">Due</div>
                     <div
@@ -807,7 +811,7 @@ export default function MemberList({
               <th>Gender</th>
               {!hide("address") && <th>Address</th>}
               {!hide("parentName") && <th>Father Name</th>}
-              <th>Ph.No</th>
+              {!hide("contactNumber") && <th>Ph.No</th>}
               <th>Joining Date</th>
               <th>Due Date</th>
               <th>Actions</th>
@@ -854,7 +858,9 @@ export default function MemberList({
                       <td className="adm-td-clip">{m.address || "—"}</td>
                     )}
                     {!hide("parentName") && <td>{m.parentName || "—"}</td>}
-                    <td>{m.contactNumber || "—"}</td>
+                    {!hide("contactNumber") && (
+                      <td>{m.contactNumber || "—"}</td>
+                    )}
                     <td style={{ color: "var(--blue2)" }}>{m.joiningDate}</td>
                     <td>
                       <span
@@ -1137,15 +1143,24 @@ function MemberUpdateSheet({
   feeAmount?: number;
   onClose: () => void;
 }) {
-  const [message, setMessage] = useState(() =>
+  const compose = (c: MemberChange[], e: string) =>
     buildMemberUpdateMessage({
       name: member.name,
       gymId: member.gymId,
-      changes,
-      expiry,
+      changes: c,
+      expiry: e,
       feeAmount,
-    })
-  );
+    });
+
+  const [message, setMessage] = useState(() => compose(changes, expiry));
+  // The "What changed" list above re-renders from these props; the message does
+  // not. A sheet that lives through a second change would otherwise quote one
+  // renewal's dates under the other's header, which is a preview of nothing.
+  const [composedFrom, setComposedFrom] = useState({ changes, expiry });
+  if (composedFrom.changes !== changes || composedFrom.expiry !== expiry) {
+    setComposedFrom({ changes, expiry });
+    setMessage(compose(changes, expiry));
+  }
 
   const dialable = hasDialablePhone(member.contactNumber);
 
@@ -1336,14 +1351,19 @@ function MemberFormModal({
               placeholder="e.g. Sh. Ram Kumar"
             />
           )}
-          <Input
-            label="Ph.No (Phone Number)"
-            name="contactNumber"
-            type="tel"
-            required
-            defaultValue={member?.contactNumber ?? prefill?.phone}
-            placeholder="10-digit mobile"
-          />
+          {/* Shown even when hidden on the ADD form: a new member cannot be
+              created without a number, and an empty box reveals nothing. On an
+              edit the box would print the number it is meant to withhold. */}
+          {(!hide("contactNumber") || !member) && (
+            <Input
+              label="Ph.No (Phone Number)"
+              name="contactNumber"
+              type="tel"
+              required
+              defaultValue={member?.contactNumber ?? prefill?.phone}
+              placeholder="10-digit mobile"
+            />
+          )}
           <Input
             label="Joining Date"
             name="joiningDate"

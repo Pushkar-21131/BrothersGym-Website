@@ -40,6 +40,8 @@ type ReminderPanelProps = {
   role?: "owner" | "staff";
   canSendWhatsApp?: boolean;
   canSendSMS?: boolean;
+  /** Member columns this account may not see — see members/page.tsx. */
+  hiddenFields?: string[];
 };
 
 function sleep(ms: number) {
@@ -52,6 +54,7 @@ export default function ReminderPanel({
   role,
   canSendWhatsApp = true,
   canSendSMS = false,
+  hiddenFields = [],
 }: ReminderPanelProps) {
   const [mode, setMode] = useState<"expiring" | "all">("expiring");
   const [templateId, setTemplateId] =
@@ -64,7 +67,9 @@ export default function ReminderPanel({
   const [bulkSmsProgress, setBulkSmsProgress] = useState("");
 
   const list = mode === "expiring" ? expiringMembers : members;
-  const canWA = canSendWhatsApp;
+  // No number means nothing to address a WhatsApp to, so the action goes with
+  // the field rather than sitting there and failing on every press.
+  const canWA = canSendWhatsApp && !hiddenFields.includes("contactNumber");
   const canSMS = canSendSMS;
 
   // ============================================
@@ -469,13 +474,14 @@ export default function ReminderPanel({
                   </div>
                 </div>
 
-                {hasDialablePhone(m.contactNumber) ? (
-                  <a href={`tel:${m.contactNumber}`} className="adm-link">
-                    {m.contactNumber}
-                  </a>
-                ) : (
-                  <span style={{ color: "var(--text3)" }}>No number</span>
-                )}
+                {!hiddenFields.includes("contactNumber") &&
+                  (hasDialablePhone(m.contactNumber) ? (
+                    <a href={`tel:${m.contactNumber}`} className="adm-link">
+                      {m.contactNumber}
+                    </a>
+                  ) : (
+                    <span style={{ color: "var(--text3)" }}>No number</span>
+                  ))}
               </div>
 
               <div className="adm-rec-foot">

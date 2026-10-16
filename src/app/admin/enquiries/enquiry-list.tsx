@@ -52,6 +52,8 @@ export type Enquiry = {
   lastContactedAt: Date | null;
   contactCount: number;
   convertedMemberId: number | null;
+  /** Who logged it. Null on rows filed before the column existed. */
+  createdByName: string | null;
   createdAt: Date | null;
   branchCode: string | null;
 };
@@ -67,6 +69,8 @@ type Props = {
   canEdit?: boolean;
   canDelete?: boolean;
   canSendWhatsApp?: boolean;
+  /** Add-only: every row here is the viewer's own, so the creator is not shown. */
+  ownOnly?: boolean;
 };
 
 type FilterKey = "due" | "open" | "joined" | "lost" | "all";
@@ -119,9 +123,11 @@ export default function EnquiryList({
   canEdit = true,
   canDelete = true,
   canSendWhatsApp = true,
+  ownOnly = false,
 }: Props) {
   const [searchQuery, setSearchQuery] = useState("");
   const [filter, setFilter] = useState<FilterKey>("due");
+  const [creator, setCreator] = useState<string | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
   const [editing, setEditing] = useState<Enquiry | null>(null);
   const [composing, setComposing] = useState<Enquiry | null>(null);
@@ -156,10 +162,22 @@ export default function EnquiryList({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialEnquiries, today]);
 
+  // Built from the rows already loaded — no extra query, and the chips are only
+  // worth a row when more than one person has actually filed something. Rows
+  // from before the creator column existed have no name and no chip.
+  const creatorNames = useMemo(() => {
+    const seen = new Set<string>();
+    for (const e of initialEnquiries) {
+      if (e.createdByName) seen.add(e.createdByName);
+    }
+    return [...seen].sort((a, b) => a.localeCompare(b));
+  }, [initialEnquiries]);
+
   const filtered = useMemo(() => {
     const q = searchQuery.toLowerCase().trim();
 
     const matches = initialEnquiries.filter((e) => {
+      if (creator && e.createdByName !== creator) return false;
       if (filter === "due" && !isDue(e)) return false;
       if (filter === "open" && e.status !== "new" && e.status !== "follow_up")
         return false;
@@ -185,7 +203,7 @@ export default function EnquiryList({
       return 0;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialEnquiries, filter, searchQuery, today]);
+  }, [initialEnquiries, filter, searchQuery, creator, today]);
 
   // ===== HANDLERS =====
   async function handleAdd(formData: FormData) {
@@ -295,6 +313,30 @@ export default function EnquiryList({
         ))}
       </div>
 
+      {/* Only for an account that can see the whole list, and only once there is
+          more than one author to tell apart. */}
+      {!ownOnly && creatorNames.length > 1 && (
+        <div className="adm-chips" style={{ marginBottom: 8 }}>
+          <button
+            type="button"
+            onClick={() => setCreator(null)}
+            className={`adm-chip${creator === null ? " active" : ""}`}
+          >
+            Everyone
+          </button>
+          {creatorNames.map((n) => (
+            <button
+              key={n}
+              type="button"
+              onClick={() => setCreator(n)}
+              className={`adm-chip${creator === n ? " active" : ""}`}
+            >
+              {n}
+            </button>
+          ))}
+        </div>
+      )}
+
       <div className="adm-toolbar">
         {canAdd && (
           <button
@@ -305,7 +347,10 @@ export default function EnquiryList({
             <Plus size={16} /> Add Enquiry
           </button>
         )}
-        {canAdd && (
+        {/* Not for an add-only account: the importer answers with a skip count
+            taken from the whole branch's list, which is the read this mode is
+            there to refuse. The action refuses it too. */}
+        {canAdd && !ownOnly && (
           <button
             type="button"
             className="adm-btn"
@@ -376,6 +421,9 @@ export default function EnquiryList({
                       {e.sex && <span className="adm-tag">{SEX_LABELS[e.sex]}</span>}
                       {showBranchColumn && e.branchCode && (
                         <span className="adm-tag gold">{e.branchCode}</span>
+                      )}
+                      {!ownOnly && e.createdByName && (
+                        <span className="adm-tag">by {e.createdByName}</span>
                       )}
                     </div>
                   </div>

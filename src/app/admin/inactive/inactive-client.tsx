@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import toast from "react-hot-toast";
 import {
@@ -35,6 +35,10 @@ import { memberMatches } from "@/lib/member-search";
  * staff account with fees or email hidden, since this page never consulted
  * `hiddenFields` at all. Not selecting a column is a stronger guarantee than
  * blanking it: there is no configuration to get wrong and nothing to leak.
+ *
+ * `contactNumber` cannot be dropped the same way — the dial link and the Win
+ * Back button are built from it — so the page blanks it at the boundary and
+ * this file renders it behind `hide()`.
  */
 export type Member = {
   id: number;
@@ -57,6 +61,8 @@ export type Member = {
 
 type Props = {
   initialMembers: Member[];
+  /** Member columns this account may not see — see members/page.tsx. */
+  hiddenFields: string[];
   showBranchColumn: boolean;
   /** Server clock in ms — passed in so the SSR pass and hydration cannot disagree. */
   now: number;
@@ -117,9 +123,14 @@ function baseDate(m: Member): string {
 
 export default function InactiveMembersClient({
   initialMembers,
+  hiddenFields,
   showBranchColumn,
   now,
 }: Props) {
+  const hide = useCallback(
+    (field: string) => hiddenFields.includes(field),
+    [hiddenFields]
+  );
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<"expired" | "left" | "won_back" | "all">(
     "expired"
@@ -161,9 +172,10 @@ export default function InactiveMembersClient({
       const q = search.toLowerCase().trim();
       // The same reader the members list uses, so "1" means M.No 1 here too —
       // matching every field as a substring used to return every row on file,
-      // since a 1 sits inside almost every phone number. Nothing is hidden on
-      // this page: it selects no hideable column at all.
-      list = list.filter((m) => memberMatches(m, q, "all", () => false));
+      // since a 1 sits inside almost every phone number. The phone is the one
+      // hideable column this page holds, and a hidden value must not be
+      // searchable either, or the search box reads it back a digit at a time.
+      list = list.filter((m) => memberMatches(m, q, "all", hide));
     }
 
     // The grace period matters here: a membership that ran out last week can
@@ -178,7 +190,7 @@ export default function InactiveMembersClient({
     }
 
     return list;
-  }, [initialMembers, search, filter, age, from, to, now]);
+  }, [initialMembers, search, filter, age, from, to, now, hide]);
 
   // Derived from `filtered`, never from `selected` alone. That is what makes the
   // counter un-abusable: an id that is no longer on screen cannot be in this
@@ -570,18 +582,22 @@ export default function InactiveMembersClient({
               </div>
 
               <div className="adm-rec-grid">
-                <div>
-                  <div className="adm-rec-k">Phone</div>
-                  {hasDialablePhone(m.contactNumber) ? (
-                    <a href={`tel:${m.contactNumber}`} className="adm-rec-v adm-link">
-                      <Phone size={11} /> {m.contactNumber}
-                    </a>
-                  ) : (
-                    <div className="adm-rec-v" style={{ color: "var(--text3)" }}>
-                      Not on file
-                    </div>
-                  )}
-                </div>
+                {/* Absent, not "Not on file": the number exists, this account
+                    just may not see it. Saying it is missing would be a lie. */}
+                {!hide("contactNumber") && (
+                  <div>
+                    <div className="adm-rec-k">Phone</div>
+                    {hasDialablePhone(m.contactNumber) ? (
+                      <a href={`tel:${m.contactNumber}`} className="adm-rec-v adm-link">
+                        <Phone size={11} /> {m.contactNumber}
+                      </a>
+                    ) : (
+                      <div className="adm-rec-v" style={{ color: "var(--text3)" }}>
+                        Not on file
+                      </div>
+                    )}
+                  </div>
+                )}
                 <div>
                   <div className="adm-rec-k">Expired</div>
                   <div className="adm-rec-v" style={{ color: "var(--red2)" }}>

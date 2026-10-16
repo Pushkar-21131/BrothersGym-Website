@@ -81,6 +81,7 @@ export function memberMatches(
   if (scope === "gymId") return wanted !== null && m.gymId === wanted;
   if (scope === "name") return m.name.toLowerCase().includes(q);
   if (scope === "phone") {
+    if (hide("contactNumber")) return false;
     const digits = digitsOf(q);
     return digits.length > 0 && digitsOf(m.contactNumber).includes(digits);
   }
@@ -90,7 +91,7 @@ export function memberMatches(
 
   return Boolean(
     (wanted !== null && m.gymId === wanted) ||
-      (asPhone && digitsOf(m.contactNumber).includes(digitsOf(q))) ||
+      (asPhone && !hide("contactNumber") && digitsOf(m.contactNumber).includes(digitsOf(q))) ||
       m.name.toLowerCase().includes(q) ||
       (m.email && !hide("email") && m.email.toLowerCase().includes(q)) ||
       (m.address && !hide("address") && m.address.toLowerCase().includes(q)) ||

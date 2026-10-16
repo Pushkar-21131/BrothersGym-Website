@@ -4,7 +4,7 @@ import { redirect } from "next/navigation";
 import Link from "next/link";
 import { and, desc, gte, ilike, lt, lte, or, sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
-import { getVerifiedRole } from "@/lib/auth-check";
+import { getVerifiedRole, getFirstAllowedAdminPath } from "@/lib/auth-check";
 import { isSuperAdmin } from "@/lib/branch";
 
 import {
@@ -208,7 +208,7 @@ export default async function SecurityPage({
   if (!(await isSuperAdmin())) {
     const role = await getVerifiedRole();
     if (!role) redirect("/login");
-    redirect("/admin/members");
+    redirect(await getFirstAllowedAdminPath());
   }
 
   // ---- Archive search (searches ALL history, including past 30 days) ----

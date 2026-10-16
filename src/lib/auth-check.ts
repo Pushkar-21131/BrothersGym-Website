@@ -14,6 +14,7 @@ import { db } from "@/db";
 import { appUsers, StaffPermissions } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { verifySessionToken, SESSION_COOKIE, type SessionPayload } from "@/lib/session";
+import { PERMISSION_MODULES } from "@/lib/permissions";
 
 export type Role = "owner" | "staff";
 
@@ -124,7 +125,7 @@ export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
 export async function requireOwner() {
   const role = await getVerifiedRole();
   if (role !== "owner") {
-    redirect("/admin/members");
+    redirect(await getFirstAllowedAdminPath());
   }
 }
 
@@ -199,6 +200,79 @@ export async function getHiddenFields(
     | undefined;
 
   return modulePerms?.hiddenFields || [];
+}
+
+/**
+ * Any action at all granted for this module. Owners always true.
+ *
+ * The page gate for a module that can be used add-only: an account that may
+ * write but not browse still has a page to write on.
+ */
+export async function hasAnyModuleAction(
+  module: keyof StaffPermissions
+): Promise<boolean> {
+  const user = await getCurrentUser();
+  if (!user) return false;
+  if (user.role === "owner") return true;
+
+  const modulePerms = user.permissions?.[module] as
+    | Record<string, boolean | string[]>
+    | undefined;
+  if (!modulePerms) return false;
+
+  const actions =
+    PERMISSION_MODULES.find((m) => m.key === module)?.actions ?? [];
+
+  return actions.some((a) => modulePerms[a.key] === true);
+}
+
+/**
+ * Whether this account may open the module's admin page at all.
+ *
+ * For most modules that is canView — the page is a list, and the list is the
+ * whole of it. A module flagged `allowAddOnly` also opens for an account that
+ * may only write; its page scopes itself to the rows that account created.
+ *
+ * This is the ONE predicate for that question. It is read by the page guards,
+ * by the sidebar and by getFirstAllowedAdminPath below, because a nav link that
+ * shows for a page that then redirects is a redirect loop.
+ */
+export async function hasModulePageAccess(
+  module: keyof StaffPermissions
+): Promise<boolean> {
+  const mod = PERMISSION_MODULES.find((m) => m.key === module);
+  if (mod?.allowAddOnly) return hasAnyModuleAction(module);
+  return hasPermission(module, "canView");
+}
+
+/**
+ * The first admin page this account may open. Every guard that cannot show
+ * itself redirects here rather than naming another page — two pages naming each
+ * other is what left a permissionless account bouncing on a blank shell.
+ *
+ * Each test below must equal its page's own gate, or the page refuses the path
+ * this returns and the loop is back. So /admin (owner-only), /admin/security
+ * (also isSuperAdmin) and /admin/reviews (also brand-content branch) are out.
+ */
+export async function getFirstAllowedAdminPath(): Promise<string> {
+  const user = await getCurrentUser();
+  if (!user) return "/login";
+  if (user.role === "owner") return "/admin";
+
+  const candidates: Array<[keyof StaffPermissions, string]> = [
+    ["members", "/admin/members"],
+    ["enquiries", "/admin/enquiries"],
+    ["reminders", "/admin/reminders"],
+    ["equipment", "/admin/equipment"],
+    ["staff", "/admin/staff"],
+    ["trainers", "/admin/trainers"],
+    ["import", "/admin/import"],
+  ];
+
+  for (const [mod, path] of candidates) {
+    if (await hasModulePageAccess(mod)) return path;
+  }
+  return "/admin/no-access";
 }
 
 /**

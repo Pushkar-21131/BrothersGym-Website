@@ -29,13 +29,26 @@ export default function PermissionsModal({
   function toggleAction(moduleKey: string, actionKey: string) {
     setPerms((prev) => {
       const modulePerms = (prev[moduleKey as keyof StaffPermissions] as any) || {};
-      return {
-        ...prev,
-        [moduleKey]: {
-          ...modulePerms,
-          [actionKey]: !modulePerms[actionKey],
-        },
-      };
+      const next = { ...modulePerms, [actionKey]: !modulePerms[actionKey] };
+      const mod = PERMISSION_MODULES.find((m) => m.key === moduleKey);
+
+      // Mirrors the server, so the panel never shows a state the save changes.
+      //
+      // In an add-only module View is a mode rather than a gate — it means
+      // "sees every row" — so toggling it clears nothing. View off + Add on is
+      // the notepad, View off + Edit on is "edit my own", and turning Add off
+      // is how access is removed. Everywhere else View IS the gate, so an
+      // action that cannot be reached is not a permission.
+      if (mod?.allowAddOnly !== true) {
+        if (actionKey !== "canView" && next[actionKey]) next.canView = true;
+        if (actionKey === "canView" && !next.canView) {
+          for (const a of mod?.actions ?? []) {
+            if (a.key !== "canView") next[a.key] = false;
+          }
+        }
+      }
+
+      return { ...prev, [moduleKey]: next };
     });
   }
 
@@ -185,32 +198,51 @@ export default function PermissionsModal({
         const hiddenFields: string[] = modulePerms.hiddenFields || [];
         const hasAnyAction = mod.actions.some((a) => modulePerms[a.key]);
 
+        // View is the disclosure control, because it is the gate: nothing in a
+        // module is reachable without it, so a section that is off is one switch
+        // and not a wall of them. Keyed off hasAnyAction rather than canView so a
+        // record stored before View was implied still shows what it grants.
+        const open = hasAnyAction;
+        const viewAction = mod.actions.find((a) => a.key === "canView");
+        const subActions = mod.actions.filter((a) => a.key !== "canView");
+
+        const renderSwitch = (action: { key: string; label: string }) => (
+          <label key={action.key} className="adm-switch">
+            <span className="adm-switch-text">
+              <span className="adm-switch-title">{action.label}</span>
+            </span>
+            <input
+              type="checkbox"
+              checked={Boolean(modulePerms[action.key])}
+              onChange={() => toggleAction(mod.key, action.key)}
+            />
+            <span className="adm-switch-track" aria-hidden="true" />
+          </label>
+        );
+
         return (
           <div key={mod.key} className={`adm-perm${hasAnyAction ? " on" : ""}`}>
             <div className="adm-perm-title">{mod.label}</div>
             <div className="adm-perm-desc">{mod.description}</div>
 
             <div className="adm-perm-acts">
-              {mod.actions.map((action) => {
-                const enabled = Boolean(modulePerms[action.key]);
-                return (
-                  <label key={action.key} className="adm-switch">
-                    <span className="adm-switch-text">
-                      <span className="adm-switch-title">{action.label}</span>
-                    </span>
-                    <input
-                      type="checkbox"
-                      checked={enabled}
-                      onChange={() => toggleAction(mod.key, action.key)}
-                    />
-                    <span className="adm-switch-track" aria-hidden="true" />
-                  </label>
-                );
-              })}
+              {viewAction && renderSwitch(viewAction)}
+              {open && subActions.length > 0 && (
+                <div className="adm-perm-kids">{subActions.map(renderSwitch)}</div>
+              )}
             </div>
 
+            {/* The state the owner reached for and could not get: writing
+                without reading. Without this line it is indistinguishable from
+                the broken config that showed nothing at all. */}
+            {mod.allowAddOnly && !modulePerms.canView && hasAnyAction && (
+              <p className="adm-hint" style={{ marginTop: 9 }}>
+                Sees only the entries they add — not the rest of the list.
+              </p>
+            )}
+
             {/* Field hiding only matters once the module is visible at all. */}
-            {mod.hideableFields && modulePerms.canView && (
+            {mod.hideableFields && open && (
               <div className="adm-perm-hide">
                 <p className="adm-hint" style={{ marginBottom: 8 }}>
                   Tap a field to hide it from this staff member.

@@ -1,10 +1,16 @@
 import { db } from "@/db";
 import { enquiries, branches } from "@/db/schema";
-import { desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import { redirect } from "next/navigation";
 import EnquiryList, { type Enquiry } from "./enquiry-list";
 import { getBranchScope, getAllBranches } from "@/lib/branch";
-import { getVerifiedRole, hasPermission } from "@/lib/auth-check";
+import {
+  getVerifiedRole,
+  hasPermission,
+  hasModulePageAccess,
+  getCurrentUser,
+  getFirstAllowedAdminPath,
+} from "@/lib/auth-check";
 
 export const dynamic = "force-dynamic";
 
@@ -12,11 +18,14 @@ export default async function EnquiriesPage() {
   const role = await getVerifiedRole();
   if (!role) redirect("/login");
 
-  if (role !== "owner") {
-    const canView = await hasPermission("enquiries", "canView");
-    if (!canView) redirect("/admin/members");
+  // Enquiries can be used add-only: an account with Add and no View reaches this
+  // page and sees back only the rows it wrote. Same predicate as the sidebar
+  // link and getFirstAllowedAdminPath, so the nav and the guard cannot disagree.
+  if (!(await hasModulePageAccess("enquiries"))) {
+    redirect(await getFirstAllowedAdminPath());
   }
 
+  const canView = role === "owner" || (await hasPermission("enquiries", "canView"));
   const canAdd = role === "owner" || (await hasPermission("enquiries", "canAdd"));
   const canEdit = role === "owner" || (await hasPermission("enquiries", "canEdit"));
   const canDelete =
@@ -25,6 +34,15 @@ export default async function EnquiriesPage() {
     role === "owner" || (await hasPermission("enquiries", "canSendWhatsApp"));
 
   const scope = await getBranchScope();
+  const me = await getCurrentUser();
+
+  // `-1` is not a serial id, so a null viewer matches nothing rather than
+  // everything. It cannot happen — a null id means the env-based owner, who
+  // always has canView — but the restrictive direction is the one to fail in.
+  const ownOnly = !canView;
+  const ownClause = ownOnly
+    ? eq(enquiries.createdByUserId, me?.id ?? -1)
+    : undefined;
 
   // Column list, not select() — the annotation below would accept a wider row
   // silently, which is how the reminders page once shipped every member's
@@ -43,15 +61,19 @@ export default async function EnquiriesPage() {
       lastContactedAt: enquiries.lastContactedAt,
       contactCount: enquiries.contactCount,
       convertedMemberId: enquiries.convertedMemberId,
+      createdByName: enquiries.createdByName,
       createdAt: enquiries.createdAt,
       branchCode: branches.code,
     })
     .from(enquiries)
     .leftJoin(branches, eq(enquiries.branchId, branches.id))
     .where(
-      scope.type === "single"
-        ? eq(enquiries.branchId, scope.branchId)
-        : inArray(enquiries.branchId, scope.branchIds)
+      and(
+        scope.type === "single"
+          ? eq(enquiries.branchId, scope.branchId)
+          : inArray(enquiries.branchId, scope.branchIds),
+        ownClause
+      )
     )
     .orderBy(desc(enquiries.createdAt));
 
@@ -64,8 +86,16 @@ export default async function EnquiriesPage() {
     <>
       <div className="adm-head">
         <h1 className="adm-h1">Enquiries</h1>
+        {/* A branch-wide count is itself a disclosure, so add-only says whose
+            list this is instead of how big the gym's is. */}
         <p className="adm-sub">
-          <strong>{scopeLabel}</strong> · {rows.length} total
+          {ownOnly ? (
+            <>Your entries · {rows.length}</>
+          ) : (
+            <>
+              <strong>{scopeLabel}</strong> · {rows.length} total
+            </>
+          )}
         </p>
       </div>
       <EnquiryList
@@ -77,6 +107,7 @@ export default async function EnquiriesPage() {
         canEdit={canEdit}
         canDelete={canDelete}
         canSendWhatsApp={canSendWhatsApp}
+        ownOnly={ownOnly}
       />
     </>
   );

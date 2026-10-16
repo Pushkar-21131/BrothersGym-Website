@@ -177,6 +177,8 @@ export async function middleware(request: NextRequest) {
   }
 
   // ===== 5. Staff hits /admin (dashboard) → send to /admin/members =====
+  // A dispatcher, not a destination: middleware runs before the database, so the
+  // members page is what forwards them to a section they can actually view.
   if (pathname === "/admin" && isAuthed && role === "staff") {
     return applySecurityHeaders(
       NextResponse.redirect(new URL("/admin/members", request.url))

@@ -1,7 +1,11 @@
 import ImportMembersClient from "./import-members-client";
 import { getAllBranches, getBranchScope } from "@/lib/branch";
 import { redirect } from "next/navigation";
-import { getVerifiedRole, hasPermission } from "@/lib/auth-check";
+import {
+  getVerifiedRole,
+  hasPermission,
+  getFirstAllowedAdminPath,
+} from "@/lib/auth-check";
 
 export default async function ImportPage() {
   const role = await getVerifiedRole();
@@ -9,7 +13,7 @@ export default async function ImportPage() {
 
   if (role !== "owner") {
     const canView = await hasPermission("import", "canView");
-    if (!canView) redirect("/admin/members");
+    if (!canView) redirect(await getFirstAllowedAdminPath());
   }
 
   const canUse = role === "owner" || (await hasPermission("import", "canUse"));

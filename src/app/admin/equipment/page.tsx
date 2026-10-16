@@ -1,10 +1,16 @@
 import { db } from "@/db";
 import { equipmentExpenses, branches } from "@/db/schema";
-import { desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import { redirect } from "next/navigation";
 import EquipmentList, { type Item } from "./equipment-list";
 import { getBranchScope, getAllBranches } from "@/lib/branch";
-import { getVerifiedRole, hasPermission } from "@/lib/auth-check";
+import {
+  getVerifiedRole,
+  hasPermission,
+  hasModulePageAccess,
+  getCurrentUser,
+  getFirstAllowedAdminPath,
+} from "@/lib/auth-check";
 
 export const dynamic = "force-dynamic";
 
@@ -12,16 +18,26 @@ export default async function EquipmentPage() {
   const role = await getVerifiedRole();
   if (!role) redirect("/login");
 
-  if (role !== "owner") {
-    const canView = await hasPermission("equipment", "canView");
-    if (!canView) redirect("/admin/members");
+  // See the note in admin/enquiries/page.tsx: this module can be used add-only,
+  // and hasModulePageAccess is the one predicate the nav and the guard share.
+  if (!(await hasModulePageAccess("equipment"))) {
+    redirect(await getFirstAllowedAdminPath());
   }
 
+  const canView = role === "owner" || (await hasPermission("equipment", "canView"));
   const canAdd = role === "owner" || (await hasPermission("equipment", "canAdd"));
   const canEdit = role === "owner" || (await hasPermission("equipment", "canEdit"));
   const canDelete = role === "owner" || (await hasPermission("equipment", "canDelete"));
 
   const scope = await getBranchScope();
+  const me = await getCurrentUser();
+  const ownOnly = !canView;
+  // `-1` is not a serial id, so a null viewer matches nothing rather than
+  // everything — the restrictive direction to fail in.
+  const ownClause = ownOnly
+    ? eq(equipmentExpenses.createdByUserId, me?.id ?? -1)
+    : undefined;
+
   const allBranches = await getAllBranches();
 
   const rows: Item[] = await db
@@ -31,6 +47,7 @@ export default async function EquipmentPage() {
       equipmentName: equipmentExpenses.equipmentName,
       cost: equipmentExpenses.cost,
       date: equipmentExpenses.date,
+      createdByName: equipmentExpenses.createdByName,
       createdAt: equipmentExpenses.createdAt,
       branchCode: branches.code,
       branchName: branches.name,
@@ -38,9 +55,12 @@ export default async function EquipmentPage() {
     .from(equipmentExpenses)
     .leftJoin(branches, eq(equipmentExpenses.branchId, branches.id))
     .where(
-      scope.type === "single"
-        ? eq(equipmentExpenses.branchId, scope.branchId)
-        : inArray(equipmentExpenses.branchId, scope.branchIds)
+      and(
+        scope.type === "single"
+          ? eq(equipmentExpenses.branchId, scope.branchId)
+          : inArray(equipmentExpenses.branchId, scope.branchIds),
+        ownClause
+      )
     )
     .orderBy(desc(equipmentExpenses.date));
 
@@ -52,7 +72,13 @@ export default async function EquipmentPage() {
       <div className="adm-head">
         <h1 className="adm-h1">Equipment</h1>
         <p className="adm-sub">
-          <strong>{scopeLabel}</strong> · purchases &amp; servicing
+          {ownOnly ? (
+            <>Your entries · {rows.length}</>
+          ) : (
+            <>
+              <strong>{scopeLabel}</strong> · purchases &amp; servicing
+            </>
+          )}
         </p>
       </div>
       <EquipmentList
@@ -63,6 +89,7 @@ export default async function EquipmentPage() {
         canAdd={canAdd}
         canEdit={canEdit}
         canDelete={canDelete}
+        ownOnly={ownOnly}
       />
     </>
   );

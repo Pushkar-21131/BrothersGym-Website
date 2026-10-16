@@ -4,7 +4,11 @@ import { desc, eq, inArray } from "drizzle-orm";
 import { redirect } from "next/navigation";
 import TrainerList from "./trainer-list";
 import { getBranchScope, getAllBranches } from "@/lib/branch";
-import { getVerifiedRole, hasPermission } from "@/lib/auth-check";
+import {
+  getVerifiedRole,
+  hasPermission,
+  getFirstAllowedAdminPath,
+} from "@/lib/auth-check";
 
 export const dynamic = "force-dynamic";
 
@@ -14,7 +18,7 @@ export default async function TrainersPage() {
 
   if (role !== "owner") {
     const canView = await hasPermission("trainers", "canView");
-    if (!canView) redirect("/admin/members");
+    if (!canView) redirect(await getFirstAllowedAdminPath());
   }
 
   const canEdit = role === "owner" || (await hasPermission("trainers", "canEdit"));

@@ -13,6 +13,13 @@ export type PermissionModule = {
   description: string;
   actions: { key: string; label: string }[];
   hideableFields?: { key: string; label: string }[];
+  /**
+   * The module can be used as a notepad: an account without View reaches the
+   * page and sees back only the rows it wrote. Only for modules whose add form
+   * stands on its own — not the members register, where adding blind is how you
+   * get duplicate M.Nos and wrong plan entries.
+   */
+  allowAddOnly?: true;
 };
 
 export const PERMISSION_MODULES: PermissionModule[] = [
@@ -33,6 +40,7 @@ export const PERMISSION_MODULES: PermissionModule[] = [
       { key: "canDelete", label: "Delete members" },
     ],
     hideableFields: [
+      { key: "contactNumber", label: "Contact Number" },
       { key: "feeAmount", label: "Fee Amount (₹)" },
       { key: "email", label: "Email" },
       { key: "address", label: "Address" },
@@ -54,6 +62,7 @@ export const PERMISSION_MODULES: PermissionModule[] = [
     key: "enquiries",
     label: "Enquiries",
     description: "Track people who enquired but haven't joined yet",
+    allowAddOnly: true,
     actions: [
       { key: "canView", label: "View enquiry list" },
       { key: "canAdd", label: "Add enquiries" },
@@ -66,6 +75,7 @@ export const PERMISSION_MODULES: PermissionModule[] = [
     key: "equipment",
     label: "Equipment",
     description: "Track gym equipment and expenses",
+    allowAddOnly: true,
     actions: [
       { key: "canView", label: "View equipment" },
       { key: "canAdd", label: "Add equipment entries" },
@@ -206,6 +216,18 @@ export function sanitizeStaffPermissions(input: unknown): StaffPermissions {
       if (typeof src[action.key] === "boolean") {
         flags[action.key] = src[action.key] as boolean;
       }
+    }
+
+    // A module that can be used add-only treats View as "sees everything"
+    // rather than "may open the page", so none of the other flags imply it —
+    // Edit there means "edit my own". Everywhere else View IS the page gate, so
+    // any granted action implies it: an action that cannot be reached is not a
+    // permission.
+    const impliesView =
+      !mod.allowAddOnly &&
+      mod.actions.some((a) => a.key !== "canView" && flags[a.key] === true);
+    if (impliesView) {
+      flags.canView = true;
     }
 
     if (mod.hideableFields && Array.isArray(src.hiddenFields)) {

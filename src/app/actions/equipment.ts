@@ -9,7 +9,42 @@ import { sanitizeError } from "@/lib/errors";
 import {
   assertAuthenticated,
   assertPermission,
+  getCurrentUser,
+  hasPermission,
 } from "@/lib/auth-check";
+
+/**
+ * Every action that touches an existing row goes through this. It was inline in
+ * update and delete, and the add-only rule would have had to be written twice.
+ *
+ * An account without `canView` is in add-only mode and sees back only what it
+ * wrote; an id that is not its own reads as "not found", so ids stay
+ * unprobeable — the same answer the branch check already gives.
+ */
+async function loadEquipmentInScope(id: number) {
+  if (!Number.isInteger(id) || id <= 0) return null;
+
+  const scope = await getBranchScope();
+  const rows = await db
+    .select()
+    .from(equipmentExpenses)
+    .where(eq(equipmentExpenses.id, id))
+    .limit(1);
+  if (rows.length === 0) return null;
+
+  const inScope =
+    scope.type === "all"
+      ? scope.branchIds.includes(rows[0].branchId)
+      : scope.branchId === rows[0].branchId;
+  if (!inScope) return null;
+
+  if (!(await hasPermission("equipment", "canView"))) {
+    const user = await getCurrentUser();
+    if (!user?.id || rows[0].createdByUserId !== user.id) return null;
+  }
+
+  return rows[0];
+}
 
 // ===== LIST EQUIPMENT =====
 export async function listEquipmentAction() {
@@ -62,12 +97,16 @@ export async function addEquipmentAction(formData: FormData) {
 
   try {
     const branch = await requireSingleBranch(formBranchId);
+    const user = await getCurrentUser();
 
     await db.insert(equipmentExpenses).values({
       branchId: branch.branchId,
       equipmentName,
       cost,
       date,
+      // null for the env-based owner, which has no app_users row.
+      createdByUserId: user?.id ?? null,
+      createdByName: user?.name ?? null,
     });
 
     revalidatePath("/admin/equipment");
@@ -94,19 +133,8 @@ export async function updateEquipmentAction(id: number, formData: FormData) {
   const date = formData.get("date") as string;
 
   try {
-    const scope = await getBranchScope();
-    const existing = await db
-      .select()
-      .from(equipmentExpenses)
-      .where(eq(equipmentExpenses.id, id))
-      .limit(1);
-    if (existing.length === 0) return { error: "Equipment not found" };
-
-    const canAccess =
-      scope.type === "all"
-        ? scope.branchIds.includes(existing[0].branchId)
-        : scope.branchId === existing[0].branchId;
-    if (!canAccess) return { error: "You don't have access to this equipment" };
+    const existing = await loadEquipmentInScope(id);
+    if (!existing) return { error: "Equipment not found" };
 
     await db
       .update(equipmentExpenses)
@@ -133,19 +161,8 @@ export async function deleteEquipmentAction(id: number) {
   }
 
   try {
-    const scope = await getBranchScope();
-    const existing = await db
-      .select()
-      .from(equipmentExpenses)
-      .where(eq(equipmentExpenses.id, id))
-      .limit(1);
-    if (existing.length === 0) return { error: "Equipment not found" };
-
-    const canAccess =
-      scope.type === "all"
-        ? scope.branchIds.includes(existing[0].branchId)
-        : scope.branchId === existing[0].branchId;
-    if (!canAccess) return { error: "You don't have access to this equipment" };
+    const existing = await loadEquipmentInScope(id);
+    if (!existing) return { error: "Equipment not found" };
 
     await db.delete(equipmentExpenses).where(eq(equipmentExpenses.id, id));
 

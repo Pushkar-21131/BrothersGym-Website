@@ -10,6 +10,8 @@ import { istDateString } from "@/lib/utils";
 import {
   assertAuthenticated,
   assertPermission,
+  getCurrentUser,
+  hasPermission,
 } from "@/lib/auth-check";
 import type { ImportEnquiryRow } from "@/lib/enquiry-parse";
 
@@ -31,7 +33,14 @@ async function assertEnquiryAccess(action: string) {
   if (role !== "owner") await assertPermission("enquiries", action);
 }
 
-/** Every action that touches an existing row goes through this. */
+/**
+ * Every action that touches an existing row goes through this.
+ *
+ * An account without `canView` is in add-only mode: its page shows back only
+ * what it wrote, so every id it can name is its own. Enforced here rather than
+ * in the list alone, because the edit sheet takes an id and a tampered payload
+ * does not go through the list at all.
+ */
 async function loadEnquiryInScope(id: number) {
   if (!Number.isInteger(id) || id <= 0) return null;
   const rows = await db.select().from(enquiries).where(eq(enquiries.id, id)).limit(1);
@@ -41,6 +50,11 @@ async function loadEnquiryInScope(id: number) {
   } catch {
     // Same answer as "not found", so ids cannot be probed across branches.
     return null;
+  }
+  if (!(await hasPermission("enquiries", "canView"))) {
+    const user = await getCurrentUser();
+    // Same answer again, for the same reason: not yours reads as not there.
+    if (!user?.id || rows[0].createdByUserId !== user.id) return null;
   }
   return rows[0];
 }
@@ -80,6 +94,7 @@ export async function addEnquiryAction(formData: FormData) {
 
   try {
     const branch = await requireSingleBranch(f.branchId);
+    const user = await getCurrentUser();
     await db.insert(enquiries).values({
       branchId: branch.branchId,
       name: f.name,
@@ -88,6 +103,10 @@ export async function addEnquiryAction(formData: FormData) {
       note: f.note,
       inquiryDate: f.inquiryDate || istDateString(),
       followUpDate: f.followUpDate,
+      // null for the env-based owner, which has no app_users row. Stored as
+      // null rather than assumed away — see the columns' note in schema.ts.
+      createdByUserId: user?.id ?? null,
+      createdByName: user?.name ?? null,
     });
 
     revalidate();
@@ -257,7 +276,8 @@ const digits = (v: unknown) => String(v ?? "").replace(/\D/g, "");
 function toInsertValues(
   row: ImportEnquiryRow,
   branchId: number,
-  today: string
+  today: string,
+  creator: { id: number | null; name: string | null }
 ): EnquiryInsert {
   return {
     branchId,
@@ -268,6 +288,10 @@ function toInsertValues(
     inquiryDate: ISO_DATE.test(String(row.inquiryDate ?? ""))
       ? String(row.inquiryDate)
       : today,
+    // A whole sheet carries one author, and stamping it keeps the owner's
+    // creator filter honest about where a row came from.
+    createdByUserId: creator.id,
+    createdByName: creator.name,
   };
 }
 
@@ -327,6 +351,15 @@ export async function importEnquiriesAction(
     return { error: sanitizeError(e, "Not authorized to import enquiries") };
   }
 
+  // Add-only is not enough for a bulk import. The importer dedupes against every
+  // enquiry in the branch and answers with a skip count, so running one is a way
+  // to ask questions about a list this account may not read — and the rows it
+  // writes would be its own, in a register it cannot browse back. Same reason
+  // Members has no add-only mode.
+  if (!(await hasPermission("enquiries", "canView"))) {
+    return { error: "Not authorized to import enquiries" };
+  }
+
   if (!rows?.length) return { error: "No rows to import" };
 
   let branch;
@@ -354,6 +387,8 @@ export async function importEnquiriesAction(
 
     const pending: EnquiryInsert[] = [];
     let skippedExisting = 0;
+    const importer = await getCurrentUser();
+    const creator = { id: importer?.id ?? null, name: importer?.name ?? null };
     for (const row of rows) {
       if (!String(row.name ?? "").trim()) continue;
       const key = `${String(row.name).trim().toLowerCase()}|${digits(row.phone)}`;
@@ -362,7 +397,7 @@ export async function importEnquiriesAction(
         continue;
       }
       seen.add(key);
-      pending.push(toInsertValues(row, branch.branchId, today));
+      pending.push(toInsertValues(row, branch.branchId, today, creator));
     }
 
     let written = 0;

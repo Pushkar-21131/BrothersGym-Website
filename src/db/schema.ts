@@ -224,6 +224,15 @@ export const equipmentExpenses = pgTable("equipment_expenses", {
   equipmentName: text("equipment_name").notNull(),
   cost: integer("cost").notNull(),
   date: date("date").notNull(),
+  // Who logged it. A plain integer, not a foreign key, for the reason `voidedBy`
+  // gives below: an FK would block deleting a staff account that ever filed a
+  // row, and the name has to keep reading after that account is gone. Null on
+  // everything filed before this existed, which belongs to nobody.
+  //
+  // Read in exactly one place: a module used add-only scopes its list to these,
+  // so an account without `canView` sees back only what it wrote.
+  createdByUserId: integer("created_by_user_id"),
+  createdByName: text("created_by_name"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -432,6 +441,10 @@ export const enquiries = pgTable(
     convertedMemberId: integer("converted_member_id").references(
       () => members.id
     ),
+    // See the note on equipmentExpenses.createdByUserId — same pair, same
+    // reason, and the same single reader.
+    createdByUserId: integer("created_by_user_id"),
+    createdByName: text("created_by_name"),
     createdAt: timestamp("created_at").defaultNow(),
   },
   (table) => ({

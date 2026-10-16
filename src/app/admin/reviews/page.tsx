@@ -3,7 +3,11 @@ import { reviews } from "@/db/schema";
 import { redirect } from "next/navigation";
 import { desc } from "drizzle-orm";
 import ReviewsListClient from "./reviews-list-client";
-import { getVerifiedRole, hasPermission } from "@/lib/auth-check";
+import {
+  getVerifiedRole,
+  hasPermission,
+  getFirstAllowedAdminPath,
+} from "@/lib/auth-check";
 import { canManageBrandContent, isBrandContentBranch } from "@/lib/branch";
 
 export const dynamic = "force-dynamic";
@@ -24,7 +28,7 @@ export default async function AdminReviewsPage() {
     canEdit ||
     ((await isBrandContentBranch()) &&
       (await hasPermission("reviews", "canView")));
-  if (!canView) redirect("/admin/members");
+  if (!canView) redirect(await getFirstAllowedAdminPath());
 
   const allReviews = await db
     .select()

@@ -4,7 +4,11 @@ import { desc, eq, inArray } from "drizzle-orm";
 import { redirect } from "next/navigation";
 import StaffList, { type Staff } from "./staff-list";
 import { getBranchScope, getAllBranches } from "@/lib/branch";
-import { getVerifiedRole, hasPermission } from "@/lib/auth-check";
+import {
+  getVerifiedRole,
+  hasPermission,
+  getFirstAllowedAdminPath,
+} from "@/lib/auth-check";
 
 export const dynamic = "force-dynamic";
 
@@ -14,7 +18,7 @@ export default async function StaffPage() {
 
   if (role !== "owner") {
     const canView = await hasPermission("staff", "canView");
-    if (!canView) redirect("/admin/members");
+    if (!canView) redirect(await getFirstAllowedAdminPath());
   }
 
   const canEdit = role === "owner" || (await hasPermission("staff", "canEdit"));

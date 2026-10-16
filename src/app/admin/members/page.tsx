@@ -4,7 +4,7 @@ import { asc, eq, inArray } from "drizzle-orm";
 import { redirect } from "next/navigation";
 import MemberList, { type Member } from "./member-list";
 import { getBranchScope, getAllBranches } from "@/lib/branch";
-import { getVerifiedRole, hasPermission, getHiddenFields } from "@/lib/auth-check";
+import { getVerifiedRole, hasPermission, getHiddenFields, getFirstAllowedAdminPath } from "@/lib/auth-check";
 
 export const dynamic = "force-dynamic";
 
@@ -15,7 +15,7 @@ export default async function MembersPage() {
   // Members module — everyone should have at least canView typically
   if (role !== "owner") {
     const canView = await hasPermission("members", "canView");
-    if (!canView) redirect("/admin/reminders"); // fallback destination
+    if (!canView) redirect(await getFirstAllowedAdminPath());
   }
 
   // Determine what this user can do (owner = all true)
@@ -106,6 +106,7 @@ export default async function MembersPage() {
   const safeRows: Member[] = hidden.size
     ? rows.map((r) => ({
         ...r,
+        contactNumber: hidden.has("contactNumber") ? "" : r.contactNumber,
         feeAmount: hidden.has("feeAmount") ? 0 : r.feeAmount,
         email: hidden.has("email") ? null : r.email,
         address: hidden.has("address") ? null : r.address,

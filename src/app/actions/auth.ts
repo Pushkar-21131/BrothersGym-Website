@@ -15,7 +15,7 @@ import {
   logLoginAttempt,
   getClientInfo,
 } from "@/lib/security";
-import { assertOwner } from "@/lib/auth-check";
+import { assertOwner, getFirstAllowedAdminPath } from "@/lib/auth-check";
 import { isSuperAdmin } from "@/lib/branch";
 import {
   assertCanAdministerUser,
@@ -349,7 +349,10 @@ export async function completeStaffLogin(
   await resetRateLimit(accountRateLimitKey("login", emailLower));
   await logLoginAttempt({ email: emailLower, success: true });
   await setAuthCookies("staff", String(check.id), check.name, check.branchId);
-  redirect("/admin/members");
+  // Land on a section this account can actually open. `/admin/members` was
+  // hardcoded here, so a staff login without members access started its first
+  // session on a guard that had to bounce it somewhere else.
+  redirect(await getFirstAllowedAdminPath());
 }
 
 // ===== LOGOUT =====

@@ -255,6 +255,7 @@ export async function updateMemberAction(
   const addressHidden = hiddenFields.includes("address");
   const parentNameHidden = hiddenFields.includes("parentName");
   const emergencyHidden = hiddenFields.includes("emergencyContact");
+  const contactHidden = hiddenFields.includes("contactNumber");
 
   if (!feeHidden && !Number.isFinite(feeAmount)) {
     return { error: "Fee amount is required" };
@@ -278,7 +279,7 @@ export async function updateMemberAction(
         gymId,
         name,
         ...(emailHidden ? {} : { email: email || null }),
-        contactNumber,
+        ...(contactHidden ? {} : { contactNumber }),
         ...(addressHidden ? {} : { address: address || null }),
         // Deliberately still nullable on edit. Members added before parent name
         // was mandatory have a blank one, and requiring it here would make every
@@ -313,7 +314,7 @@ export async function updateMemberAction(
       },
       {
         name,
-        contactNumber,
+        contactNumber: contactHidden ? existing[0].contactNumber : contactNumber,
         feeAmount: feeHidden ? existing[0].feeAmount : feeAmount,
         membershipExpiry,
       }

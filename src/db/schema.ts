@@ -110,6 +110,17 @@ export const payments = pgTable(
       .default("cash"),
     razorpayOrderId: text("razorpay_order_id"),
     razorpayPaymentId: text("razorpay_payment_id"),
+    // Removing a wrong entry is a void, never a DELETE. The Privacy Policy
+    // promises payment records are kept 8 years for tax, and a mistyped entry is
+    // a correction, not a reason to destroy the evidence that money was once
+    // entered against this member — the row has to survive being wrong.
+    //
+    // Every read of `payments` therefore filters on this being null (the
+    // member's timeline and the dashboard's collected total are the only two).
+    // voidedBy is a name rather than a user id so the entry still reads
+    // correctly after that account is deleted.
+    voidedAt: timestamp("voided_at"),
+    voidedBy: text("voided_by"),
     createdAt: timestamp("created_at").defaultNow(),
   },
   (table) => ({

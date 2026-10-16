@@ -22,6 +22,10 @@ export type AuditEvent =
   | "payment.online.failed"
   | "payment.recorded_offline"
   | "payment.refund_requested"
+  // A payment row is never deleted, so these two are the whole story of an
+  // entry leaving a member's timeline and coming back.
+  | "payment.voided"
+  | "payment.restored"
   // Staff/user events
   | "staff.created"
   | "staff.updated"

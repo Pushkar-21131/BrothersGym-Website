@@ -1029,6 +1029,7 @@ export default function MemberList({
       {historyMember && (
         <HistoryModal
           memberId={historyMember.id}
+          canDelete={canDelete}
           onClose={() => setHistoryMember(null)}
         />
       )}

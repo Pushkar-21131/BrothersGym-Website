@@ -113,6 +113,13 @@
       "when": 1791398075779,
       "tag": "0015_harsh_kingpin",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1791967681062,
+      "tag": "0016_supreme_glorian",
+      "breakpoints": true
     }
   ]
 }

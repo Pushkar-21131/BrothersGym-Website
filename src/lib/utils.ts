@@ -80,3 +80,65 @@ export function addDaysIso(isoDate: string, days: number): string {
   base.setUTCDate(base.getUTCDate() + days);
   return base.toISOString().split("T")[0];
 }
+
+/**
+ * Add whole months, returning "YYYY-MM-DD".
+ *
+ * Only ever called on a cycle start, and the 15th exists in every month, so the
+ * day-of-month overflow a general "add a month" has (31 Jan → 3 Mar) cannot
+ * arise here. UTC for the same reason `addDaysIso` is.
+ */
+export function addMonthsIso(isoDate: string, months: number): string {
+  const [y, m, d] = isoDate.split("-").map(Number);
+  const base = new Date(Date.UTC(y, m - 1, d));
+  base.setUTCMonth(base.getUTCMonth() + months);
+  return base.toISOString().split("T")[0];
+}
+
+/**
+ * The gym's month runs 15th → 14th. The owner counts a month's takings and
+ * spending from the 15th to the 14th, so the calendar month is the wrong window
+ * for every money figure — a round of salaries and a month of dues both land
+ * across the boundary.
+ */
+export const CYCLE_START_DAY = 15;
+
+const CYCLE_DAY_FORMAT = new Intl.DateTimeFormat("en-IN", {
+  day: "numeric",
+  month: "short",
+  timeZone: "UTC",
+});
+
+function cycleDay(iso: string, withYear: boolean): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  const formatted = CYCLE_DAY_FORMAT.format(new Date(Date.UTC(y, m - 1, d)));
+  return withYear ? `${formatted} ${y}` : formatted;
+}
+
+/**
+ * The cycle containing `isoDate`, as an inclusive "YYYY-MM-DD" range.
+ *
+ * Day >= 15 opens the cycle that month; day <= 14 is still inside the one that
+ * opened on the previous 15th. The end is derived — step to the next cycle and
+ * back a day — rather than written as "the 14th", so 31-day months, February and
+ * leap years fall out of the arithmetic instead of a table of special cases.
+ */
+export function gymCycle(
+  isoDate: string,
+  startDay: number = CYCLE_START_DAY
+): { start: string; end: string; label: string } {
+  const [y, m, d] = isoDate.split("-").map(Number);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const opensThisMonth = `${y}-${pad(m)}-${pad(startDay)}`;
+  const start = d >= startDay ? opensThisMonth : addMonthsIso(opensThisMonth, -1);
+  const end = addDaysIso(addMonthsIso(start, 1), -1);
+
+  // The year is dropped unless the cycle straddles one, where "15 Dec → 14 Jan"
+  // would leave the reader to guess which year's January.
+  const withYear = start.slice(0, 4) !== end.slice(0, 4);
+  return {
+    start,
+    end,
+    label: `${cycleDay(start, withYear)} → ${cycleDay(end, withYear)}`,
+  };
+}

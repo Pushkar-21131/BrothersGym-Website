@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import Link from "next/link";
 import { db } from "@/db";
 import { members, payments, equipmentExpenses, staff } from "@/db/schema";
-import { sql, eq, and, lt, gte, inArray } from "drizzle-orm";
+import { sql, eq, and, lt, gte, lte, inArray, isNull } from "drizzle-orm";
 import {
   Users,
   Wrench,
@@ -14,25 +14,61 @@ import {
   Building2,
 } from "lucide-react";
 import { getBranchScope, getAllBranches } from "@/lib/branch";
-import { getVerifiedRole, hasPermission } from "@/lib/auth-check";
-import { formatINR, istDateString, addDaysIso } from "@/lib/utils";
+import {
+  getVerifiedRole,
+  hasPermission,
+  getFirstAllowedAdminPath,
+} from "@/lib/auth-check";
+import {
+  formatINR,
+  istDateString,
+  addDaysIso,
+  gymCycle,
+} from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
-async function getBranchStats(branchId: number, today: string, soon: string) {
+async function getBranchStats(
+  branchId: number,
+  today: string,
+  soon: string,
+  cycle: { start: string; end: string }
+) {
   const [m, p, e, s, expired, expiring] = await Promise.all([
     db
       .select({ count: sql<number>`count(*)` })
       .from(members)
       .where(eq(members.branchId, branchId)),
+    // Removed entries are excluded: the owner took them out of the timeline
+    // because the money was never taken, so counting them here would put a total
+    // on the dashboard that the member list cannot account for. Same filter as
+    // the member's history — see the note on the column in schema.ts.
+    //
+    // Dated to the cycle, like the spending below: every money figure on this
+    // page answers "what did this month do", never "what have we ever done".
     db
       .select({ total: sql<number>`coalesce(sum(${payments.amount}), 0)` })
       .from(payments)
-      .where(eq(payments.branchId, branchId)),
+      .where(
+        and(
+          eq(payments.branchId, branchId),
+          isNull(payments.voidedAt),
+          gte(payments.date, cycle.start),
+          lte(payments.date, cycle.end)
+        )
+      ),
     db
       .select({ total: sql<number>`coalesce(sum(${equipmentExpenses.cost}), 0)` })
       .from(equipmentExpenses)
-      .where(eq(equipmentExpenses.branchId, branchId)),
+      .where(
+        and(
+          eq(equipmentExpenses.branchId, branchId),
+          gte(equipmentExpenses.date, cycle.start),
+          lte(equipmentExpenses.date, cycle.end)
+        )
+      ),
+    // One month of payroll against a one-month window — subtracting it is only
+    // arithmetic the owner can check because the window is a month too.
     db
       .select({ salary: staff.salary })
       .from(staff)
@@ -84,7 +120,7 @@ export default async function AdminDashboard() {
   if (!role) redirect("/login");
   if (role !== "owner") {
     const canView = await hasPermission("dashboard", "canView");
-    if (!canView) redirect("/admin/members");
+    if (!canView) redirect(await getFirstAllowedAdminPath());
   }
 
   const scope = await getBranchScope();
@@ -97,6 +133,11 @@ export default async function AdminDashboard() {
   const today = istDateString();
   const soon = addDaysIso(today, 7);
 
+  // Every money figure on this page covers the gym's own month, 15th → 14th.
+  // The owner counts a month's takings and a month's spending across that
+  // boundary, so the calendar month is the wrong window for both.
+  const cycle = gymCycle(today);
+
   // Only the branches this account may see. Filtering BEFORE the stats queries
   // (rather than after) means a branch owner's dashboard never reads the other
   // gym's revenue at all — and nothing downstream can accidentally render it.
@@ -108,7 +149,7 @@ export default async function AdminDashboard() {
   const perBranchStats = await Promise.all(
     visibleBranches.map(async (b) => ({
       branch: b,
-      stats: await getBranchStats(b.id, today, soon),
+      stats: await getBranchStats(b.id, today, soon, cycle),
     }))
   );
 
@@ -157,9 +198,13 @@ export default async function AdminDashboard() {
       <div className="adm-dash">
         <div className="adm-dash-col">
       {/* Net profit is the one number worth opening the app for, so it gets
-          the whole first screen. */}
+          the whole first screen. It is a cycle's net, not a lifetime one: the
+          salary line is this month's payroll and nothing stores what was paid
+          in earlier months, so an "All Time" net was a month of wages taken off
+          a year of dues. The label names the window so the number cannot be
+          read as a running total. */}
       <section className="adm-hero">
-        <div className="adm-hero-label">Net Profit · All Time</div>
+        <div className="adm-hero-label">Net Profit · {cycle.label}</div>
         <div
           className={`adm-hero-value ${combined.profit >= 0 ? "pos" : "neg"}`}
         >
@@ -207,6 +252,8 @@ export default async function AdminDashboard() {
           value={String(combined.expiredCount)}
           label="Expired"
         />
+        {/* Same window as the hero, so it is no longer a lifetime figure
+            wearing a one-month label. */}
         <QStat
           tone="green"
           icon={<IndianRupee size={14} />}
@@ -215,7 +262,8 @@ export default async function AdminDashboard() {
         />
       </div>
 
-      {/* Money in vs money out. The proportion lands faster than two figures. */}
+      {/* Money in vs money out. The proportion lands faster than two figures.
+          Same cycle as the hero, which names the window. */}
       <h2 className="adm-h2">Money Flow</h2>
       <section className="adm-card">
         <div className="adm-bar" aria-hidden="true">
@@ -352,7 +400,7 @@ export default async function AdminDashboard() {
           tone="blue"
           icon={<Wrench size={15} />}
           title="Equipment & servicing"
-          sub={`${formatINR(combined.totalExpenses)} spent`}
+          sub={`${formatINR(combined.totalExpenses)} spent this cycle`}
         />
         <Jump
           href="/admin/staff"

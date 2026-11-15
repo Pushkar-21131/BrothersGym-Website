@@ -29,7 +29,14 @@ import toast from "react-hot-toast";
 import HistoryModal from "./history-modal";
 import { Sheet } from "../sheet";
 import type { MemberGender } from "@/db/schema";
-import { formatINR, formatGymId, istDateString, addDaysIso } from "@/lib/utils";
+import {
+  formatINR,
+  formatGymId,
+  istDateString,
+  addDaysIso,
+  getMembershipRenewalDates,
+  type RenewalStart,
+} from "@/lib/utils";
 import {
   memberMatches,
   SEARCH_SCOPES,
@@ -39,6 +46,7 @@ import {
   buildMemberUpdateMessage,
   buildWhatsAppLink,
   hasDialablePhone,
+  formatDateIn,
   type MemberChange,
 } from "@/lib/whatsapp";
 
@@ -150,6 +158,8 @@ export default function MemberList({
   const [showAddModal, setShowAddModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showRenewModal, setShowRenewModal] = useState<Member | null>(null);
+  const [renewalStart, setRenewalStart] = useState<RenewalStart>("today");
+  const [renewalDuration, setRenewalDuration] = useState(30);
   const [editingMember, setEditingMember] = useState<Member | null>(null);
   const [loading, setLoading] = useState(false);
   // One press can reach the server twice: a ghost click, or a second press before
@@ -413,6 +423,7 @@ export default function MemberList({
     const duration = Number(formData.get("duration"));
     const planType = formData.get("planType") as "full" | "no_cardio" | "offline";
     const method = formData.get("method") as "cash" | "upi" | "razorpay" | "other";
+    const start = formData.get("renewalStart") as RenewalStart;
 
     inFlight.current = true;
     setLoading(true);
@@ -422,7 +433,8 @@ export default function MemberList({
         amount,
         duration,
         planType,
-        method
+        method,
+        start
       );
 
       // Narrowed rather than read optimistically: renewMemberAction returns a
@@ -455,12 +467,26 @@ export default function MemberList({
     setShowEditModal(true);
   }
 
+  function openRenewModal(member: Member) {
+    setRenewalStart("today");
+    setRenewalDuration(30);
+    setShowRenewModal(member);
+  }
+
   // Both are date-only strings, so a re-render can only ever change them at
   // midnight — and if the owner has the list open at midnight, the fresher
   // answer is the correct one. IST rather than the browser's UTC offset, so
   // the list agrees with the dashboard and with what the server wrote.
   const today = istDateString();
   const soon = addDaysIso(today, 7);
+  const renewalPreview = showRenewModal
+    ? getMembershipRenewalDates(
+        showRenewModal.membershipExpiry,
+        renewalDuration,
+        renewalStart,
+        today
+      )
+    : null;
 
   /** Membership state, derived once so the tag, the chip filter and the counts
    *  can never disagree about who is expiring. */
@@ -529,7 +555,7 @@ export default function MemberList({
       </button>
       {canEdit && (
         <button
-          onClick={() => setShowRenewModal(m)}
+          onClick={() => openRenewModal(m)}
           className="adm-act green"
           title="Renew Membership"
           aria-label={`Renew membership for ${m.name}`}
@@ -943,9 +969,44 @@ export default function MemberList({
             <p className="adm-hint" style={{ marginBottom: 14 }}>
               Current due date:{" "}
               <strong style={{ color: "var(--text)" }}>
-                {showRenewModal.membershipExpiry}
+                {formatDateIn(showRenewModal.membershipExpiry)}
               </strong>
             </p>
+
+            {showRenewModal.membershipExpiry < today ? (
+              <div className="adm-field">
+                <label className="adm-label" htmlFor="renew-start">
+                  Renew from *
+                </label>
+                <select
+                  id="renew-start"
+                  name="renewalStart"
+                  required
+                  value={renewalStart}
+                  onChange={(e) => setRenewalStart(e.target.value as RenewalStart)}
+                  disabled={loading}
+                  aria-describedby="renew-start-hint"
+                  className="adm-select"
+                >
+                  <option value="today">Today ({formatDateIn(today)})</option>
+                  <option value="due_date">
+                    Previous due date ({formatDateIn(showRenewModal.membershipExpiry)})
+                  </option>
+                </select>
+                <p id="renew-start-hint" className="adm-hint">
+                  {renewalStart === "due_date"
+                    ? "For a member who kept attending after their membership expired."
+                    : "For a member returning after a break."}
+                </p>
+              </div>
+            ) : (
+              <>
+                <input type="hidden" name="renewalStart" value="today" />
+                <p className="adm-hint" style={{ marginBottom: 14 }}>
+                  Renewal extends from the current due date to keep any remaining days.
+                </p>
+              </>
+            )}
 
             <div className="adm-form-grid">
               <div className="adm-field">
@@ -969,7 +1030,8 @@ export default function MemberList({
                 />
                 {hide("feeAmount") && (
                   <p className="adm-hint">Enter the amount collected.</p>
-                )}              </div>
+                )}
+              </div>
               <div className="adm-field">
                 <label className="adm-label" htmlFor="renew-duration">
                   Duration *
@@ -978,7 +1040,9 @@ export default function MemberList({
                   id="renew-duration"
                   name="duration"
                   required
-                  defaultValue="30"
+                  value={renewalDuration}
+                  onChange={(e) => setRenewalDuration(Number(e.target.value))}
+                  disabled={loading}
                   className="adm-select"
                 >
                   <option value="30">1 Month (30 days)</option>
@@ -1019,6 +1083,28 @@ export default function MemberList({
                 </select>
               </div>
             </div>
+
+            {renewalPreview && (
+              <div aria-live="polite" style={{ marginBottom: 14 }}>
+                <p className="adm-hint">
+                  Renewal starts: <strong style={{ color: "var(--text)" }}>
+                    {formatDateIn(renewalPreview.startDate)}
+                  </strong>
+                </p>
+                <p className="adm-hint">
+                  New due date: <strong style={{ color: "var(--gold2)" }}>
+                    {formatDateIn(renewalPreview.newExpiry)}
+                  </strong>
+                </p>
+                <p className="adm-hint">Payment recorded today: {formatDateIn(today)}.</p>
+                {renewalPreview.newExpiry < today && (
+                  <p className="adm-hint" style={{ color: "var(--orange)" }}>
+                    The new due date is still in the past. Choose a longer duration
+                    if the member needs to be active today.
+                  </p>
+                )}
+              </div>
+            )}
 
             <button
               type="submit"

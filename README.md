@@ -71,7 +71,7 @@ these fall back to `/login` (staff) and `/owner-login` (owner).
 | --- | --- |
 | `/admin` | Owner dashboard — revenue, active / expiring members, salary outgo; per-branch or all-branches |
 | `/admin/join-requests` | Owner-only — the call-back queue: online joins where **no** gateway payment was taken. A nav badge counts the open ones; marking one paid creates the membership and reveals a one-tap WhatsApp link to send the Gym ID |
-| `/admin/members` | Member CRUD, search, renewals, mark-left / won-back, column show/hide, per-branch Gym IDs, Excel/PDF export |
+| `/admin/members` | Member CRUD, search, renewals from today or the previous due date with a date preview, mark-left / won-back, column show/hide, per-branch Gym IDs, Excel/PDF export |
 | `/admin/inactive` | Expired, lapsed and left-gym members, filterable by how overdue, with one-tap win-back |
 | `/admin/plans` | Membership plans and pricing per branch (with/without cardio, 1–12 months); activate/deactivate a plan |
 | `/admin/reminders` | Expiry reminders with prefilled WhatsApp messages (MSG91 SMS is wired but off at launch) |

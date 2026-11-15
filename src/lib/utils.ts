@@ -81,6 +81,24 @@ export function addDaysIso(isoDate: string, days: number): string {
   return base.toISOString().split("T")[0];
 }
 
+export type RenewalStart = "today" | "due_date";
+
+/**
+ * Renewals keep any remaining membership days. For an expired membership, the
+ * owner can count continued attendance by extending from the previous due date.
+ * Shared by the renewal preview and the server; payment dates stay separate.
+ */
+export function getMembershipRenewalDates(
+  currentExpiry: string,
+  durationDays: number,
+  renewalStart: RenewalStart = "today",
+  today: string = istDateString()
+): { startDate: string; newExpiry: string } {
+  const startDate =
+    renewalStart === "due_date" || currentExpiry > today ? currentExpiry : today;
+  return { startDate, newExpiry: addDaysIso(startDate, durationDays) };
+}
+
 /**
  * Add whole months, returning "YYYY-MM-DD".
  *

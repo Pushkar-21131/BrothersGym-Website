@@ -9,7 +9,12 @@ import { sanitizeError } from "@/lib/errors";
 // The same whitelist the register import uses, so "Male" and "M" mean one thing
 // everywhere a member's gender can be set.
 import { parseSex } from "@/lib/import-parse";
-import { istDateString, addDaysIso, formatINR } from "@/lib/utils";
+import {
+  istDateString,
+  getMembershipRenewalDates,
+  formatINR,
+  type RenewalStart,
+} from "@/lib/utils";
 import { formatDateIn, type MemberChange } from "@/lib/whatsapp";
 import {
   assertPermission,
@@ -400,7 +405,8 @@ export async function renewMemberAction(
   amount: number,
   durationDays: number,
   planType?: "full" | "no_cardio" | "offline",
-  paymentMethod: "cash" | "upi" | "razorpay" | "other" = "cash"
+  paymentMethod: "cash" | "upi" | "razorpay" | "other" = "cash",
+  renewalStart: RenewalStart = "today"
 ) {
   try {
     const role = await assertAuthenticated();
@@ -418,8 +424,11 @@ export async function renewMemberAction(
   if (!Number.isFinite(amount) || amount <= 0) {
     return { error: "Enter the amount collected" };
   }
-  if (!Number.isFinite(durationDays) || durationDays <= 0) {
+  if (!Number.isInteger(durationDays) || durationDays <= 0) {
     return { error: "Select a membership duration" };
+  }
+  if (renewalStart !== "today" && renewalStart !== "due_date") {
+    return { error: "Select whether to renew from today or the current due date" };
   }
 
   try {
@@ -464,13 +473,16 @@ export async function renewMemberAction(
 
       if (!canAccess) return { error: "You don't have access to this member" };
 
-      // Calendar arithmetic on "YYYY-MM-DD" strings — see lib/utils. An
-      // unexpired membership extends from its own expiry, a lapsed one from
-      // today.
+      // Use the locked row's due date, so another renewal cannot make the
+      // browser's preview overwrite days already added. The payment still
+      // belongs to today even when continued attendance is counted from expiry.
       const todayStr = istDateString();
-      const base =
-        member.membershipExpiry > todayStr ? member.membershipExpiry : todayStr;
-      const newExpiry = addDaysIso(base, durationDays);
+      const { newExpiry } = getMembershipRenewalDates(
+        member.membershipExpiry,
+        durationDays,
+        renewalStart,
+        todayStr
+      );
 
       await tx
         .update(members)

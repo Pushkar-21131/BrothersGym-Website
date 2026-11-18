@@ -8,6 +8,8 @@ import { getBranchScope, requireSingleBranch } from "@/lib/branch";
 import { sanitizeError } from "@/lib/errors";
 import { assertAuthenticated, assertPermission } from "@/lib/auth-check";
 import { validatePhotoImage } from "@/lib/trainer-photo";
+import { withActivity } from "@/lib/activity";
+import { formatINR } from "@/lib/utils";
 
 /**
  * Pull an uploaded photo out of the form, if one was chosen.
@@ -133,7 +135,9 @@ export async function addTrainerAction(formData: FormData) {
   try {
     const branch = await requireSingleBranch(formBranchId);
 
-    await db.insert(trainers).values({
+    await withActivity("trainer.created", `Added trainer ${name} · PT fee ${formatINR(ptFee)}`, {
+      branchId: branch.branchId,
+    }, async (tx) => tx.insert(trainers).values({
       branchId: branch.branchId,
       name,
       experience,
@@ -145,7 +149,7 @@ export async function addTrainerAction(formData: FormData) {
       // no existing row to preserve or wipe.
       photoImage: photo.kind === "set" ? photo.base64 : null,
       photoMime: photo.kind === "set" ? photo.mime : null,
-    });
+    }));
 
     revalidatePath("/admin/trainers");
     revalidatePath("/");
@@ -196,7 +200,9 @@ export async function updateTrainerAction(id: number, formData: FormData) {
         : scope.branchId === existing[0].branchId;
     if (!canAccess) return { error: "You don't have access to this trainer" };
 
-    await db
+    await withActivity("trainer.updated", `Updated trainer ${name} · PT fee ${formatINR(ptFee)}`, {
+      branchId: existing[0].branchId, subjectId: id,
+    }, async (tx) => tx
       .update(trainers)
       .set({
         name,
@@ -216,7 +222,7 @@ export async function updateTrainerAction(id: number, formData: FormData) {
             ? { photoImage: null, photoMime: null }
             : {}),
       })
-      .where(eq(trainers.id, id));
+      .where(eq(trainers.id, id)));
 
     revalidatePath("/admin/trainers");
     revalidatePath("/");
@@ -256,7 +262,9 @@ export async function deleteTrainerAction(id: number) {
         : scope.branchId === existing[0].branchId;
     if (!canAccess) return { error: "You don't have access to this trainer" };
 
-    await db.delete(trainers).where(eq(trainers.id, id));
+    await withActivity("trainer.deleted", `Deleted trainer #${id}`, {
+      branchId: existing[0].branchId, subjectId: id,
+    }, async (tx) => tx.delete(trainers).where(eq(trainers.id, id)));
 
     revalidatePath("/admin/trainers");
     revalidatePath("/");

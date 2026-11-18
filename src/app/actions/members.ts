@@ -1,11 +1,14 @@
 "use server";
 
 import { db } from "@/db";
-import { members, payments, onlineJoins, smsLogs } from "@/db/schema";
+import { members, payments, onlineJoins, smsLogs, activityLogs } from "@/db/schema";
 import { and, eq, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { getBranchScope, requireSingleBranch } from "@/lib/branch";
 import { sanitizeError } from "@/lib/errors";
+import { recordActivity, withActivity } from "@/lib/activity";
+import { activityChanges } from "@/lib/activity-history";
+import { isHistoryEnabled } from "@/lib/history-release";
 // The same whitelist the register import uses, so "Male" and "M" mean one thing
 // everywhere a member's gender can be set.
 import { parseSex } from "@/lib/import-parse";
@@ -20,6 +23,7 @@ import {
   assertPermission,
   assertAuthenticated,
   getHiddenFields,
+  getCurrentUser,
 } from "@/lib/auth-check";
 
 /**
@@ -188,6 +192,11 @@ export async function addMemberAction(formData: FormData) {
         });
       }
 
+      if (newMember[0]) {
+        await recordActivity(tx, "member.created", `Added ${name} · gym #${gymId} · fee ${formatINR(resolvedFee)} · expiry ${membershipExpiry}`, {
+          branchId: branch.branchId, subjectId: newMember[0].id,
+        });
+      }
       return newMember[0] ?? null;
     });
 
@@ -278,9 +287,7 @@ export async function updateMemberAction(
 
     if (!canAccess) return { error: "You don't have access to this member" };
 
-    await db
-      .update(members)
-      .set({
+    const updates = {
         gymId,
         name,
         ...(emailHidden ? {} : { email: email || null }),
@@ -299,8 +306,18 @@ export async function updateMemberAction(
         // absent from `diffMemberChanges` below: a correction to how a member is
         // recorded is not something to announce to them over WhatsApp.
         gender: parseSex(formData.get("gender")),
-      })
-      .where(eq(members.id, id));
+    };
+    await db.transaction(async (tx) => {
+      const [before] = await tx.select().from(members).where(eq(members.id, id)).for("update");
+      if (!before) throw new Error("Member not found");
+      const [after] = await tx.update(members).set(updates).where(eq(members.id, id)).returning();
+      const historyChanges = activityChanges(before, after);
+      if (historyChanges.length) {
+        await recordActivity(tx, "member.updated", `Updated ${after.name} · gym #${after.gymId}`, {
+          branchId: before.branchId, subjectId: id, changes: historyChanges,
+        });
+      }
+    });
 
     // NOTE: Do NOT bulk-update historical payments here. Rewriting every
     // payment row to the current feeAmount corrupts payment history, totals,
@@ -389,6 +406,9 @@ export async function deleteMemberAction(id: number) {
         .set({ memberId: null })
         .where(eq(payments.memberId, id));
       await tx.delete(members).where(eq(members.id, id));
+      await recordActivity(tx, "member.deleted", `Deleted ${existing[0].name} · gym #${existing[0].gymId}`, {
+        branchId: existing[0].branchId, subjectId: id,
+      });
     });
 
     revalidatePath("/admin/members");
@@ -503,6 +523,14 @@ export async function renewMemberAction(
         method: paymentMethod,
       });
 
+      await recordActivity(tx, "member.renewed", `Renewed ${member.name} · gym #${member.gymId} · ${formatINR(amount)} (${paymentMethod.toUpperCase()}) · ${durationDays} days`, {
+        branchId: member.branchId, subjectId: member.id,
+        changes: activityChanges(member, {
+          membershipExpiry: newExpiry, feeAmount: amount,
+          planType: planType || member.planType, leftGym: false,
+        }),
+      });
+
       return {
         success: true as const,
         newExpiry,
@@ -570,7 +598,9 @@ export async function markMemberLeftAction(
 
     if (!canAccess) return { error: "You don't have access to this member" };
 
-    await db
+    await withActivity("member.marked_left", `Marked ${existing[0].name} · gym #${existing[0].gymId} as left · ${reason}`, {
+      branchId: existing[0].branchId, subjectId: id,
+    }, async (tx) => tx
       .update(members)
       .set({
         leftGym: true,
@@ -578,7 +608,7 @@ export async function markMemberLeftAction(
         leftGymReason: reason,
         leftGymNote: note || null,
       })
-      .where(eq(members.id, id));
+      .where(eq(members.id, id)));
 
     revalidatePath("/admin/members");
     revalidatePath("/admin/inactive");
@@ -612,7 +642,9 @@ export async function unmarkMemberLeftAction(id: number) {
 
     if (!canAccess) return { error: "You don't have access to this member" };
 
-    await db
+    await withActivity("member.restored", `Restored ${existing[0].name} · gym #${existing[0].gymId}`, {
+      branchId: existing[0].branchId, subjectId: id,
+    }, async (tx) => tx
       .update(members)
       .set({
         leftGym: false,
@@ -620,7 +652,7 @@ export async function unmarkMemberLeftAction(id: number) {
         leftGymReason: null,
         leftGymNote: null,
       })
-      .where(eq(members.id, id));
+      .where(eq(members.id, id)));
 
     revalidatePath("/admin/members");
     revalidatePath("/admin/inactive");
@@ -713,11 +745,13 @@ async function bulkSetLeft(
 
     const scope = await getBranchScope();
     const branchIds = scope.type === "all" ? scope.branchIds : [scope.branchId];
+    const user = await getCurrentUser();
 
     let changed = 0;
     for (let i = 0; i < wanted.length; i += BULK_CHUNK) {
       const chunk = wanted.slice(i, i + BULK_CHUNK);
-      const rows = await db
+      const rows = await db.transaction(async (tx) => {
+        const updated = await tx
         .update(members)
         .set(
           marking
@@ -745,7 +779,19 @@ async function bulkSetLeft(
             eq(members.leftGym, !marking)
           )
         )
-        .returning({ id: members.id });
+        .returning({ id: members.id, branchId: members.branchId, name: members.name, gymId: members.gymId });
+        if (updated.length && isHistoryEnabled()) {
+          await tx.insert(activityLogs).values(
+            updated.map<typeof activityLogs.$inferInsert>((member) => ({
+                branchId: member.branchId, subjectId: member.id,
+                actorUserId: user?.id ?? null, actorName: user?.name ?? "System", actorRole: user?.role ?? "system",
+                event: marking ? "member.marked_left" : "member.restored",
+                details: `${marking ? "Marked as left" : "Restored"} ${member.name} · gym #${member.gymId}${marking ? ` · ${reason}` : ""} (bulk action)`,
+            }))
+          );
+        }
+        return updated;
+      });
       changed += rows.length;
     }
 

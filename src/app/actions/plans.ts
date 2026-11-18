@@ -7,6 +7,8 @@ import { revalidatePath } from "next/cache";
 import { assertOwner } from "@/lib/auth-check";
 import { getBranchScope, isBranchInScope } from "@/lib/branch";
 import { sanitizeError } from "@/lib/errors";
+import { withActivity } from "@/lib/activity";
+import { formatINR } from "@/lib/utils";
 
 /**
  * Spelled out rather than inferred. Both mutating actions mix a named
@@ -117,8 +119,11 @@ export async function updatePlanAction(
   try {
     const outOfScope = await assertPlanInScope(id);
     if (outOfScope) return outOfScope;
+    const [plan] = await db.select().from(membershipPlans).where(eq(membershipPlans.id, id));
 
-    await db
+    await withActivity("plan.updated", `Updated ${name} · ${formatINR(price)} · ${durationDays} days`, {
+      branchId: plan.branchId, subjectId: id,
+    }, async (tx) => tx
       .update(membershipPlans)
       .set({
         name,
@@ -129,7 +134,7 @@ export async function updatePlanAction(
         isActive,
         displayOrder,
       })
-      .where(eq(membershipPlans.id, id));
+      .where(eq(membershipPlans.id, id)));
 
     revalidatePlanSurfaces();
     return { success: true };
@@ -152,11 +157,14 @@ export async function togglePlanActiveAction(
   try {
     const outOfScope = await assertPlanInScope(id);
     if (outOfScope) return outOfScope;
+    const [plan] = await db.select().from(membershipPlans).where(eq(membershipPlans.id, id));
 
-    await db
+    await withActivity("plan.toggled", `${isActive ? "Enabled" : "Disabled"} plan ${plan.name}`, {
+      branchId: plan.branchId, subjectId: id,
+    }, async (tx) => tx
       .update(membershipPlans)
       .set({ isActive })
-      .where(eq(membershipPlans.id, id));
+      .where(eq(membershipPlans.id, id)));
 
     revalidatePlanSurfaces();
     return { success: true };

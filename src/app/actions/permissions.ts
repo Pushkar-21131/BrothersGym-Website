@@ -8,6 +8,7 @@ import { assertOwner } from "@/lib/auth-check";
 import { assertCanAdministerUser } from "@/lib/user-admin";
 import { sanitizeStaffPermissions } from "@/lib/permissions";
 import { sanitizeError } from "@/lib/errors";
+import { withActivity } from "@/lib/activity";
 
 /**
  * `permissions` is typed `unknown` on purpose: this is a server action, so the
@@ -36,10 +37,13 @@ export async function updatePermissionsAction(
   if (denied) return denied;
 
   try {
-    await db
+    const [target] = await db.select().from(appUsers).where(eq(appUsers.id, userId));
+    await withActivity("permissions.updated", `Updated permissions for ${target.name}`, {
+      branchId: target.branchId, subjectId: userId,
+    }, async (tx) => tx
       .update(appUsers)
       .set({ permissions: sanitizeStaffPermissions(permissions) })
-      .where(eq(appUsers.id, userId));
+      .where(eq(appUsers.id, userId)));
 
     revalidatePath("/admin/users");
     return { success: true };

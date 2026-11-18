@@ -11,6 +11,25 @@ import {
   index,
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
+import type { ActivityChange } from "../lib/activity-history";
+
+// Names and ids are snapshots, without actor/subject foreign keys, so deleting
+// a login, member or expense does not erase who changed it during the 31-day window.
+export const activityLogs = pgTable("activity_logs", {
+  id: serial("id").primaryKey(),
+  branchId: integer("branch_id"),
+  actorUserId: integer("actor_user_id"),
+  actorName: text("actor_name").notNull(),
+  actorRole: text("actor_role").$type<"owner" | "staff" | "system">().notNull(),
+  event: text("event").notNull(),
+  subjectId: integer("subject_id"),
+  details: text("details").notNull(),
+  changes: jsonb("changes").$type<ActivityChange[]>().notNull().default([]),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  createdAtIdx: index("activity_logs_created_at_idx").on(table.createdAt, table.id),
+  branchCreatedAtIdx: index("activity_logs_branch_created_at_idx").on(table.branchId, table.createdAt, table.id),
+}));
 
 // ========== BRANCHES (NEW) ==========
 export const branches = pgTable("branches", {

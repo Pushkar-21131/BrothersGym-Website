@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { enquiries, EnquiryStatus } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { recordActivity, withActivity } from "@/lib/activity";
 import { assertBranchInScope, requireSingleBranch } from "@/lib/branch";
 import { sanitizeError } from "@/lib/errors";
 import { istDateString } from "@/lib/utils";
@@ -95,7 +96,9 @@ export async function addEnquiryAction(formData: FormData) {
   try {
     const branch = await requireSingleBranch(f.branchId);
     const user = await getCurrentUser();
-    await db.insert(enquiries).values({
+    await withActivity("enquiry.created", `Added enquiry for ${f.name}`, {
+      branchId: branch.branchId, actor: user,
+    }, async (tx) => tx.insert(enquiries).values({
       branchId: branch.branchId,
       name: f.name,
       phone: f.phone,
@@ -107,7 +110,7 @@ export async function addEnquiryAction(formData: FormData) {
       // null rather than assumed away — see the columns' note in schema.ts.
       createdByUserId: user?.id ?? null,
       createdByName: user?.name ?? null,
-    });
+    }));
 
     revalidate();
     return { success: true };
@@ -134,7 +137,9 @@ export async function updateEnquiryAction(id: number, formData: FormData) {
     : null;
 
   try {
-    await db
+    await withActivity("enquiry.updated", `Updated enquiry for ${f.name}`, {
+      branchId: existing.branchId, subjectId: id,
+    }, async (tx) => tx
       .update(enquiries)
       .set({
         name: f.name,
@@ -145,7 +150,7 @@ export async function updateEnquiryAction(id: number, formData: FormData) {
         followUpDate: f.followUpDate,
         status: statusOf(formData.get("status") ?? existing.status),
       })
-      .where(eq(enquiries.id, id));
+      .where(eq(enquiries.id, id)));
 
     revalidate();
     return { success: true };
@@ -166,7 +171,9 @@ export async function deleteEnquiryAction(id: number) {
   if (!existing) return { error: "Enquiry not found" };
 
   try {
-    await db.delete(enquiries).where(eq(enquiries.id, id));
+    await withActivity("enquiry.deleted", `Deleted enquiry for ${existing.name}`, {
+      branchId: existing.branchId, subjectId: id,
+    }, async (tx) => tx.delete(enquiries).where(eq(enquiries.id, id)));
     revalidate();
     return { success: true };
   } catch (error) {
@@ -198,7 +205,9 @@ export async function markEnquiryStatusAction(
   if (!existing) return { error: "Enquiry not found" };
 
   try {
-    await db
+    await withActivity("enquiry.updated", `Changed enquiry status for ${existing.name}: ${existing.status} → ${status}`, {
+      branchId: existing.branchId, subjectId: id,
+    }, async (tx) => tx
       .update(enquiries)
       .set({
         status,
@@ -206,7 +215,7 @@ export async function markEnquiryStatusAction(
           ? { convertedMemberId }
           : {}),
       })
-      .where(eq(enquiries.id, id));
+      .where(eq(enquiries.id, id)));
 
     revalidate();
     revalidatePath("/admin/members");
@@ -233,13 +242,15 @@ export async function logEnquiryContactAction(id: number) {
   if (!existing) return { error: "Enquiry not found" };
 
   try {
-    await db
+    await withActivity("enquiry.contacted", `Recorded follow-up for ${existing.name}`, {
+      branchId: existing.branchId, subjectId: id,
+    }, async (tx) => tx
       .update(enquiries)
       .set({
         contactCount: existing.contactCount + 1,
         lastContactedAt: new Date(),
       })
-      .where(eq(enquiries.id, id));
+      .where(eq(enquiries.id, id)));
 
     revalidatePath("/admin/enquiries");
     return { success: true };
@@ -316,10 +327,14 @@ async function insertIsolating(
   failedRows: string[]
 ): Promise<{ written: number; failed: number }> {
   try {
-    const inserted = await db
+    const inserted = await db.transaction(async (tx) => {
+      const rows = await tx
       .insert(enquiries)
       .values(chunk)
       .returning({ id: enquiries.id });
+      if (rows.length) await recordActivity(tx, "enquiry.imported", `Imported ${rows.length} enquiries from the register`, { branchId: chunk[0].branchId });
+      return rows;
+    });
     return { written: inserted.length, failed: 0 };
   } catch (e) {
     if (chunk.length === 1) {
@@ -410,6 +425,7 @@ export async function importEnquiriesAction(
       written += result.written;
       failed += result.failed;
     }
+
 
     revalidate();
     return {

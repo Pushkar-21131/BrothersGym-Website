@@ -127,6 +127,13 @@
       "when": 1791991315855,
       "tag": "0017_crazy_roughhouse",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1795016695480,
+      "tag": "0018_activity_history",
+      "breakpoints": true
     }
   ]
 }

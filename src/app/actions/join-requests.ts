@@ -9,6 +9,7 @@ import { getBranchScope } from "@/lib/branch";
 import { sanitizeError } from "@/lib/errors";
 import { fulfilManualJoin } from "@/lib/fulfil-join";
 import { notifyJoinConfirmed } from "@/lib/join-notify";
+import { recordActivity } from "@/lib/activity";
 
 /**
  * Owner-side actions for the manual UPI join flow.
@@ -150,7 +151,8 @@ export async function rejectJoinRequest(joinId: number, reason?: string) {
       };
     }
 
-    const updated = await db
+    const updated = await db.transaction(async (tx) => {
+      const rows = await tx
       .update(onlineJoins)
       .set({ status: "rejected", rejectedAt: new Date() })
       .where(
@@ -161,13 +163,15 @@ export async function rejectJoinRequest(joinId: number, reason?: string) {
         )
       )
       .returning({ id: onlineJoins.id });
+      if (rows.length) await recordActivity(tx, "join.rejected", `Rejected join request for ${join.name}${reason?.trim() ? ` · ${reason.trim().slice(0, 300)}` : ""}`, {
+        branchId: join.branchId, subjectId: join.id,
+      });
+      return rows;
+    });
 
     if (updated.length === 0) {
       return { error: "This request just changed — refresh and try again." };
     }
-
-    // reason is accepted for a future audit trail; not stored yet (no column).
-    void reason;
 
     revalidatePath("/admin/join-requests");
     return { success: true };
@@ -211,7 +215,8 @@ export async function deleteJoinProof(joinId: number) {
     // Settled requests only. While one is still pending or claimed the
     // screenshot is the only evidence the owner has to decide on, so it isn't
     // theirs to throw away yet.
-    const updated = await db
+    const updated = await db.transaction(async (tx) => {
+      const rows = await tx
       .update(onlineJoins)
       .set({ proofImage: null, proofMime: null })
       .where(
@@ -223,7 +228,12 @@ export async function deleteJoinProof(joinId: number) {
             : inArray(onlineJoins.branchId, scope.branchIds)
         )
       )
-      .returning({ id: onlineJoins.id });
+      .returning({ id: onlineJoins.id, branchId: onlineJoins.branchId });
+      if (rows.length) await recordActivity(tx, "join.proof_deleted", `Cleared payment screenshot for request #${joinId}`, {
+        branchId: rows[0].branchId, subjectId: joinId,
+      });
+      return rows;
+    });
 
     if (updated.length === 0) {
       // One message for every miss — no such request, another branch's request,

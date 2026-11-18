@@ -26,6 +26,7 @@ import { members, payments, onlineJoins, membershipPlans } from "@/db/schema";
 import { and, eq, desc, sql, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { istDateString, addDaysIso } from "@/lib/utils";
+import { recordActivity } from "@/lib/activity";
 
 type MemberInsert = typeof members.$inferInsert;
 export type OnlineJoin = typeof onlineJoins.$inferSelect;
@@ -309,6 +310,9 @@ export async function fulfilPaidJoin(params: {
         .set({ memberId })
         .where(eq(onlineJoins.id, join.id));
 
+      await recordActivity(tx, join.memberId ? "member.renewed" : "member.created",
+        `${join.memberId ? "Renewed" : "Added"} ${join.name} · gym #${gymId} · online payment ₹${join.amount} · expiry ${newExpiryStr}`,
+        { branchId: join.branchId, subjectId: memberId, actor: null });
       return { memberId, gymId, newExpiryStr };
     });
   } catch (e) {
@@ -527,6 +531,9 @@ export async function fulfilManualJoin(params: {
         .set({ memberId })
         .where(eq(onlineJoins.id, join.id));
 
+      await recordActivity(tx, join.memberId ? "member.renewed" : "member.created",
+        `${join.memberId ? "Renewed" : "Added"} ${join.name} · gym #${gymId} · confirmed UPI payment ₹${join.amount} · expiry ${newExpiryStr}`,
+        { branchId: join.branchId, subjectId: memberId });
       return { memberId, gymId, newExpiryStr };
     });
   } catch (e) {

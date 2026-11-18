@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { db } from "@/db";
+import { isHistoryEnabled } from "@/lib/history-release";
 import { members, payments, equipmentExpenses, staff } from "@/db/schema";
 import { sql, eq, and, lt, gte, lte, inArray, isNull } from "drizzle-orm";
 import {
@@ -12,6 +13,7 @@ import {
   AlertTriangle,
   ChevronRight,
   Building2,
+  History,
 } from "lucide-react";
 import { getBranchScope, getAllBranches } from "@/lib/branch";
 import {
@@ -387,6 +389,13 @@ export default async function AdminDashboard() {
 
       <h2 className="adm-h2">Jump To</h2>
       <section className="adm-card" style={{ padding: "4px 15px" }}>
+        {isHistoryEnabled() && <Jump
+          href="/admin/history"
+          tone="blue"
+          icon={<History size={15} />}
+          title="Recent changes"
+          sub="Member updates, renewals & expenses · who changed what"
+        />}
         <Jump
           href="/admin/reminders"
           tone="orange"

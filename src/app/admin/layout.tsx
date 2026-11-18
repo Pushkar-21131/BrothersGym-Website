@@ -16,8 +16,10 @@ import {
   Building2,
   Inbox,
   ClipboardList,
+  History,
 } from "lucide-react";
 import { db } from "@/db";
+import { isHistoryEnabled } from "@/lib/history-release";
 import { onlineJoins, enquiries } from "@/db/schema";
 import { and, count, eq, inArray, isNotNull, lte } from "drizzle-orm";
 import {
@@ -205,6 +207,11 @@ export default async function AdminLayout({ children }: { children: ReactNode })
         {isOwner && (
           <AdmNavLink href="/admin" icon={<LayoutDashboard size={17} />} exact>
             Dashboard
+          </AdmNavLink>
+        )}
+        {isOwner && isHistoryEnabled() && (
+          <AdmNavLink href="/admin/history" icon={<History size={17} />}>
+            History
           </AdmNavLink>
         )}
         {isOwner && (

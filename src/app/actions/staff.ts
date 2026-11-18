@@ -6,6 +6,8 @@ import { eq, inArray, and } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { getBranchScope, requireSingleBranch } from "@/lib/branch";
 import { sanitizeError } from "@/lib/errors";
+import { withActivity } from "@/lib/activity";
+import { formatINR } from "@/lib/utils";
 import { assertAuthenticated, assertPermission } from "@/lib/auth-check";
 
 type StaffCategory = "Trainer" | "Worker" | "Cleaner";
@@ -66,7 +68,9 @@ export async function addStaffAction(formData: FormData) {
   try {
     const branch = await requireSingleBranch(formBranchId);
 
-    await db.insert(staff).values({
+    await withActivity("staff.created", `Added ${name} · ${category} · salary ${formatINR(salary)}`, {
+      branchId: branch.branchId,
+    }, async (tx) => tx.insert(staff).values({
       branchId: branch.branchId,
       name,
       category,
@@ -75,7 +79,7 @@ export async function addStaffAction(formData: FormData) {
       address: address || null,
       joinDate,
       isActive,
-    });
+    }));
 
     revalidatePath("/admin/staff");
     revalidatePath("/admin");
@@ -115,7 +119,9 @@ export async function updateStaffAction(id: number, formData: FormData) {
         : scope.branchId === existing[0].branchId;
     if (!canAccess) return { error: "You don't have access to this staff member" };
 
-    await db
+    await withActivity("staff.updated", `Updated ${name} · ${category} · salary ${formatINR(salary)}`, {
+      branchId: existing[0].branchId, subjectId: id,
+    }, async (tx) => tx
       .update(staff)
       .set({
         name,
@@ -126,7 +132,7 @@ export async function updateStaffAction(id: number, formData: FormData) {
         joinDate,
         isActive,
       })
-      .where(eq(staff.id, id));
+      .where(eq(staff.id, id)));
 
     revalidatePath("/admin/staff");
     revalidatePath("/admin");
@@ -158,7 +164,9 @@ export async function deleteStaffAction(id: number) {
         : scope.branchId === existing[0].branchId;
     if (!canAccess) return { error: "You don't have access to this staff member" };
 
-    await db.delete(staff).where(eq(staff.id, id));
+    await withActivity("staff.deleted", `Deleted staff member ${existing[0].name}`, {
+      branchId: existing[0].branchId, subjectId: id,
+    }, async (tx) => tx.delete(staff).where(eq(staff.id, id)));
 
     revalidatePath("/admin/staff");
     revalidatePath("/admin");

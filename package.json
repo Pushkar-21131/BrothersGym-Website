@@ -7,7 +7,7 @@
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "verify": "node scripts/verify-import-parse.mjs && node scripts/verify-enquiry-parse.mjs && node scripts/verify-whatsapp-message.mjs && node scripts/verify-member-search.mjs && node scripts/verify-permissions.mjs && node scripts/verify-cycle.mjs && node scripts/verify-renewal.mjs",
+    "verify": "node scripts/verify-import-parse.mjs && node scripts/verify-enquiry-parse.mjs && node scripts/verify-whatsapp-message.mjs && node scripts/verify-member-search.mjs && node scripts/verify-permissions.mjs && node scripts/verify-cycle.mjs && node scripts/verify-renewal.mjs && node scripts/verify-activity-history.mjs",
     "audit:check": "npm audit --audit-level=high",
     "audit:full": "npm audit",
     "db:backup": "node scripts/backup-db.mjs",

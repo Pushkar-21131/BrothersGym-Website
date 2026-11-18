@@ -6,6 +6,9 @@ import { eq, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { getBranchScope, requireSingleBranch } from "@/lib/branch";
 import { sanitizeError } from "@/lib/errors";
+import { recordActivity, withActivity } from "@/lib/activity";
+import { activityChanges } from "@/lib/activity-history";
+import { formatINR } from "@/lib/utils";
 import {
   assertAuthenticated,
   assertPermission,
@@ -91,7 +94,7 @@ export async function addEquipmentAction(formData: FormData) {
     ? Number(formData.get("branchId"))
     : undefined;
 
-  if (!equipmentName || !cost || !date) {
+  if (!equipmentName || !Number.isInteger(cost) || cost <= 0 || !date) {
     return { error: "All fields required" };
   }
 
@@ -99,7 +102,9 @@ export async function addEquipmentAction(formData: FormData) {
     const branch = await requireSingleBranch(formBranchId);
     const user = await getCurrentUser();
 
-    await db.insert(equipmentExpenses).values({
+    await withActivity("equipment.added", `Added ${equipmentName} · ${formatINR(cost)} · expense dated ${date}`, {
+      branchId: branch.branchId, actor: user,
+    }, async (tx) => tx.insert(equipmentExpenses).values({
       branchId: branch.branchId,
       equipmentName,
       cost,
@@ -107,7 +112,7 @@ export async function addEquipmentAction(formData: FormData) {
       // null for the env-based owner, which has no app_users row.
       createdByUserId: user?.id ?? null,
       createdByName: user?.name ?? null,
-    });
+    }));
 
     revalidatePath("/admin/equipment");
     revalidatePath("/admin");
@@ -132,14 +137,25 @@ export async function updateEquipmentAction(id: number, formData: FormData) {
   const cost = parseInt(formData.get("cost") as string);
   const date = formData.get("date") as string;
 
+  if (!equipmentName || !Number.isInteger(cost) || cost <= 0 || !date) {
+    return { error: "Enter an equipment name, positive cost and date" };
+  }
+
   try {
     const existing = await loadEquipmentInScope(id);
     if (!existing) return { error: "Equipment not found" };
 
-    await db
-      .update(equipmentExpenses)
-      .set({ equipmentName, cost, date })
-      .where(eq(equipmentExpenses.id, id));
+    await db.transaction(async (tx) => {
+      const [before] = await tx.select().from(equipmentExpenses).where(eq(equipmentExpenses.id, id)).for("update");
+      if (!before) throw new Error("Equipment not found");
+      const [after] = await tx.update(equipmentExpenses).set({ equipmentName, cost, date }).where(eq(equipmentExpenses.id, id)).returning();
+      const changes = activityChanges(before, after);
+      if (changes.length) {
+        await recordActivity(tx, "equipment.updated", `Updated ${equipmentName} · expense #${id}`, {
+          branchId: before.branchId, subjectId: id, changes,
+        });
+      }
+    });
 
     revalidatePath("/admin/equipment");
     revalidatePath("/admin");
@@ -164,7 +180,9 @@ export async function deleteEquipmentAction(id: number) {
     const existing = await loadEquipmentInScope(id);
     if (!existing) return { error: "Equipment not found" };
 
-    await db.delete(equipmentExpenses).where(eq(equipmentExpenses.id, id));
+    await withActivity("equipment.deleted", `Deleted ${existing.equipmentName} · ${formatINR(existing.cost)} · expense dated ${existing.date}`, {
+      branchId: existing.branchId, subjectId: id,
+    }, async (tx) => tx.delete(equipmentExpenses).where(eq(equipmentExpenses.id, id)));
 
     revalidatePath("/admin/equipment");
     revalidatePath("/admin");

@@ -3,6 +3,7 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { db } from "@/db";
+import { withActivity } from "@/lib/activity";
 import { appUsers, branches } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import bcrypt from "bcryptjs";
@@ -489,7 +490,9 @@ export async function createStaffUserAction(
 
   try {
     const passwordHash = await bcrypt.hash(password, 10);
-    await db.insert(appUsers).values({
+    await withActivity("user.created", `Created ${role} login for ${name}`, {
+      branchId: effectiveBranchId,
+    }, async (tx) => tx.insert(appUsers).values({
       name,
       email,
       passwordHash,
@@ -499,7 +502,7 @@ export async function createStaffUserAction(
       // clear the branch here and they are global again with no code change.
       branchId: effectiveBranchId,
       isActive: true,
-    });
+    }));
     return { success: true };
   } catch (error) {
     return { error: sanitizeError(error, "Failed to create user") };
@@ -562,7 +565,9 @@ export async function updateStaffUserAction(
       updateData.passwordHash = await bcrypt.hash(password, 10);
     }
 
-    await db.update(appUsers).set(updateData).where(eq(appUsers.id, id));
+    await withActivity("user.updated", `Updated login for ${name} · ${isActive ? "active" : "inactive"}${updateData.passwordHash ? " · password changed" : ""}`, {
+      branchId: effectiveBranchId, subjectId: id,
+    }, async (tx) => tx.update(appUsers).set(updateData).where(eq(appUsers.id, id)));
     return { success: true };
   } catch (error) {
     return { error: sanitizeError(error, "Failed to update user") };
@@ -592,7 +597,10 @@ export async function deleteStaffUserAction(
     const lastOwner = await assertOwnerRemains(id, false);
     if (lastOwner) return lastOwner;
 
-    await db.delete(appUsers).where(eq(appUsers.id, id));
+    const [target] = await db.select().from(appUsers).where(eq(appUsers.id, id));
+    await withActivity("user.deleted", `Deleted login for ${target.name}`, {
+      branchId: target.branchId, subjectId: id,
+    }, async (tx) => tx.delete(appUsers).where(eq(appUsers.id, id)));
     return { success: true };
   } catch (error) {
     return { error: sanitizeError(error, "Failed to delete user") };

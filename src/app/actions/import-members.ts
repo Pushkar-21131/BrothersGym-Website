@@ -1,6 +1,7 @@
 "use server";
 
 import { db } from "@/db";
+import { recordActivity } from "@/lib/activity";
 import { members } from "@/db/schema";
 import type { MemberGender } from "@/db/schema";
 import { revalidatePath } from "next/cache";
@@ -147,8 +148,9 @@ async function insertChunk(
   values: MemberInsert[],
   updateExisting: boolean
 ): Promise<{ written: number; skipped: number }> {
+  return db.transaction(async (tx) => {
   if (updateExisting) {
-    const rows = await db
+    const rows = await tx
       .insert(members)
       .values(values)
       .onConflictDoUpdate({
@@ -172,18 +174,21 @@ async function insertChunk(
         },
       })
       .returning({ id: members.id });
+    if (rows.length) await recordActivity(tx, "member.imported", `Imported / updated ${rows.length} members from the register`, { branchId: values[0].branchId });
     return { written: rows.length, skipped: 0 };
   }
 
-  const rows = await db
+  const rows = await tx
     .insert(members)
     .values(values)
     .onConflictDoNothing()
     .returning({ id: members.id });
+  if (rows.length) await recordActivity(tx, "member.imported", `Imported ${rows.length} members from the register`, { branchId: values[0].branchId });
 
   // RETURNING yields only the rows actually inserted, so the difference is the
   // ones the unique index turned away.
   return { written: rows.length, skipped: values.length - rows.length };
+  });
 }
 
 /**

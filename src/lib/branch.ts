@@ -152,7 +152,7 @@ export async function getBranchScope(): Promise<BranchScope> {
  *
  * Distinct from `assertOwner()`, which only checks the ROLE and is therefore
  * true for a branch-scoped owner too. Use this for the handful of things that
- * are genuinely global: managing owner logins, the security/audit log, and
+ * are genuinely global: managing owner logins, the login security log, and
  * anything that spans both gyms.
  */
 export async function isSuperAdmin(): Promise<boolean> {

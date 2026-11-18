@@ -1,8 +1,10 @@
 import { db } from "@/db";
-import { cookies } from "next/headers";
-import { loginAttempts } from "@/db/schema";
+import { activityLogs, loginAttempts } from "@/db/schema";
 import { getClientInfo } from "@/lib/security";
-import { getCurrentUser } from "@/lib/auth-check";
+import { assertOwner, getCurrentUser } from "@/lib/auth-check";
+import { getBranchScope } from "@/lib/branch";
+import { recordActivity, type ActivityOptions } from "@/lib/activity";
+import { getHistoryRange } from "./activity-history";
 
 /**
  * Sensitive action types that should be audited.
@@ -30,6 +32,9 @@ export type AuditEvent =
   | "staff.created"
   | "staff.updated"
   | "staff.deleted"
+  | "user.created"
+  | "user.updated"
+  | "user.deleted"
   | "permissions.updated"
   // Plan events
   | "plan.updated"
@@ -56,44 +61,35 @@ export type AuditEvent =
   | "equipment.added"
   | "equipment.updated"
   | "equipment.deleted"
+  | "enquiry.created"
+  | "enquiry.updated"
+  | "enquiry.deleted"
+  | "enquiry.contacted"
+  | "enquiry.imported"
+  | "join.rejected"
+  | "join.proof_deleted"
   // System events
   | "settings.updated"
   | "sms.sent";
 
 /**
- * Enhanced audit logging — saves to database AND console.
- * Use this for all new sensitive actions.
+ * Best-effort logging for operations that have already completed. Mutations
+ * use recordActivity / withActivity to commit their history atomically.
  *
  * Example:
  *   await logAuditEvent("member.deleted", `Deleted member #${gymId} (${name})`);
  */
 export async function logAuditEvent(
   event: AuditEvent,
-  details: string
+  details: string,
+  options?: ActivityOptions,
 ): Promise<void> {
   try {
-    const cookieStore = await cookies();
     const user = await getCurrentUser();
-    const name = user?.name || "unknown";
-    const role = user?.role || "unknown";
-    const branch = cookieStore.get("admin_branch")?.value || "all";
-
-    // Get IP + user agent
-    const { ip, userAgent } = await getClientInfo();
-
-    // Console log for real-time visibility
-    console.log(
-      `[AUDIT] ${new Date().toISOString()} · ${role}:${name} (${branch}) · ${event} · ${details}`
-    );
-
-    // Save to database (reusing login_attempts table for now)
-    // Format: reason="AUDIT:eventName|details"
-    await db.insert(loginAttempts).values({
-      email: name,
-      ipAddress: ip,
-      userAgent: userAgent?.slice(0, 200) || "unknown", // Truncate long UAs
-      success: true,
-      reason: `AUDIT:${event}|role=${role}|branch=${branch}|${details.slice(0, 300)}`,
+    if (!user) throw new Error("Audit requires an authenticated actor");
+    const scope = options ? null : await getBranchScope();
+    await recordActivity(db, event, details, options ?? {
+      branchId: scope?.type === "single" ? scope.branchId : null, actor: user,
     });
   } catch (err) {
     // Don't fail the main operation if audit fails
@@ -135,31 +131,23 @@ export async function logSecurityEvent(
  * Retrieve recent audit logs (owner only — use in admin dashboard).
  */
 export async function getRecentAuditLogs(limit: number = 100) {
-  const { desc, like } = await import("drizzle-orm");
-  try {
+  await assertOwner();
+  const scope = await getBranchScope();
+  const { and, desc, eq, gte, inArray, isNull, or } = await import("drizzle-orm");
+  const { start } = getHistoryRange("all");
     const logs = await db
       .select()
-      .from(loginAttempts)
-      .where(like(loginAttempts.reason, "AUDIT:%"))
-      .orderBy(desc(loginAttempts.createdAt))
-      .limit(limit);
-
-    return logs.map((log) => {
-      const reasonParts = (log.reason || "").split("|");
-      const eventPart = reasonParts[0]?.replace("AUDIT:", "") || "unknown";
-
-      return {
+      .from(activityLogs)
+      .where(and(gte(activityLogs.createdAt, start), scope.type === "single"
+        ? eq(activityLogs.branchId, scope.branchId)
+        : or(inArray(activityLogs.branchId, scope.branchIds), isNull(activityLogs.branchId))))
+      .orderBy(desc(activityLogs.createdAt), desc(activityLogs.id))
+      .limit(Number.isSafeInteger(limit) ? Math.max(1, Math.min(limit, 100)) : 100);
+    return logs.map((log) => ({
         id: log.id,
-        event: eventPart,
-        actor: log.email,
-        ipAddress: log.ipAddress,
-        userAgent: log.userAgent,
-        details: reasonParts.slice(1).join(" · "),
+        event: log.event,
+        actor: log.actorName,
+        details: log.details,
         timestamp: log.createdAt,
-      };
-    });
-  } catch (err) {
-    console.error("[Audit] Failed to fetch logs:", err);
-    return [];
-  }
+    }));
 }

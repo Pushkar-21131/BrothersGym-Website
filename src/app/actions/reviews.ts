@@ -6,6 +6,8 @@ import { eq, desc, and } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { sanitizeError } from "@/lib/errors";
 import { assertBrandContentAccess } from "@/lib/branch";
+import { getCurrentUser } from "@/lib/auth-check";
+import { withActivity } from "@/lib/activity";
 
 /**
  * NOTE ON SCOPING
@@ -58,7 +60,10 @@ export async function addReviewAction(formData: FormData) {
   }
 
   try {
-    await db.insert(reviews).values({
+    const actor = await getCurrentUser();
+    await withActivity("review.created", `Added review by ${memberName}`, {
+      branchId: actor?.branchId ?? null, actor,
+    }, async (tx) => tx.insert(reviews).values({
       memberName,
       rating,
       reviewText,
@@ -66,7 +71,7 @@ export async function addReviewAction(formData: FormData) {
       photoUrl: photoUrl || null,
       isVisible: true,
       displayOrder,
-    });
+    }));
 
     revalidatePath("/admin/reviews");
     revalidatePath("/");
@@ -97,7 +102,10 @@ export async function updateReviewAction(id: number, formData: FormData) {
   }
 
   try {
-    await db
+    const actor = await getCurrentUser();
+    await withActivity("review.updated", `Updated review by ${memberName}`, {
+      branchId: actor?.branchId ?? null, subjectId: id, actor,
+    }, async (tx) => tx
       .update(reviews)
       .set({
         memberName,
@@ -108,7 +116,7 @@ export async function updateReviewAction(id: number, formData: FormData) {
         displayOrder,
         isVisible,
       })
-      .where(eq(reviews.id, id));
+      .where(eq(reviews.id, id)));
 
     revalidatePath("/admin/reviews");
     revalidatePath("/");
@@ -127,7 +135,10 @@ export async function deleteReviewAction(id: number) {
   }
 
   try {
-    await db.delete(reviews).where(eq(reviews.id, id));
+    const actor = await getCurrentUser();
+    await withActivity("review.deleted", `Deleted review #${id}`, {
+      branchId: actor?.branchId ?? null, subjectId: id, actor,
+    }, async (tx) => tx.delete(reviews).where(eq(reviews.id, id)));
     revalidatePath("/admin/reviews");
     revalidatePath("/");
     return { success: true };

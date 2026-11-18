@@ -1,13 +1,12 @@
 "use server";
 
-import { db } from "@/db";
 import { branches } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { assertOwner } from "@/lib/auth-check";
 import { isBranchInScope, isSuperAdmin } from "@/lib/branch";
 import { sanitizeError } from "@/lib/errors";
-import { logAuditEvent } from "@/lib/audit";
+import { withActivity } from "@/lib/activity";
 
 // ===== UPDATE BRANCH INFO =====
 export async function updateBranchAction(id: number, formData: FormData) {
@@ -42,7 +41,9 @@ export async function updateBranchAction(id: number, formData: FormData) {
   const mayToggleActive = await isSuperAdmin();
 
   try {
-    await db
+    await withActivity("branch.updated", `Updated branch ${name}`, {
+      branchId: id, subjectId: id,
+    }, async (tx) => tx
       .update(branches)
       .set({
         name,
@@ -60,9 +61,7 @@ export async function updateBranchAction(id: number, formData: FormData) {
         // values untouched, which is what "we stopped using this" should mean.
         ...(mayToggleActive ? { isActive } : {}),
       })
-      .where(eq(branches.id, id));
-
-    await logAuditEvent("branch.updated", `Updated branch ${name}`);
+      .where(eq(branches.id, id)));
 
     revalidatePath("/admin/branch");
     revalidatePath("/");

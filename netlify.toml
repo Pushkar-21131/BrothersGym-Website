@@ -17,5 +17,8 @@
   # and can diverge from what typechecks locally.
   NODE_VERSION = "22"
 
+[functions]
+  directory = "netlify/functions"
+
 [[plugins]]
   package = "@netlify/plugin-nextjs"

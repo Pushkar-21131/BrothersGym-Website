@@ -337,6 +337,32 @@ login is served directly at `/login` (staff) and `/owner-login` (owner).
 
 ---
 
+## Dashboard history
+
+Owners can open **History** in the menu or **Recent changes** on the dashboard.
+This release activates on **19 November 2026 at 12:00 pm IST** (06:30 UTC).
+The server checks the activation time on every request: the navigation, history
+page, recording and cleanup remain disabled before that time even if Netlify
+deploys the code early. No further deployment is needed at noon once this build is live.
+Today, This week (Monday onward), This month, and Last 31 days use Indian time.
+The page can also filter by the person making the change and the type of change.
+It shows member edits with their previous/new values, membership renewals,
+equipment purchases and corrections, and other dashboard changes. Each entry
+keeps the signed-in account's name and role, even if that account is later deleted.
+Branch owners see only their gym's history; staff cannot open this page.
+Tracking starts when migration `0018_activity_history.sql` and this version are installed.
+
+Before deploying this version, run `npx drizzle-kit migrate` to create the
+`activity_logs` table. The Netlify function `cleanup-activity` runs hourly on
+production deployments and deletes history entries older than 31 days. Set
+`DATABASE_URL` for both the build and Netlify Functions (including the scheduled
+function). Opening History also performs cleanup as a backstop. Other hosts must
+schedule the SQL from `src/lib/activity-retention.ts` hourly to get cleanup while
+the dashboard is idle. Only activity entries are deleted; members, payments and
+equipment expenses retain their existing records.
+
+---
+
 ## Known gaps
 
 Being honest about what is not done, because it is on the roadmap rather than

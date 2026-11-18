@@ -10,7 +10,7 @@ import {
   assertPermission,
   getCurrentUser,
 } from "@/lib/auth-check";
-import { logAuditEvent } from "@/lib/audit";
+import { recordActivity } from "@/lib/activity";
 import { sanitizeError } from "@/lib/errors";
 
 /**
@@ -241,19 +241,22 @@ export async function voidPaymentAction(paymentId: number) {
     const user = await getCurrentUser();
     // Pinned on the row still being live, so a second tap writes nothing and
     // gets the same answer as tapping an entry that was already removed.
-    const updated = await db
+    const updated = await db.transaction(async (tx) => {
+      const rows = await tx
       .update(payments)
       .set({ voidedAt: new Date(), voidedBy: user?.name || "unknown" })
       .where(and(eq(payments.id, paymentId), isNull(payments.voidedAt)))
       .returning({ id: payments.id });
-
-    if (!updated.length) return { error: "That entry has already been removed" };
-
-    await logAuditEvent(
+      if (rows.length) await recordActivity(tx,
       "payment.voided",
       `Removed ₹${payment.amount} dated ${payment.date} · payment #${payment.id}` +
-        (payment.gymId ? ` · gym #${payment.gymId}` : "")
-    );
+        (payment.gymId ? ` · gym #${payment.gymId}` : ""),
+        { branchId: payment.branchId, subjectId: payment.id, actor: user },
+      );
+      return rows;
+    });
+
+    if (!updated.length) return { error: "That entry has already been removed" };
 
     revalidatePath("/admin");
     revalidatePath("/admin/members");
@@ -277,19 +280,22 @@ export async function restorePaymentAction(paymentId: number) {
     if ("error" in found) return found;
     const payment = found.payment;
 
-    const updated = await db
+    const updated = await db.transaction(async (tx) => {
+      const rows = await tx
       .update(payments)
       .set({ voidedAt: null, voidedBy: null })
       .where(and(eq(payments.id, paymentId), isNotNull(payments.voidedAt)))
       .returning({ id: payments.id });
-
-    if (!updated.length) return { error: "That entry is already in the timeline" };
-
-    await logAuditEvent(
+      if (rows.length) await recordActivity(tx,
       "payment.restored",
       `Put back ₹${payment.amount} dated ${payment.date} · payment #${payment.id}` +
-        (payment.gymId ? ` · gym #${payment.gymId}` : "")
-    );
+        (payment.gymId ? ` · gym #${payment.gymId}` : ""),
+        { branchId: payment.branchId, subjectId: payment.id },
+      );
+      return rows;
+    });
+
+    if (!updated.length) return { error: "That entry is already in the timeline" };
 
     revalidatePath("/admin");
     revalidatePath("/admin/members");

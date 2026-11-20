@@ -12,19 +12,18 @@ import type { PublicBranch } from "@/lib/public-data";
  */
 export default function PublicFooter({ branches }: { branches: PublicBranch[] }) {
   return (
-    <footer id="contact" className="bg-zinc-950 pt-10 md:pt-16 pb-8 px-4 md:px-6 relative overflow-hidden border-t border-zinc-900">
-      <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[600px] h-[300px] bg-yellow-500/5 rounded-full blur-3xl z-0"></div>
+    <footer id="contact" className="public-footer bg-zinc-950 pt-10 md:pt-16 pb-8 px-4 md:px-6 relative overflow-hidden border-t border-zinc-800">
 
       <div className="max-w-7xl mx-auto relative z-10">
         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-5 md:gap-6 mb-6 pb-6 md:mb-12 md:pb-12 border-b border-zinc-900">
           <div className="flex-1">
             <div className="flex items-center gap-3 mb-4">
-              <img src="/images/brothers-gym-logo.svg" alt="Brothers Gym logo" loading="lazy" decoding="async" className="h-14 w-14 rounded-full" />
+              <img src="/images/brothers-gym-logo.svg" alt="" width={56} height={56} loading="lazy" decoding="async" className="h-14 w-14 shrink-0 rounded-full" />
               <div>
-                <h3 className="text-xl md:text-2xl font-black uppercase tracking-widest text-white">
+                <p translate="no" className="text-xl md:text-2xl font-black uppercase tracking-wide text-white">
                   Brothers<span className="text-yellow-500">Gym</span>
-                </h3>
-                <p className="text-[10px] text-zinc-500 uppercase tracking-widest">
+                </p>
+                <p className="text-xs text-zinc-400 mt-1">
                   Two Brothers · Two Locations
                 </p>
               </div>
@@ -36,9 +35,9 @@ export default function PublicFooter({ branches }: { branches: PublicBranch[] })
 
           <Link
             href="/join"
-            className="bg-yellow-500 hover:bg-yellow-400 text-black font-black uppercase tracking-wider px-6 md:px-8 py-3 md:py-4 rounded-lg transition-transform hover:scale-105 active:scale-95 text-center whitespace-nowrap flex items-center justify-center gap-2 self-start"
+            className="min-h-12 bg-yellow-500 hover:bg-yellow-400 text-black font-black uppercase tracking-wide text-sm px-6 md:px-8 py-3 rounded-lg transition-colors text-center whitespace-nowrap flex items-center justify-center gap-2 self-start"
           >
-            Join Online <ArrowRight size={18} />
+            Join Online <ArrowRight size={18} aria-hidden="true" />
           </Link>
         </div>
 
@@ -62,6 +61,7 @@ export default function PublicFooter({ branches }: { branches: PublicBranch[] })
           {branches.map((branch) => (
             <div
               key={branch.id}
+              id={`branch-${branch.id}`}
               className="bg-zinc-900/60 border border-zinc-800 hover:border-yellow-500/40 p-4 md:p-6 rounded-2xl transition-colors group max-md:p-3 max-md:rounded-xl"
             >
               <div className="flex items-center gap-3 mb-4 md:mb-5 max-md:gap-2 max-md:mb-2.5">
@@ -155,27 +155,27 @@ export default function PublicFooter({ branches }: { branches: PublicBranch[] })
           </div>
         </div>
 
-        <div className="flex flex-col md:flex-row justify-between items-center gap-4 pt-6 md:pt-8 border-t border-zinc-900 text-sm text-zinc-500">
-          <div className="flex flex-col md:flex-row items-center gap-2 md:gap-4 text-center md:text-left">
+        <div className="flex flex-col lg:flex-row justify-between items-center gap-4 pt-6 md:pt-8 border-t border-zinc-800 text-sm text-zinc-400">
+          <div className="flex flex-col xl:flex-row items-center gap-2 xl:gap-4 text-center">
             <p>&copy; {new Date().getFullYear()} Brothers Gym. All rights reserved.</p>
-            <div className="flex flex-wrap justify-center gap-4 text-xs">
-              <Link href="/privacy" className="hover:text-yellow-500 transition-colors">Privacy</Link>
-              <Link href="/terms" className="hover:text-yellow-500 transition-colors">Terms</Link>
-              <Link href="/refund" className="hover:text-yellow-500 transition-colors">Refund</Link>
-              <Link href="/contact" className="hover:text-yellow-500 transition-colors">Contact</Link>
-              <Link href="/plans" className="hover:text-yellow-500 transition-colors">Plans &amp; FAQ</Link>
+            <div className="flex flex-wrap justify-center gap-x-4 gap-y-1 text-sm">
+              <Link href="/privacy" className="inline-flex min-h-11 items-center hover:text-yellow-500 transition-colors">Privacy</Link>
+              <Link href="/terms" className="inline-flex min-h-11 items-center hover:text-yellow-500 transition-colors">Terms</Link>
+              <Link href="/refund" className="inline-flex min-h-11 items-center hover:text-yellow-500 transition-colors">Refund</Link>
+              <Link href="/contact" className="inline-flex min-h-11 items-center hover:text-yellow-500 transition-colors">Contact</Link>
+              <Link href="/plans" className="inline-flex min-h-11 items-center hover:text-yellow-500 transition-colors">Plans &amp; FAQ</Link>
             </div>
           </div>
           <div className="flex items-center gap-4">
-            <span className="text-xs uppercase tracking-widest text-zinc-600">Follow us</span>
+            <span className="text-sm text-zinc-400">Follow us</span>
             <a
               href="https://www.instagram.com/brothersgym12"
               target="_blank"
               rel="noopener noreferrer"
-              className="w-9 h-9 rounded-full bg-zinc-900 border border-zinc-800 hover:bg-yellow-500 hover:border-yellow-500 flex items-center justify-center text-zinc-400 hover:text-black transition-all"
+              className="w-11 h-11 rounded-full bg-zinc-900 border border-zinc-700 hover:bg-yellow-500 hover:border-yellow-500 flex items-center justify-center text-zinc-300 hover:text-black transition-colors"
               aria-label="Instagram"
             >
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <rect x="2" y="2" width="20" height="20" rx="5" ry="5"></rect>
                 <path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"></path>
                 <line x1="17.5" y1="6.5" x2="17.51" y2="6.5"></line>
@@ -185,10 +185,10 @@ export default function PublicFooter({ branches }: { branches: PublicBranch[] })
               href="https://www.facebook.com/profile.php?id=100063764862295"
               target="_blank"
               rel="noopener noreferrer"
-              className="w-9 h-9 rounded-full bg-zinc-900 border border-zinc-800 hover:bg-yellow-500 hover:border-yellow-500 flex items-center justify-center text-zinc-400 hover:text-black transition-all"
+              className="w-11 h-11 rounded-full bg-zinc-900 border border-zinc-700 hover:bg-yellow-500 hover:border-yellow-500 flex items-center justify-center text-zinc-300 hover:text-black transition-colors"
               aria-label="Facebook"
             >
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z"></path>
               </svg>
             </a>

@@ -115,6 +115,7 @@ export default function TrainersTabs({ branches, trainers, owners }: Props) {
                   key={b.id}
                   type="button"
                   onClick={() => setActiveBranchId(b.id)}
+                  aria-pressed={activeBranchId === b.id}
                   className={`px-4 py-2 rounded text-xs font-black uppercase tracking-wider transition-all ${
                     activeBranchId === b.id
                       ? "bg-yellow-500 text-black shadow-lg"
@@ -163,6 +164,14 @@ export default function TrainersTabs({ branches, trainers, owners }: Props) {
 // ===== Trainer Card =====
 function TrainerCard({ trainer, isOwner = false }: { trainer: Trainer; isOwner?: boolean }) {
   const photoSrc = resolveTrainerPhoto(trainer);
+  const [failedPhoto, setFailedPhoto] = useState<string | null>(null);
+  const photoRef = useRef<HTMLImageElement>(null);
+
+  useEffect(() => {
+    if (photoSrc && photoRef.current?.complete && photoRef.current.naturalWidth === 0) {
+      setFailedPhoto(photoSrc);
+    }
+  }, [photoSrc]);
   const [expanded, setExpanded] = useState(false);
   const [canExpand, setCanExpand] = useState(false);
   const experienceRef = useRef<HTMLParagraphElement>(null);
@@ -198,16 +207,20 @@ function TrainerCard({ trainer, isOwner = false }: { trainer: Trainer; isOwner?:
           face. Same proportion everywhere means the crop the owner approved in
           the admin preview is the crop a member sees. */}
       <div className="aspect-7/8 bg-zinc-800 relative overflow-hidden">
-        {photoSrc ? (
+        {photoSrc && photoSrc !== failedPhoto ? (
           <img
+            ref={photoRef}
             src={photoSrc}
+            width={560}
+            height={640}
+            onError={() => setFailedPhoto(photoSrc)}
             alt={trainer.name}
             loading="lazy"
             decoding="async"
             className="w-full h-full object-cover grayscale group-hover:grayscale-0 transition-all duration-500"
           />
         ) : (
-          <div className="w-full h-full flex items-center justify-center">
+          <div role="img" aria-label={`Portrait unavailable for ${trainer.name}`} className="w-full h-full flex items-center justify-center">
             <User size={72} className="text-zinc-700" />
           </div>
         )}

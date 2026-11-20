@@ -1,5 +1,61 @@
 @import "tailwindcss";
 
+/* Public pages share the existing gold palette and 80px navigation offset. */
+.public-navbar {
+  --nav-progress: 0;
+  --nav-opacity: var(--nav-progress);
+  background-color: rgba(9, 9, 11, calc(0.55 + 0.39 * var(--nav-opacity)));
+  backdrop-filter: blur(calc(12px * var(--nav-opacity)));
+  -webkit-backdrop-filter: blur(calc(12px * var(--nav-opacity)));
+  border-bottom: 1px solid rgba(63, 63, 70, calc(0.8 * var(--nav-opacity)));
+}
+
+.public-navbar[data-menu-open="true"] { --nav-opacity: 1; }
+
+:is(.public-site, .public-navbar, .public-footer, .public-chat) :is(a, button, input, summary, .public-reviews-track):focus-visible {
+  outline: 2px solid var(--color-yellow-500);
+  outline-offset: 4px;
+}
+
+:is(.public-site, .public-navbar, .public-footer, .public-chat) :is(a, button, summary) {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: rgb(234 179 8 / 0.2);
+}
+
+.public-site :is(h1, h2, h3, h4) { text-wrap: balance; }
+.public-site p { text-wrap: pretty; }
+.public-site input { caret-color: var(--color-yellow-500); }
+.public-site input::placeholder { color: var(--color-zinc-400); opacity: 1; }
+.public-site input[type="number"] { font-variant-numeric: tabular-nums; }
+.public-bmi summary { list-style: none; }
+.public-bmi summary::-webkit-details-marker { display: none; }
+.public-reviews-track { scrollbar-width: none; }
+.public-reviews-track::-webkit-scrollbar { display: none; }
+
+.public-skip-link {
+  position: fixed;
+  top: 1rem;
+  left: 1rem;
+  z-index: 60;
+  padding: 0.75rem 1rem;
+  border-radius: 0.5rem;
+  color: var(--color-zinc-950);
+  background: var(--color-yellow-500);
+  font-weight: 700;
+  transform: translateY(-200%);
+}
+.public-skip-link:focus { transform: translateY(0); }
+
+@media (prefers-reduced-motion: reduce) {
+  :is(.public-site, .public-navbar, .public-footer, .public-chat) *,
+  :is(.public-site, .public-navbar, .public-footer, .public-chat) *::before,
+  :is(.public-site, .public-navbar, .public-footer, .public-chat) *::after {
+    animation: none !important;
+    transition-duration: 0s !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 /* ============================================
    FIXED NAVBAR — ANCHOR LANDING OFFSET
    ============================================

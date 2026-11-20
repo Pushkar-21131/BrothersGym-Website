@@ -2,106 +2,72 @@
 
 import { useRef, useEffect } from "react";
 import { usePathname } from "next/navigation";
+import Link from "next/link";
 import { Menu, X } from "lucide-react";
 
-// The "#" entries are homepage anchors; PublicNavbar resolves the same list
-// against the current path, and both places have to agree.
 const NAV_ITEMS = [
-  { href: "#about", label: "About" },
-  { href: "#bmi", label: "BMI Calculator" },
-  { href: "#reviews", label: "Reviews" },
   { href: "/plans", label: "Plans & FAQ" },
-  { href: "#staff", label: "Trainers" },
   { href: "#locations", label: "Locations" },
+  { href: "#about", label: "About" },
+  { href: "#reviews", label: "Reviews" },
+  { href: "#staff", label: "Trainers" },
+  { href: "#bmi", label: "BMI Calculator" },
   { href: "#contact", label: "Contact" },
-  { href: "/join", label: "Join Online" },
 ];
 
-// Controlled: the open state lives in PublicNavbar so the bar can force itself
-// solid while this menu is open. Behaviour is otherwise unchanged.
-export default function PublicMobileMenu({
-  open,
-  onOpenChange,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-}) {
+export default function PublicMobileMenu({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const menuRef = useRef<HTMLDivElement>(null);
-
-  // On "/" the prefix is empty, so the anchors stay bare and jump in place.
-  // Anywhere else they have to point back at the homepage.
+  const toggleRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
   const home = usePathname() === "/" ? "" : "/";
 
   useEffect(() => {
+    const desktop = window.matchMedia("(min-width: 1280px)");
+    const onDesktop = () => { if (desktop.matches) onOpenChange(false); };
+    desktop.addEventListener("change", onDesktop);
+    return () => desktop.removeEventListener("change", onDesktop);
+  }, [onOpenChange]);
+
+  useEffect(() => {
     if (!open) return;
-
-    function handleClickOutside(e: MouseEvent) {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+    const frame = requestAnimationFrame(() => panelRef.current?.querySelector<HTMLAnchorElement>("a")?.focus());
+    const dismissOutside = (event: Event) => {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) onOpenChange(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
         onOpenChange(false);
+        toggleRef.current?.focus();
       }
-    }
-
-    function handleEscape(e: KeyboardEvent) {
-      if (e.key === "Escape") onOpenChange(false);
-    }
-
-    document.body.style.overflow = "hidden";
-
-    const timer = setTimeout(() => {
-      document.addEventListener("mousedown", handleClickOutside);
-      document.addEventListener("keydown", handleEscape);
-    }, 0);
-
+    };
+    document.addEventListener("pointerdown", dismissOutside);
+    document.addEventListener("focusin", dismissOutside);
+    document.addEventListener("keydown", onKeyDown);
     return () => {
-      clearTimeout(timer);
-      document.body.style.overflow = "";
-      document.removeEventListener("mousedown", handleClickOutside);
-      document.removeEventListener("keydown", handleEscape);
+      cancelAnimationFrame(frame);
+      document.removeEventListener("pointerdown", dismissOutside);
+      document.removeEventListener("focusin", dismissOutside);
+      document.removeEventListener("keydown", onKeyDown);
     };
   }, [open, onOpenChange]);
 
   return (
-    <div ref={menuRef} className="md:hidden relative">
-      {/* p-2 around a 20px icon is a 36px box — under the 44pt tap target the
-          admin already holds itself to (.adm-input is min-height:44px). The
-          ::after overlay takes the hit area to 44pt while leaving the visible
-          button exactly the size it was; padding it up instead would have made
-          it visibly taller than the "Join Now" button beside it. */}
-      <button
-        type="button"
-        onClick={() => onOpenChange(!open)}
-        className="relative rounded-lg border border-zinc-800 bg-zinc-900 p-2 text-zinc-200 hover:bg-zinc-800 transition-colors after:absolute after:-inset-1 after:content-['']"
-        aria-label="Toggle menu"
-        aria-expanded={open}
-      >
-        {open ? <X size={20} /> : <Menu size={20} />}
+    <div ref={menuRef} className="xl:hidden relative">
+      <button ref={toggleRef} type="button" onClick={() => onOpenChange(!open)} className="min-h-11 min-w-11 flex items-center justify-center rounded-lg border border-zinc-700 bg-zinc-900 text-zinc-200 hover:bg-zinc-800 transition-colors" aria-label={open ? "Close navigation" : "Open navigation"} aria-expanded={open} aria-controls="public-mobile-navigation">
+        {open ? <X size={20} aria-hidden="true" /> : <Menu size={20} aria-hidden="true" />}
       </button>
-
       {open && (
-        <>
-          <div
-            className="fixed inset-0 bg-black/40 backdrop-blur-sm z-40"
-            style={{ top: "80px" }}
-            onClick={() => onOpenChange(false)}
-          />
-
-          {/* A dropdown, not a sheet: it hangs off the toggle in the navbar's
-              own px-4 gutter rather than stretching the width of the screen. */}
-          <div className="fixed right-4 w-56 rounded-xl border border-zinc-800 bg-zinc-900 p-3 shadow-2xl z-50 max-h-[calc(100vh-100px)] overflow-y-auto"
-            style={{ top: "88px" }}
-          >
-            {NAV_ITEMS.map((item) => (
-              <a
-                key={item.href}
-                href={item.href.startsWith("#") ? `${home}${item.href}` : item.href}
-                onClick={() => onOpenChange(false)}
-                className="block px-4 py-3 rounded-lg hover:bg-zinc-800 text-zinc-300 hover:text-yellow-500 transition-colors text-sm font-medium border-b border-zinc-800 last:border-0"
-              >
-                {item.label}
-              </a>
-            ))}
-          </div>
-        </>
+        <div ref={panelRef} id="public-mobile-navigation" className="public-navigation-panel fixed right-4 top-[88px] w-64 max-w-[calc(100vw-2rem)] rounded-xl border border-zinc-700 bg-zinc-900 p-2 max-h-[calc(100svh-104px)] overflow-y-auto overscroll-contain">
+          {NAV_ITEMS.map((item) => {
+            const className = "flex min-h-11 items-center px-4 py-3 rounded-lg hover:bg-zinc-800 text-zinc-200 hover:text-yellow-500 transition-colors text-sm font-medium";
+            return item.href.startsWith("#") ? (
+              <a key={item.href} href={home + item.href} onClick={() => onOpenChange(false)} className={className}>{item.label}</a>
+            ) : (
+              <Link key={item.href} href={item.href} onClick={() => onOpenChange(false)} className={className}>{item.label}</Link>
+            );
+          })}
+        </div>
       )}
     </div>
   );

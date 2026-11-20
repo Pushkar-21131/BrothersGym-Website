@@ -1,16 +1,18 @@
 "use client";
 
-import { useSyncExternalStore } from "react";
+import { useRef, useState, useSyncExternalStore } from "react";
 import Image from "next/image";
+import { Pause, Play } from "lucide-react";
 
 type NetworkInformation = {
   saveData?: boolean;
   effectiveType?: string;
 };
 
-/** Never changes after mount, so there is nothing to subscribe to. */
-function noopSubscribe() {
-  return () => {};
+function subscribeToMotion(callback: () => void) {
+  const motion = window.matchMedia("(prefers-reduced-motion: reduce)");
+  motion.addEventListener("change", callback);
+  return () => motion.removeEventListener("change", callback);
 }
 
 function shouldPlayVideo(): boolean {
@@ -70,10 +72,22 @@ function shouldPlayVideo(): boolean {
  */
 export default function HeroBackground() {
   const playVideo = useSyncExternalStore(
-    noopSubscribe,
+    subscribeToMotion,
     shouldPlayVideo,
     () => false
   );
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [paused, setPaused] = useState(false);
+
+  function togglePlayback() {
+    const video = videoRef.current;
+    if (!video) return;
+    if (video.paused) {
+      void video.play().catch(() => setPaused(true));
+    } else {
+      video.pause();
+    }
+  }
 
   return (
     <>
@@ -86,19 +100,29 @@ export default function HeroBackground() {
         sizes="100vw"
         className="object-cover"
       />
-      {playVideo && (
+      {playVideo ? (
+        <>
         <video
+          ref={videoRef}
           autoPlay
           loop
           muted
           playsInline
           preload="none"
           poster="/images/hero-poster.jpg"
+          aria-hidden="true"
+          tabIndex={-1}
+          onPause={() => setPaused(true)}
+          onPlay={() => setPaused(false)}
           className="absolute inset-0 w-full h-full object-cover"
         >
           <source src="/videos/gym-background.mp4" type="video/mp4" />
         </video>
-      )}
+        <button type="button" onClick={togglePlayback} aria-label={paused ? "Play background video" : "Pause background video"} className="absolute top-24 right-4 md:right-6 z-20 min-h-11 min-w-11 flex items-center justify-center rounded-lg border border-white/30 bg-black/60 text-white hover:bg-black/80 transition-colors">
+          {paused ? <Play size={18} aria-hidden="true" /> : <Pause size={18} aria-hidden="true" />}
+        </button>
+        </>
+      ) : null}
     </>
   );
 }

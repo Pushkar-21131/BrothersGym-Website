@@ -194,33 +194,25 @@ export default async function Home() {
   // self-serving and will show.
 
   return (
-    <div className="min-h-screen bg-zinc-950 font-sans selection:bg-yellow-500 selection:text-black">
+    <div className="public-site min-h-screen bg-zinc-950 font-sans selection:bg-yellow-500 selection:text-black">
+      <a href="#main-content" className="public-skip-link">Skip to content</a>
       {/* ============ NAVBAR ============ */}
-      {/* Scroll-reactive client component: overlays the hero, dark at the top
-          for legibility over the video, fading transparent as you scroll down.
-          Lives in its own component because this page is a Server Component. */}
+      {/* The navigation stays legible over the footage and darkens on scroll.
+          Its interactive behavior stays outside this Server Component. */}
       <PublicNavbar />
 
+      <main id="main-content" tabIndex={-1}>
       {/* ============ HERO ============ */}
       <section className="relative min-h-[70svh] md:min-h-screen flex items-end pt-20 px-4 md:px-6 border-b border-zinc-800 overflow-hidden">
         <HeroBackground />
         {/* Stronger left fade so text stays readable; logo side stays open */}
         <div className="absolute inset-0 bg-linear-to-r from-black/70 via-black/45 to-black/20"></div>
-        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_left,var(--tw-gradient-stops))] from-yellow-900/15 via-transparent to-transparent"></div>
 
-        <div className="relative max-w-7xl mx-auto w-full pt-10 md:pt-12 pb-6 md:pb-8 z-10">
+        <div className="relative max-w-7xl mx-auto w-full pt-16 sm:pt-10 md:pt-12 pb-6 md:pb-8 z-10">
           <div className="grid grid-cols-1 md:grid-cols-12 gap-10 md:gap-6 items-center">
 
             {/* ===== LEFT: redesigned content block ===== */}
             <div className="md:col-span-7 lg:col-span-7 flex flex-col items-start">
-
-              {/* Eyebrow row */}
-              <div className="flex flex-wrap items-center gap-3 mb-5 md:mb-6">
-                <span className="inline-flex items-center gap-2 border border-yellow-500/40 bg-yellow-500/10 px-3.5 py-1.5 rounded-full text-yellow-500 font-bold text-[11px] md:text-xs tracking-[0.2em] uppercase">
-                  <span className="w-1.5 h-1.5 rounded-full bg-yellow-500"></span>
-                  Now at {allBranches.length} locations
-                </span>
-              </div>
 
               {/* Giant stacked headline — flush left, poster weight */}
               {/* The H1 is the one heading a crawler weights as the page's
@@ -234,11 +226,11 @@ export default async function Home() {
                   Gym, gym in Nangal Raya..." is reading the same thing twice.
                   The sr-only line is not hidden from crawlers -- it is the
                   accessible-name technique, and the phrase in it is the one the
-                  visible page states anyway: "Now at 2 locations" sits directly
-                  above, and both addresses are printed in full under
+                  visible page states anyway: both branch names sit below the
+                  heading, and both addresses are printed in full under
                   #locations. */}
               <h1
-                className={`${bebas.className} w-full text-[clamp(3.25rem,9vw,7.75rem)] leading-[0.86] tracking-[0.02em] uppercase`}
+                className={`${bebas.className} w-full text-[clamp(3.25rem,9vw,6rem)] leading-[0.94] tracking-[0.02em] uppercase`}
               >
                 <span className="sr-only">
                   Brothers Gym — gym in Nangal Raya (Janakpuri) and Sagar Pur, West Delhi
@@ -256,38 +248,50 @@ export default async function Home() {
               {/* Gold rule under title */}
               <div className="mt-5 md:mt-6 mb-5 md:mb-6 flex items-center gap-4 w-full max-w-md">
                 <div className="h-[3px] w-14 bg-yellow-500 rounded-full"></div>
-                <p className="text-zinc-400 text-sm md:text-base leading-snug">
+                <p className="text-zinc-300 text-sm md:text-base leading-relaxed">
                   Same intensity. Same discipline. Two doors in Delhi.
                 </p>
               </div>
 
+              <div className="mb-6 space-y-2">
+                {pricing && (
+                  <p className="text-base sm:text-lg text-white">
+                    Memberships from <span className="font-bold text-yellow-500">₹{inr(pricing.monthlyMin)}/month</span>
+                  </p>
+                )}
+                <p className="flex flex-wrap items-center gap-x-3 text-sm text-zinc-300">
+                  {allBranches.map((branch, index) => (
+                    <span key={branch.id} className="inline-flex items-center gap-3">
+                      {index > 0 && <span aria-hidden="true" className="text-zinc-400">·</span>}
+                      <a href={`#branch-${branch.id}`} className="inline-flex min-h-11 items-center underline decoration-zinc-500 underline-offset-4 hover:text-yellow-500 transition-colors">
+                        {branch.name}
+                      </a>
+                    </span>
+                  ))}
+                </p>
+              </div>
+
               {/* CTA cluster */}
-              <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
+              <div className="flex flex-wrap items-center gap-2 sm:gap-3">
                 <Link
                   href="/join"
-                  className="bg-yellow-500 hover:bg-yellow-400 text-black font-black uppercase tracking-wider text-sm md:text-base px-4 md:px-6 py-2.5 md:py-3 rounded-lg transition-transform hover:scale-[1.03] active:scale-95 text-center flex items-center justify-center gap-2 shadow-[0_0_30px_-8px_rgba(234,179,8,0.55)]"
+                  className="min-h-11 inline-flex items-center justify-center gap-2 bg-yellow-500 hover:bg-yellow-400 text-black font-black uppercase tracking-wide text-xs sm:text-sm px-4 sm:px-5 py-3 rounded-lg transition-colors whitespace-nowrap"
                 >
-                  Join Now <ArrowRight size={16} />
+                  Join Now <ArrowRight size={16} aria-hidden="true" />
                 </Link>
                 <a
                   href="#locations"
-                  className="border border-zinc-600 hover:border-yellow-500/50 text-zinc-200 hover:text-yellow-500 font-bold uppercase tracking-wider px-4 md:px-6 py-2.5 md:py-3 rounded-lg transition-colors text-center text-sm"
+                  className="min-h-11 inline-flex items-center justify-center border border-zinc-500 hover:border-yellow-500 text-zinc-200 hover:text-yellow-500 font-bold uppercase tracking-wide px-4 sm:px-5 py-3 rounded-lg transition-colors text-xs sm:text-sm whitespace-nowrap"
                 >
                   View Locations
                 </a>
               </div>
 
               {/* Bottom meta strip — anchors the block so it doesn’t float */}
-              <div className="mt-6 md:mt-8 pt-5 border-t border-zinc-800/80 flex flex-wrap gap-x-8 gap-y-3 text-[11px] md:text-xs uppercase tracking-[0.18em] text-zinc-500">
-                <span className="text-zinc-300">
-                  <span className="text-yellow-500 font-black">01</span> Strength
-                </span>
-                <span className="text-zinc-300">
-                  <span className="text-yellow-500 font-black">02</span> Cardio
-                </span>
-                <span className="text-zinc-300">
-                  <span className="text-yellow-500 font-black">03</span> Personal Training
-                </span>
+              <div className="mt-6 md:mt-8 pt-5 border-t border-zinc-700/80 flex flex-wrap gap-x-6 gap-y-3 text-xs uppercase tracking-wider text-zinc-300">
+                <span>Strength</span>
+                <span>Cardio</span>
+                <span>Personal Training</span>
               </div>
             </div>
 
@@ -298,10 +302,11 @@ export default async function Home() {
             <div className="md:col-span-5 lg:col-span-5 w-full hidden md:flex justify-center md:justify-end">
               <div className="w-full max-w-60 sm:max-w-[280px] md:max-w-[300px] lg:max-w-[340px] relative">
                 <div className="aspect-square rounded-full border-4 border-zinc-800 overflow-hidden bg-zinc-900/50 shadow-2xl relative">
-                  <div className="absolute inset-0 bg-yellow-500/10 rounded-full blur-3xl -z-10"></div>
                   <img
                     src="/images/brothers-gym-logo.svg"
                     alt="Brothers Gym logo"
+                    width={340}
+                    height={340}
                     className="w-full h-full object-cover scale-[1.15]"
                   />
                 </div>
@@ -314,14 +319,9 @@ export default async function Home() {
 
       {/* ============ WHY CHOOSE US ============ */}
       <section id="about" className="py-10 md:py-20 px-4 md:px-6 border-b border-zinc-800 bg-zinc-900/30 relative overflow-hidden">
-        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,var(--tw-gradient-stops))] from-yellow-500/5 via-transparent to-transparent"></div>
-
         <div className="max-w-6xl mx-auto relative z-10">
           <div className="text-center space-y-4 mb-6 md:mb-12">
-            <p className="text-yellow-500 text-xs md:text-sm font-bold tracking-[0.4em] uppercase">
-              — Why Choose Us —
-            </p>
-            <h2 className="text-4xl md:text-6xl font-black uppercase tracking-tight text-white">
+            <h2 className="text-3xl sm:text-4xl lg:text-5xl font-black uppercase tracking-tight text-white">
               Why Choose <span className="text-yellow-500">Us</span>
             </h2>
             <p className="text-base md:text-lg text-zinc-400 leading-relaxed max-w-3xl mx-auto">
@@ -329,22 +329,19 @@ export default async function Home() {
             </p>
           </div>
 
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-3 md:gap-6">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 sm:gap-8">
             <FeatureCard
-              number="01"
-              icon={<Dumbbell size={28} />}
+              icon={<Dumbbell size={28} aria-hidden="true" />}
               title="Better Equipment"
               description="Machinery carefully selected to optimize your growth and safety."
             />
             <FeatureCard
-              number="02"
-              icon={<UserCircle size={28} />}
+              icon={<UserCircle size={28} aria-hidden="true" />}
               title="Expert Coaching"
               description="Personalized training programs designed by experienced professionals to hit your goals."
             />
             <FeatureCard
-              number="03"
-              icon={<Building2 size={28} />}
+              icon={<Building2 size={28} aria-hidden="true" />}
               title={`${allBranches.length} Locations`}
               description={`Choose from ${allBranches.map((b) => b.name).join(" & ")} — both offer the same quality.`}
             />
@@ -352,17 +349,13 @@ export default async function Home() {
         </div>
       </section>
 
-      <BMICalculator />
       <ReviewsSection reviews={publicReviews} />
 
       {/* ============ TEAM SECTION ============ */}
       <section id="staff" className="py-10 md:py-20 px-4 md:px-6 border-b border-zinc-800">
         <div className="max-w-7xl mx-auto">
           <div className="text-center mb-6 md:mb-12">
-            <p className="text-yellow-500 text-xs md:text-sm font-bold tracking-[0.4em] uppercase mb-3">
-              — Meet Our Squad —
-            </p>
-            <h2 className="text-4xl md:text-6xl font-black uppercase tracking-tight text-white mb-4">
+            <h2 className="text-3xl sm:text-4xl lg:text-5xl font-black uppercase tracking-tight text-white mb-4">
               Meet The <span className="text-yellow-500">Team</span>
             </h2>
             <p className="text-base md:text-lg text-zinc-400 max-w-2xl mx-auto">
@@ -382,7 +375,7 @@ export default async function Home() {
           />
 
           {allTrainers.length === 0 && (
-            <div className="text-center py-12 text-zinc-500 italic">
+            <div className="text-center py-12 text-zinc-400 italic">
               Our team profiles are currently being updated. Check back soon!
             </div>
           )}
@@ -399,9 +392,6 @@ export default async function Home() {
       <section className="py-8 md:py-12 px-4 md:px-6 border-b border-zinc-800">
         <div className="max-w-4xl mx-auto flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 md:gap-6 rounded-2xl border border-yellow-500/30 bg-yellow-500/5 px-5 py-5 md:px-8 md:py-6">
           <div className="text-center sm:text-left">
-            <p className="text-[10px] font-black text-yellow-500 uppercase tracking-widest mb-1.5">
-              Membership
-            </p>
             <p className="text-white font-bold text-base md:text-lg leading-snug">
               {pricing
                 ? `Plans from ₹${inr(pricing.monthlyMin)}/month at both Delhi branches.`
@@ -413,12 +403,15 @@ export default async function Home() {
           </div>
           <Link
             href="/plans"
-            className="shrink-0 inline-flex items-center justify-center gap-2 bg-yellow-500 hover:bg-yellow-400 text-black font-black uppercase tracking-wider text-xs md:text-sm px-5 md:px-6 py-3 rounded-lg transition-transform hover:scale-105 active:scale-95 whitespace-nowrap"
+            className="min-h-12 shrink-0 inline-flex items-center justify-center gap-2 bg-yellow-500 hover:bg-yellow-400 text-black font-black uppercase tracking-wide text-sm px-5 md:px-6 py-3 rounded-lg transition-colors whitespace-nowrap"
           >
-            Plans &amp; FAQ <ArrowRight size={16} />
+            Plans &amp; FAQ <ArrowRight size={16} aria-hidden="true" />
           </Link>
         </div>
       </section>
+
+      <BMICalculator />
+      </main>
 
       {/* ============ FOOTER ============ */}
       <PublicFooter branches={allBranches} />
@@ -582,29 +575,22 @@ export default async function Home() {
 }
 
 function FeatureCard({
-  number,
   icon,
   title,
   description,
 }: {
-  number: string;
   icon: React.ReactNode;
   title: string;
   description: string;
 }) {
   return (
-    <div className="relative bg-zinc-900 border border-zinc-800 hover:border-yellow-500/50 p-4 md:p-8 rounded-2xl transition-all duration-300 hover:-translate-y-1 group overflow-hidden">
-      <div className="absolute -right-2 -top-2 text-[80px] md:text-[100px] font-black text-yellow-500/5 group-hover:text-yellow-500/10 select-none pointer-events-none transition-colors leading-none">
-        {number}
-      </div>
-      <div className="relative">
-        <div className="w-11 h-11 md:w-14 md:h-14 bg-yellow-500/10 border border-yellow-500/30 rounded-xl flex items-center justify-center text-yellow-500 mb-3 md:mb-5 group-hover:bg-yellow-500 group-hover:text-black transition-all">
-          {icon}
-        </div>
-        <h3 className="text-base md:text-2xl font-black mb-2 md:mb-3 text-white uppercase tracking-wide">
+    <div className="border-t border-zinc-700 pt-6 flex items-start gap-4 sm:block">
+      <div className="text-yellow-500 shrink-0 sm:mb-4">{icon}</div>
+      <div>
+        <h3 className="text-lg md:text-xl font-black mb-2 text-white uppercase tracking-wide">
           {title}
         </h3>
-        <p className="text-zinc-400 text-xs md:text-base leading-relaxed">
+        <p className="text-zinc-400 text-base leading-relaxed">
           {description}
         </p>
       </div>

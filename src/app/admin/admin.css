@@ -1478,9 +1478,28 @@
 }
 .adm-history-periods { flex-wrap: wrap; margin: 0 0 12px; padding: 0; overflow: visible; }
 .adm-history-periods .adm-chip { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
-.adm-history-filters { display: flex; align-items: flex-end; gap: 12px; margin-top: 16px; }
-.adm-history-filters .adm-field { flex: 1; min-width: 0; margin: 0; }
-.adm-history-filters .adm-btn { flex-shrink: 0; }
+.adm-history-filters {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 12px;
+  margin-top: 18px;
+}
+.adm-history-filters .adm-field { min-width: 0; margin: 0; }
+.adm-history-filters .adm-select { height: 46px; padding: 0 12px; }
+.adm-history-apply { min-height: 46px; white-space: nowrap; }
+.adm-history-apply-short { display: none; }
+.adm-history-results {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 20px 0 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border2);
+}
+.adm-history-results .adm-hint { margin: 0; }
+.adm-history-refresh { flex: 0 0 auto; width: auto; min-height: 38px; padding: 0 12px; font-size: 12.5px; }
 .adm-history-list { padding: 0 16px; }
 .adm-history-entry { padding: 18px 0; }
 .adm-history-entry + .adm-history-entry { border-top: 1px solid var(--border2); }
@@ -1500,8 +1519,12 @@
 .adm-history-before { color: var(--text3); }
 .adm-history-retention { margin: 18px 0; }
 @media (max-width: 600px) {
-  .adm-history-filters { flex-wrap: wrap; gap: 10px; }
-  .adm-history-filters .adm-field { flex-basis: calc(50% - 5px); }
+  .adm-history-filters { grid-template-columns: minmax(0, 1.12fr) minmax(0, 1fr) auto; gap: 8px; }
+  .adm-history-filters .adm-select { padding: 0 8px; }
+  .adm-history-filters .adm-label { font-size: 9px; letter-spacing: 0.08em; }
+  .adm-history-apply { padding: 0 10px; font-size: 12.5px; }
+  .adm-history-apply-full { display: none; }
+  .adm-history-apply-short { display: inline; }
   .adm-history-top { flex-wrap: wrap; gap: 9px; }
   .adm-history-time { flex-basis: calc(100% - 42px); margin-left: 42px; text-align: left; display: flex; gap: 8px; }
   .adm-history-changes { margin-left: 42px; }

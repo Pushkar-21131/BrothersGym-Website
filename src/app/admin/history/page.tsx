@@ -112,9 +112,12 @@ export default async function HistoryPage({ searchParams }: {
             {actors.map((a) => <option key={a.name} value={a.name}>{a.name}</option>)}
           </select>
         </div>
-        <button type="submit" className="adm-btn">Apply filters</button>
+        <button type="submit" className="adm-btn primary adm-history-apply" aria-label="Apply filters">
+          <span className="adm-history-apply-full">Apply filters</span>
+          <span className="adm-history-apply-short" aria-hidden="true">Apply</span>
+        </button>
       </form>
-      <div className="adm-toolbar">
+      <div className="adm-history-results">
         <span className="adm-hint">{total} {total === 1 ? "change" : "changes"}</span>
         <RefreshHistory />
       </div>

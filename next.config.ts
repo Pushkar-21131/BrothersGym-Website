@@ -1,5 +1,5 @@
 import type { NextConfig } from "next";
-import { withSentryConfig } from "@sentry/nextjs";
+import { withSentryConfig } from "@sentry/nextjs/config";
 
 // NO CONTENT-SECURITY-POLICY IN THIS FILE.
 //
@@ -119,5 +119,5 @@ export default withSentryConfig(nextConfig, {
   tunnelRoute: "/monitoring",
 
   // Drop the Sentry SDK's own debug logging from the production bundle.
-  disableLogger: true,
+  webpack: { treeshake: { removeDebugLogging: true } },
 });

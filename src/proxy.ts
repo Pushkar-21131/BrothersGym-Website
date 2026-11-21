@@ -81,7 +81,7 @@ function clearSessionCookies(response: NextResponse) {
   }
 }
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   const ownerSecret = normalizePath(process.env.OWNER_LOGIN_PATH);

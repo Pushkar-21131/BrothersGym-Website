@@ -2,7 +2,7 @@
 
 import { db } from "@/db";
 import { staff } from "@/db/schema";
-import { eq, inArray, and } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { getBranchScope, requireSingleBranch } from "@/lib/branch";
 import { sanitizeError } from "@/lib/errors";
@@ -11,33 +11,6 @@ import { formatINR } from "@/lib/utils";
 import { assertAuthenticated, assertPermission } from "@/lib/auth-check";
 
 type StaffCategory = "Trainer" | "Worker" | "Cleaner";
-
-// ===== LIST STAFF =====
-export async function listStaffAction() {
-  try {
-    const role = await assertAuthenticated();
-    if (role !== "owner") {
-      await assertPermission("staff", "canView");
-    }
-  } catch (e) {
-    return { error: sanitizeError(e, "Not authorized") };
-  }
-
-  try {
-    const scope = await getBranchScope();
-    const rows = await db
-      .select()
-      .from(staff)
-      .where(
-        scope.type === "single"
-          ? eq(staff.branchId, scope.branchId)
-          : inArray(staff.branchId, scope.branchIds)
-      );
-    return { success: true, staff: rows };
-  } catch (e) {
-    return { error: sanitizeError(e, "Failed to load staff") };
-  }
-}
 
 // ===== ADD STAFF =====
 export async function addStaffAction(formData: FormData) {
@@ -173,50 +146,5 @@ export async function deleteStaffAction(id: number) {
     return { success: true };
   } catch (error) {
     return { error: sanitizeError(error, "Failed to delete staff") };
-  }
-}
-
-// ===== TOTAL STAFF SALARIES =====
-/**
- * Monthly salary bill for the branches the caller can see.
- *
- * Gated on staff.canView, which DEFAULTS TO FALSE (see
- * lib/permissions.ts DEFAULT_STAFF_PERMISSIONS). It had no permission check at
- * all, only branch scoping — so a staff account explicitly configured not to see
- * the staff module could still read the total wage bill of its branch by calling
- * this action, which "use server" makes a real HTTP endpoint whether or not any
- * page links to it. Nothing in the app calls it today; that is not a defence,
- * since the endpoint exists regardless.
- *
- * Returns `null`, not 0, when the caller may not see it. A denied read must not
- * be indistinguishable from "this branch pays no salaries" — that difference is
- * the whole profit figure if this is ever wired into the dashboard.
- */
-export async function getTotalStaffSalaries(): Promise<number | null> {
-  try {
-    const role = await assertAuthenticated();
-    if (role !== "owner") {
-      await assertPermission("staff", "canView");
-    }
-  } catch {
-    return null;
-  }
-
-  try {
-    const scope = await getBranchScope();
-    const rows = await db
-      .select({ salary: staff.salary })
-      .from(staff)
-      .where(
-        and(
-          eq(staff.isActive, true),
-          scope.type === "single"
-            ? eq(staff.branchId, scope.branchId)
-            : inArray(staff.branchId, scope.branchIds)
-        )
-      );
-    return rows.reduce((sum, r) => sum + (Number(r.salary) || 0), 0);
-  } catch {
-    return null;
   }
 }

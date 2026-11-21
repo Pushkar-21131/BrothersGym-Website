@@ -2,9 +2,9 @@
 
 import { db } from "@/db";
 import { smsLogs, members } from "@/db/schema";
-import { eq, inArray } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import { assertBranchInScope, getBranchScope } from "@/lib/branch";
+import { assertBranchInScope } from "@/lib/branch";
 import { sanitizeError } from "@/lib/errors";
 import { checkRateLimit } from "@/lib/security";
 import {
@@ -185,39 +185,5 @@ export async function sendSMSReminder(
     }
 
     return { error: message };
-  }
-}
-
-// ===== SMS STATS =====
-export async function getSMSStats() {
-  try {
-    const role = await assertAuthenticated();
-    if (role !== "owner") {
-      await assertPermission("reminders", "canView");
-    }
-  } catch (e) {
-    return { error: sanitizeError(e, "Not authorized") };
-  }
-
-  try {
-    const scope = await getBranchScope();
-
-    const logs = await db
-      .select()
-      .from(smsLogs)
-      .where(
-        scope.type === "single"
-          ? eq(smsLogs.branchId, scope.branchId)
-          : inArray(smsLogs.branchId, scope.branchIds)
-      );
-
-    const totalSent = logs.filter((l) => l.status === "sent").length;
-    const totalFailed = logs.filter((l) => l.status === "failed").length;
-    const totalCost =
-      logs.filter((l) => l.status === "sent").reduce((s, l) => s + (l.cost || 0), 0) / 100;
-
-    return { totalSent, totalFailed, totalCost };
-  } catch (error) {
-    return { error: sanitizeError(error, "Failed to load SMS statistics.") };
   }
 }

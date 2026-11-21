@@ -7,9 +7,9 @@
  * because it fails signature verification.
  *
  * The session is used by:
- *  - middleware.ts        (Edge runtime → uses jose, not node crypto)
+ *  - proxy.ts             (request authentication)
  *  - lib/auth-check.ts    (server actions / server components)
- *  - lib/audit.ts         (audit logging)
+ *  - lib/activity.ts      (activity logging)
  *  - lib/branch.ts        (branch scope)
  *
  * Session payload:
@@ -19,7 +19,9 @@
  *  - branchId: number | null (owner = null)
  */
 
-import { SignJWT, jwtVerify, type JWTPayload } from "jose";
+import { SignJWT } from "jose/jwt/sign";
+import { jwtVerify } from "jose/jwt/verify";
+import type { JWTPayload } from "jose";
 
 export type SessionRole = "owner" | "staff";
 

@@ -130,17 +130,6 @@ export async function requireOwner() {
 }
 
 /**
- * Enforce that the user is logged in (owner OR staff).
- */
-export async function requireAuthenticated(): Promise<Role> {
-  const role = await getVerifiedRole();
-  if (!role) {
-    redirect("/login");
-  }
-  return role;
-}
-
-/**
  * Throws if not owner (for server actions).
  */
 export async function assertOwner() {

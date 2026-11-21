@@ -8,5 +8,5 @@ export default defineConfig([
   // whatever commit they were cut from. Without this, lint reports every issue
   // twice — once from src/, once from a stale copy — and fails on bugs that were
   // already fixed on main.
-  globalIgnores([".next/**", "out/**", "build/**", ".claude/**", "next-env.d.ts"]),
+  globalIgnores([".next/**", "out/**", "build/**", ".claude/**", ".kilo/**", ".impeccable/**", "tmp/**", "next-env.d.ts"]),
 ]);

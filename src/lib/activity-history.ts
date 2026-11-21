@@ -21,6 +21,7 @@ export const ACTIVITY_LABELS: Record<string, string> = {
   "payment.online.success": "Online payment received",
   "payment.voided": "Payment removed",
   "payment.restored": "Payment restored",
+  "payment.updated": "Payment received date corrected",
   "equipment.added": "Equipment expense added",
   "equipment.updated": "Equipment expense updated",
   "equipment.deleted": "Equipment expense deleted",

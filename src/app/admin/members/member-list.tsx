@@ -159,6 +159,7 @@ export default function MemberList({
   const [showEditModal, setShowEditModal] = useState(false);
   const [showRenewModal, setShowRenewModal] = useState<Member | null>(null);
   const [renewalStart, setRenewalStart] = useState<RenewalStart>("today");
+  const [receivedDate, setReceivedDate] = useState("");
   const [renewalDuration, setRenewalDuration] = useState(30);
   const [editingMember, setEditingMember] = useState<Member | null>(null);
   const [loading, setLoading] = useState(false);
@@ -424,6 +425,7 @@ export default function MemberList({
     const planType = formData.get("planType") as "full" | "no_cardio" | "offline";
     const method = formData.get("method") as "cash" | "upi" | "razorpay" | "other";
     const start = formData.get("renewalStart") as RenewalStart;
+    const paymentDate = formData.get("receivedDate") as string;
 
     inFlight.current = true;
     setLoading(true);
@@ -434,7 +436,8 @@ export default function MemberList({
         duration,
         planType,
         method,
-        start
+        start,
+        paymentDate
       );
 
       // Narrowed rather than read optimistically: renewMemberAction returns a
@@ -470,6 +473,7 @@ export default function MemberList({
   function openRenewModal(member: Member) {
     setRenewalStart("today");
     setRenewalDuration(30);
+    setReceivedDate(today);
     setShowRenewModal(member);
   }
 
@@ -1009,6 +1013,13 @@ export default function MemberList({
             )}
 
             <div className="adm-form-grid">
+              <div className="adm-field span2">
+                <label className="adm-label" htmlFor="renew-received">Payment received on *</label>
+                <input id="renew-received" type="date" name="receivedDate" required max={today}
+                  value={receivedDate} onChange={(event) => setReceivedDate(event.target.value)} disabled={loading}
+                  className="adm-input" aria-describedby="renew-received-hint" />
+                <p id="renew-received-hint" className="adm-hint">Use the day the money came in. This date decides which profit cycle includes the payment.</p>
+              </div>
               <div className="adm-field">
                 <label className="adm-label" htmlFor="renew-amount">
                   Fees (₹) *
@@ -1096,7 +1107,7 @@ export default function MemberList({
                     {formatDateIn(renewalPreview.newExpiry)}
                   </strong>
                 </p>
-                <p className="adm-hint">Payment recorded today: {formatDateIn(today)}.</p>
+                <p className="adm-hint adm-renew-received-summary">Payment received: {formatDateIn(receivedDate || today)}. Renewal entered today.</p>
                 {renewalPreview.newExpiry < today && (
                   <p className="adm-hint" style={{ color: "var(--orange)" }}>
                     The new due date is still in the past. Choose a longer duration

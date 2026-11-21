@@ -141,16 +141,3 @@ export function razorpayWebhookSecretFor(branchCode: string): string | null {
       : pick("RAZORPAY_WEBHOOK_SECRET")) ?? null
   );
 }
-
-/**
- * Branch codes that have a usable Razorpay account configured.
- *
- * Used by the env checker to report a half-configured multi-account setup at
- * startup instead of at the moment a member tries to pay.
- */
-export function configuredRazorpayBranchCodes(): string[] {
-  return Object.keys(process.env)
-    .map((k) => /^RAZORPAY_KEY_ID_([A-Z0-9_]+)$/.exec(k))
-    .filter((m): m is RegExpExecArray => Boolean(m) && !isPlaceholder(process.env[m![0]]))
-    .map((m) => m[1]);
-}

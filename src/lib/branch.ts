@@ -162,15 +162,6 @@ export async function isSuperAdmin(): Promise<boolean> {
   return user.branchId === null;
 }
 
-/** Throws unless the caller is the super-admin. */
-export async function assertSuperAdmin(): Promise<void> {
-  if (!(await isSuperAdmin())) {
-    throw new Error(
-      "This is a group-wide setting — only the main owner account can change it."
-    );
-  }
-}
-
 /**
  * Is the caller's active scope the branch that curates brand-wide content?
  *
@@ -293,24 +284,4 @@ export async function requireSingleBranch(
   throw new Error(
     "Please select a branch first (you are in 'All Branches' view)."
   );
-}
-
-/**
- * Set the active branch cookie (super-admin only).
- *
- * getBranchScope() already ignores this cookie for locked users, so a stale or
- * forged one cannot widen anybody's scope. Refusing here as well keeps the
- * switcher honest instead of appearing to work and silently doing nothing.
- */
-export async function setActiveBranchCookie(branchIdOrAll: number | "all") {
-  await assertSuperAdmin();
-
-  const cookieStore = await cookies();
-  cookieStore.set("admin_branch", String(branchIdOrAll), {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    maxAge: 60 * 60 * 24 * 30, // 30 days
-    path: "/",
-    sameSite: "lax",
-  });
 }

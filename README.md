@@ -1,303 +1,297 @@
 # Brothers Gym — Gym Management System
 
-A full-stack, multi-branch gym management platform built for a real two-location
-gym in Delhi. The public side takes membership sign-ups with online payment; the
-admin side gives the owner and staff a role-separated panel for members, plans,
-payments, renewals, equipment, staff, trainers and reviews — scoped per branch.
+Brothers Gym manages memberships and daily operations for two gym locations in
+Delhi. Members can sign up and pay through the public website. Owners and staff
+use a branch-scoped admin panel to manage members, plans, payments, renewals,
+equipment, employees, trainers and reviews.
 
-**Status:** feature-complete; pre-launch. Not yet deployed to a
-production domain. Online joins go through **Razorpay checkout, with a separate
-merchant account per branch** so each gym's money settles to its own owner — the
-membership activates itself on payment capture. When a branch has no keys configured
-or checkout can't run, nothing is charged and the member becomes a **call-back lead**
-in that owner's admin queue, reachable by phone and WhatsApp. `PAYMENT_MODE=contact`
-turns online payment off site-wide. Each owner's dashboard is **scoped to their own
-branch**, with a single super-admin retaining the all-branches view. A recent pass
-tightened performance (ISR, self-hosted fonts, image/video optimisation) and mobile
-ergonomics across the public site.
-
----
+**Status:** live at [brothersgym.in](https://brothersgym.in), deployed by Netlify
+from GitHub's `main` branch. Each branch uses its own Razorpay merchant account. If checkout is
+unavailable, the site records a call-back lead without charging the member.
+`PAYMENT_MODE=contact` disables online payments site-wide. Owners normally see
+only their own branch; a super-admin can access both.
 
 ## Tech stack
 
 | Layer | Choice |
 | --- | --- |
-| Framework | Next.js 15 (App Router, Server Components, Server Actions) |
+| Framework | Next.js 16 (App Router, Server Components, Server Actions) |
 | Language | TypeScript 5.9 |
 | Database | PostgreSQL |
 | ORM | Drizzle ORM 0.45 + drizzle-kit migrations |
-| Styling | Tailwind CSS v4 (CSS-first config, no `tailwind.config`) |
+| Styling | Tailwind CSS v4 (CSS-first configuration, no `tailwind.config`) |
 | Auth | bcryptjs password hashing + `jose`-signed JWT session cookie |
-| Payments | Razorpay checkout, one merchant account per branch; contact-the-owner fallback when the gateway can't run |
-| Email | Resend (transactional OTP and alerts) |
-| SMS | MSG91 (wired, DLT-template based; off at launch — see Known gaps) |
+| Payments | Razorpay checkout with one merchant account per branch; owner-contact fallback when checkout is unavailable |
+| Email | Resend for transactional OTP and alerts |
+| SMS | MSG91 with DLT templates; off at launch — see Known gaps |
 | Exports / import | ExcelJS (`.xlsx`) and jsPDF (`.pdf`); spreadsheet import |
 | Captcha | Cloudflare Turnstile |
 
----
+## Public site
 
-## What the public site does
+- **Landing page (`/`):** full-bleed hero, BMI calculator, tabbed trainer and owner
+  profiles per branch, star-rated member reviews, branch picker with Google Maps
+  links, and a floating WhatsApp button.
+- **`/join`:** a membership wizard covering branch, plan, details and payment.
+  Members pay through the selected branch's Razorpay account. Payment capture
+  creates the membership and Gym ID, with on-screen confirmation and an email
+  if the member supplied an address. If checkout is unavailable, nothing is
+  charged. The member receives the branch's phone and WhatsApp details, a
+  reference code (`BG-<branch>-<id>`), and a status page (`/join/status`);
+  the owner receives a call-back lead to settle in person.
+  Plans can be filtered by **with cardio** or **without cardio ("Hardcore")**,
+  with 1 / 3 / 6 / 12-month durations. The wizard supports new memberships and
+  renewals. Renewals verify the existing Gym ID against its registered phone
+  number before allowing payment. Health-data consent includes a timestamp and IP.
+- **`/contact`:** contact details for each branch.
+- **`/privacy`, `/terms`, `/refund`:** privacy, membership terms and refund policies
+  to publish before launch.
+- **`/api/health`:** a database-ping health check that returns `{ ok: true }` or
+  `503` for uptime monitoring and post-deploy smoke tests.
+- **SEO:** generated `sitemap` and `robots`, OpenGraph and Twitter card images,
+  and optional Google Search Console verification.
 
-- **Landing page (`/`)** — full-bleed hero, a BMI calculator, tabbed trainer and
-  owner profiles per branch, member reviews with star ratings, a branch picker with
-  Google Maps links, and a floating WhatsApp button.
-- **`/join` — online membership** — a guided wizard (branch → plan → details → pay):
-  pick a branch, pick a plan, fill in details, then pay through **Razorpay** — the
-  branch's own merchant account, so the money reaches that gym's owner. The membership
-  and Gym ID are created automatically on payment capture, confirmed on screen and by
-  email if an address was given. If the gateway can't run, **nothing is charged**: the
-  member gets the branch's phone and WhatsApp plus a reference code
-  (`BG-<branch>-<id>`) and a self-serve status page (`/join/status`), and the owner
-  gets a call-back lead to settle in person. Plans come in
-  two families —
-  **with cardio** and **without ("Hardcore")** — each in 1 / 3 / 6 / 12-month
-  durations, filterable. Handles both **new members** and **renewals**: a renewal
-  first verifies an existing Gym ID against its registered phone number before any
-  payment is allowed. Health-data consent is captured with a timestamp and IP.
-- **`/contact`** — branch-wise contact details.
-- **`/privacy`, `/terms`, `/refund`** — the policy pages a membership business
-  should publish before going live.
-- **`/api/health`** — a database-ping health check (`{ ok: true }` or `503`) for
-  uptime monitoring and post-deploy smoke tests.
-- **SEO** — generated `sitemap` and `robots`, OpenGraph and Twitter card images,
-  optional Google Search Console verification.
+## Admin panel
 
-## What the admin panel does
-
-Reached through hidden, unguessable login URLs (see *Secrets* below); in local dev
-these fall back to `/login` (staff) and `/owner-login` (owner).
+Admin login paths are configurable through environment variables; see Secrets
+below. In local development, the defaults are `/login` for staff and
+`/owner-login` for owners.
 
 | Route | Purpose |
 | --- | --- |
-| `/admin` | Owner dashboard — revenue, active / expiring members, salary outgo; per-branch or all-branches |
-| `/admin/join-requests` | Owner-only — the call-back queue: online joins where **no** gateway payment was taken. A nav badge counts the open ones; marking one paid creates the membership and reveals a one-tap WhatsApp link to send the Gym ID |
-| `/admin/members` | Member CRUD, search, renewals from today or the previous due date with a date preview, mark-left / won-back, column show/hide, per-branch Gym IDs, Excel/PDF export |
-| `/admin/inactive` | Expired, lapsed and left-gym members, filterable by how overdue, with one-tap win-back |
-| `/admin/plans` | Membership plans and pricing per branch (with/without cardio, 1–12 months); activate/deactivate a plan |
-| `/admin/reminders` | Expiry reminders with prefilled WhatsApp messages (MSG91 SMS is wired but off at launch) |
-| `/admin/import` | Bulk member import from a spreadsheet, with preview and validation |
-| `/admin/equipment` | Equipment inventory and cost records, with Excel/PDF export |
-| `/admin/trainers` | Trainer and owner profiles shown on the public site |
-| `/admin/reviews` | Member reviews shown on the public site (rating, visibility, ordering) |
-| `/admin/staff` | Employee records (trainer / worker / cleaner) and salary, with export |
+| `/admin` | Owner accounts for a selected 15th-to-14th cycle, searchable payments and expenses, received-date corrections, expense editing, collection methods and current membership status; branch-scoped or all-branches |
+| `/admin/history` | Changes with the responsible account and before/after values; automatically removed after 31 days |
+| `/admin/join-requests` | Owner-only queue for online joins where no gateway payment was taken. A navigation badge counts open leads. Marking a lead paid creates the membership and provides a WhatsApp link to send the Gym ID |
+| `/admin/members` | Create, view, edit and delete members; search; renew from today or the previous due date with a date preview; record departures and returns; show or hide columns; manage branch-specific Gym IDs; export Excel/PDF |
+| `/admin/inactive` | Expired, lapsed and departed members, filtered by how overdue they are, with a one-tap win-back action |
+| `/admin/plans` | Branch-specific plans and prices, with or without cardio and durations of 1–12 months; activate or deactivate plans |
+| `/admin/reminders` | Expiry reminders with prefilled WhatsApp messages; MSG91 SMS is integrated but off at launch |
+| `/admin/import` | Spreadsheet member import with preview and validation |
+| `/admin/equipment` | Equipment inventory and cost records with Excel/PDF export |
+| `/admin/trainers` | Trainer and owner profiles for the public site |
+| `/admin/reviews` | Public member reviews, including rating, visibility and ordering |
+| `/admin/staff` | Employee records for trainers, workers and cleaners, with salary tracking and export |
 | `/admin/users` | Admin accounts and per-feature permissions |
-| `/admin/branch` | Branch details (address, phone, map link, owner contact) |
+| `/admin/branch` | Branch address, phone, map link and owner contact |
 | `/admin/security` | Login-attempt log and session activity |
 
 ### Member lifecycle
 
-A member is more than a row. The panel tracks the whole arc: **join** (in person or
-online), **renew** (extends the expiry and records a payment), **lapse** (surfaced
-on the inactive page, bucketed by how overdue), **leave** (marked with a reason —
-shifted / not interested / health / financial / other), and **win back**
-(un-marking a left member is timestamped). Every member carries a payment history,
-and payments are recorded by method — **cash, UPI, Razorpay or other** — so the
-desk can log an over-the-counter renewal the same way an online one lands.
+Members can join in person or online. Renewals extend the expiry date and record
+a payment. Lapsed members appear on the inactive page, grouped by how overdue
+they are. Departures are recorded with a reason: shifted, not interested, health,
+financial or other. Restoring a departed member records the return timestamp.
 
-### Roles
+Each member has a payment history. Payments are recorded as cash, UPI, Razorpay
+or other, so staff can record in-person renewals alongside online payments.
 
-Two roles, **owner** and **staff**, with per-feature permissions on top, and a branch
-scope orthogonal to both.
+Renewals record the actual received date independently of the membership period.
+Owners can correct manually recorded receipt dates from the dashboard. A payment
+received on 13 November and entered on 16 November counts in the 15 October–14
+November cycle. Corrections keep the amount, original entry timestamp and member
+expiry intact, and record the actor and date change in History. Verified gateway
+payments retain their automatic dates. Historical payroll uses current active
+staff rates and scheduled paydays, as stated on the dashboard.
 
-Each gym has its own owner, so an owner account is normally **pinned to one branch**: they
-get full owner powers over their own gym — members, plans, payments, staff, join requests —
-and the other branch's data is neither visible nor writable. Writes are checked row by row
-(load the row, compare its `branchId` against the caller's scope, then write), and an
-out-of-scope target returns the same message as a row that does not exist, so the panel
-cannot be used to enumerate the other gym's IDs.
+### Roles and branch access
 
-One account has **no branch** and keeps the all-branches view with a branch switcher — the
-`ADMIN_EMAIL` super-admin, kept for support and for the two shared surfaces that cannot be
-split (the homepage testimonial pool has one owner-curator; the other branch sees it
-read-only). Scoping keys off whether a row has a branch assigned rather than off a role
-name, which is what makes the undo cheap: clear one owner's `branch_id` and they are
-unscoped again, or set `BRANCH_SCOPED_OWNERS=false` to restore the old all-branches
-behaviour for everyone. That flag is read per request, so neither undo needs a redeploy or
-a re-login.
+The system has two roles, **owner** and **staff**, with per-feature permissions
+and a separate branch scope.
 
-Staff accounts are locked to one branch and see a reduced panel — the owner controls
-exactly which sections and actions (view / add / edit / delete, and even which member
-*fields*) each staff account can reach, stored as a JSON permission blob on the account.
-Every admin route is gated in middleware, so an unauthenticated request is redirected
-before any data is fetched.
+Owner accounts are normally assigned to one branch. They can manage that gym's
+members, plans, payments, staff and join requests; they cannot view or change the
+other branch's data. Each write loads the target row and checks its `branchId`
+against the caller's scope. An out-of-scope row returns the same message as a
+missing row, preventing the panel from revealing the other branch's IDs.
 
----
+The `ADMIN_EMAIL` super-admin has no assigned branch and can switch between
+both gyms. This account supports administration and the two shared surfaces,
+including the homepage testimonial pool. That pool has one owner-curator; the
+other branch has read-only access.
+
+Scope depends on branch assignment, not the role name. Clearing an owner's
+`branch_id` restores that account's all-branches access.
+`BRANCH_SCOPED_OWNERS=false` restores the previous all-branches behaviour for
+everyone. The flag is read on each request, so these changes do not require a
+redeploy or a new login.
+
+Staff accounts are assigned to one branch. The owner controls access to sections,
+actions (view / add / edit / delete), and individual member fields through a JSON
+permission record on the account. Middleware protects every admin route and
+redirects unauthenticated requests before fetching data.
 
 ## Data model
 
-Fourteen tables, all branch-scoped where it matters (Drizzle over PostgreSQL):
+Drizzle defines 16 PostgreSQL tables, with branch scoping where applicable:
 
 | Table | Holds |
 | --- | --- |
-| `branches` | The two gym locations (code, address, phone, map URL, owner) |
-| `members` | Member records — per-branch Gym ID, plan, expiry, health consent, left-gym / win-back state |
-| `payments` | Every payment — cash / UPI / Razorpay / other — linked to member and branch |
-| `membership_plans` | Per-branch plans (with/without cardio × 1 / 3 / 6 / 12 months) |
-| `online_joins` | The online sign-up ledger — pending / claimed / paid / rejected / failed; holds the Razorpay order and payment IDs, and the `BG-<branch>-<id>` reference the member quotes |
+| `branches` | The two gym locations: code, address, phone, map URL and owner |
+| `members` | Branch-specific Gym ID, plan, expiry, health consent, departure and return state |
+| `payments` | Cash, UPI, Razorpay and other payments linked to a member and branch |
+| `membership_plans` | Branch-specific plans: with/without cardio × 1 / 3 / 6 / 12 months |
+| `online_joins` | Sign-up ledger with pending / claimed / paid / rejected / failed states, Razorpay order and payment IDs, and the member's `BG-<branch>-<id>` reference |
+| `enquiries` | Branch-specific leads, contact details, follow-up dates, last contact, contact count and conversion to membership |
 | `trainers` | Public trainer and owner profiles |
-| `staff` | Employees (trainer / worker / cleaner) with salary |
-| `equipment_expenses` | Equipment inventory and cost |
-| `app_users` | Admin accounts (owner / staff) with a JSON permissions blob |
-| `reviews` | Member reviews (rating, visibility, display order) |
+| `staff` | Employees (trainer / worker / cleaner) and salary |
+| `equipment_expenses` | Equipment inventory and costs |
+| `app_users` | Owner and staff accounts with JSON permissions |
+| `reviews` | Member ratings, visibility and display order |
+| `activity_logs` | Dashboard changes with branch, account identity, event, previous/new values and timestamp |
 | `login_otps` | Email OTP codes for owner login and password reset |
-| `login_attempts` | Audit log of every login attempt (IP, user-agent, outcome) |
+| `login_attempts` | Login attempts with IP, user-agent and outcome |
 | `rate_limit_attempts` | IP and per-email rate-limit counters |
-| `sms_logs` | MSG91 send log (message, status, cost) |
-
----
+| `sms_logs` | MSG91 messages, status and cost |
 
 ## Engineering notes
 
-The parts of this build that took the most thought.
+### Payment verification
 
-### Payments are server-authoritative
+The browser sends a `planCode`, never a payment amount. The server looks up the
+price, records the expected amount on the join row, and creates the Razorpay
+order. Editing a price in the browser cannot change the amount charged.
 
-The browser never sends an amount. It sends a `planCode`; the server looks up that
-plan's price, records the expected amount on the join row, and creates the Razorpay
-order for that amount itself — so a tampered price in the browser cannot buy a
-membership.
+A payment is accepted only when all three checks pass:
 
-Verification is layered on top: a payment is accepted only if (1) the HMAC-SHA256
-signature over `order_id|payment_id` verifies against **that branch's** key secret,
-compared with `crypto.timingSafeEqual` rather than `===`, (2) Razorpay's own API
-confirms the status is `captured`, and (3) the captured amount matches the recorded
-amount. Fulfilment then runs behind a Postgres advisory lock with a compare-and-swap,
-so the browser callback and the webhook arriving together still produce exactly one
-membership, one ledger row and one email.
+1. The HMAC-SHA256 signature over `order_id|payment_id` verifies against the
+   branch's key secret using `crypto.timingSafeEqual` rather than `===`.
+2. Razorpay's API confirms that the payment is `captured`.
+3. The captured amount matches the recorded amount.
 
-### Per-branch merchant accounts
+Fulfilment uses a Postgres advisory lock and a compare-and-swap to handle
+concurrent browser callbacks and webhooks; see Double-submit safety below.
 
-Each branch resolves its own Razorpay credentials from `RAZORPAY_KEY_ID_<CODE>`, so
-payments settle to the right owner's bank account. Three decisions exist purely to stop
-money reaching the wrong person:
+### Branch-specific merchant accounts
 
-- **No shared fallback key.** Once any suffixed key exists, an unsuffixed one is
-  ignored. A fallback would mean a misconfigured branch silently charging into the
-  other owner's account — invisible until a bank statement is reconciled.
-- **A cross-branch guard on the webhook.** A valid signature proves the delivery came
-  from the account owning that URL, not that the order belongs to that branch. Without
-  the guard, either owner could sign a well-formed `payment.captured` naming the
-  other's order.
-- **Credentials in env vars, not a database column.** A live key secret in a table the
-  admin panel can read is a far larger blast radius, and rotating a leaked key
-  shouldn't need a database write.
+Each branch resolves its Razorpay credentials from `RAZORPAY_KEY_ID_<CODE>` so
+payments settle to that owner's bank account.
+
+- **Shared-key fallback is disabled when suffixed keys exist.** Once any
+  branch-suffixed key is configured, the unsuffixed key is ignored. A
+  misconfigured branch cannot silently fall back to another owner's account.
+- **Webhooks check the order's branch.** A valid signature identifies the account
+  that sent the event. The handler also checks that the order belongs to that
+  branch, preventing either owner from submitting a signed `payment.captured`
+  event for the other owner's order.
+- **Credentials stay in environment variables.** They are kept out of database
+  columns accessible to the admin panel. Key rotation does not require a
+  database update.
 
 ### Double-submit safety
 
-Fulfilling a join is an atomic conditional update —
-`UPDATE ... WHERE status IN ('pending','claimed') RETURNING` — used as a
-compare-and-swap behind a per-join advisory lock. Razorpay reports a capture twice by
-design (the browser callback and the webhook, either order, sometimes simultaneously,
-plus webhook retries), so this is the normal case rather than an edge case: the second
-update matches zero rows and is rejected instead of creating a duplicate member. The
-same guard covers the owner double-clicking **Money received** on a call-back lead.
+A join is fulfilled through an atomic conditional update,
+`UPDATE ... WHERE status IN ('pending','claimed') RETURNING`, used as a
+compare-and-swap behind a per-join advisory lock.
 
-Because only the race winner gets a success back, the confirmation email is sent
-*after* that guard — which is what makes it exactly one email rather than two.
+The browser callback and webhook can report the same capture in either order,
+at the same time, or again through webhook retries. Only the first update
+succeeds; subsequent updates match zero rows. This prevents duplicate memberships
+and ledger rows. The same guard handles an owner double-clicking
+**Money received** on a call-back lead.
 
-### Per-branch Gym IDs
+Only the successful caller sends the confirmation email, after the guard passes,
+preventing duplicate confirmation emails.
 
-Each branch numbers its members from 1 independently, allocated as `MAX(gym_id) + 1`
-within the branch and backed by a `(branch_id, gym_id)` unique constraint, so the
-database rejects a collision even if two sign-ups race.
+### Branch-specific Gym IDs
 
-### One fulfilment module, guarded callers
+Each branch numbers members independently from 1, using `MAX(gym_id) + 1`.
+A `(branch_id, gym_id)` unique constraint rejects collisions if sign-ups race.
 
-Granting a membership always goes through one module (`src/lib/fulfil-join.ts`):
-`fulfilPaidJoin` for a gateway payment (reached by the browser callback and by the
-webhook) and `fulfilManualJoin` for a call-back lead the owner settles in person
-(reached only from the owner-only confirm action). That module is deliberately **not** a
-`"use server"` file: in Next.js every export from one becomes a callable HTTP endpoint,
-and these functions grant memberships. Keeping it in plain `lib/` means it can only be
-reached through code that has already authorised the grant — a verified payment, or an
-authenticated owner confirming.
+### Membership fulfilment
 
-Everything the membership needs is written to the join row when the request is
-created, where it has just been validated. Nothing round-trips through the browser
-and comes back.
+Membership creation goes through `src/lib/fulfil-join.ts`:
 
-The webhook signature is a **different** HMAC from the checkout one: it is computed over
-the raw request body using that branch's `RAZORPAY_WEBHOOK_SECRET_<CODE>`, not the API
-key secret. The body is read as text rather than JSON because parsing and
-re-stringifying changes the bytes and the signature no longer matches.
+- `fulfilPaidJoin` handles verified gateway payments from the browser callback
+  and webhook.
+- `fulfilManualJoin` handles call-back leads settled in person, reached only
+  through the owner-only confirmation action.
 
-### Per-address email cap
+The module stays in plain `lib/` and does not use `"use server"`. Next.js exposes
+exports from a `"use server"` file as callable HTTP endpoints; membership grants
+must be reached through callers that have already verified the payment or
+authenticated the owner.
 
-Every other limit here is keyed on IP, and IPs are disposable. But OTP and
-password-reset requests send an email *before* any secret is checked, and the free
-Resend tier allows 100 messages a day — shared with the owner's own login codes. So
-an attacker who never guesses a password could still exhaust the quota and lock the
-owner out. A separate 24-hour cap (10 sends per address) is keyed on the email
-address instead, which is the one part of the request an attacker cannot rotate,
-since the target address is the point of the attack. It counts only actual sends,
-and is not reset on a successful login, or it would be trivially cleared.
+Required membership data is validated and saved on the join row when the request
+is created. Fulfilment reads that stored data without sending it back through the
+browser.
+
+Webhook verification uses a different HMAC from checkout verification. It signs
+the raw request body with the branch's `RAZORPAY_WEBHOOK_SECRET_<CODE>`,
+rather than the API key secret. The handler reads the body as text because JSON
+parsing and re-serialising can change the signed bytes.
+
+### Email limits
+
+OTP and password-reset requests send email before checking a secret. The free
+Resend tier allows 100 messages per day, shared with owner login codes. An
+attacker can rotate IP addresses and exhaust that quota without guessing a
+password.
+
+A separate 24-hour limit allows 10 sends per email address. It counts actual
+sends and remains in place after a successful login. Keying this limit to the
+target address prevents an attacker from bypassing it by changing IPs.
 
 ### Performance
 
-The public pages are tuned for a first visit on a mid-range phone on mobile data:
+Public pages are tuned for a first visit on a mid-range phone using mobile data:
 
-- **The homepage is ISR, not per-request SSR.** It renders statically and
-  revalidates hourly (`revalidate = 3600`), and its independent database reads —
-  branches, trainers, reviews — run in a single `Promise.all` rather than in series.
-- **Fonts are self-hosted through `next/font`** (Inter, Outfit, `display: swap`), so
-  the first paint no longer waits on a render-blocking stylesheet from Google's CDN.
-  The font files are only downloaded on the pages that actually use them.
-- **The hero poster is served via `next/image`** as AVIF/WebP with `priority` (it is
-  the largest paint element), and the ~4.7 MB background video is only mounted on
-  fast, non-metered connections (Network Information API) — and never when the OS
-  asks for reduced motion. Previously every mobile visitor downloaded the whole clip.
-- **In-app navigation uses `next/link`** for instant, prefetched client-side
-  transitions instead of full-page reloads.
+- **Homepage caching:** ISR renders the page statically and revalidates hourly
+  (`revalidate = 3600`). Independent reads for branches, trainers and reviews run
+  together in `Promise.all`.
+- **Self-hosted fonts:** `next/font` serves Inter and Outfit with `display: swap`,
+  avoiding a render-blocking stylesheet from Google's CDN. Pages download only
+  the font files they use.
+- **Hero media:** `next/image` serves the poster as AVIF/WebP with `priority`
+  because it is the largest paint element. The ~4.7 MB background video mounts
+  only on fast, non-metered connections detected through the Network Information
+  API, and never when the OS requests reduced motion.
+- **Client-side navigation:** `next/link` provides prefetched transitions between
+  pages without full-page reloads.
 
 ### Secrets
 
-Card and bank credentials never reach this app — the member enters them inside
-Razorpay's own hosted modal. What the app does hold is a **Key ID** per branch, which is
-public by design (the checkout script runs in the browser and it only identifies which
-account receives the money), and a **Key Secret** and **webhook secret** per branch, which
-are read exclusively inside `"use server"` files and route handlers, never prefixed
-`NEXT_PUBLIC_`, and never logged or returned to the client. They live in environment
-variables rather than a `branches` column, so an over-broad admin query or a database
-backup cannot leak the ability to charge cards. All error messages pass through a
-sanitiser that strips stack traces and database details in production.
+Members enter card and bank credentials in Razorpay's hosted modal; those
+credentials do not reach this app. Each branch's Key ID is public by design:
+the browser uses it to identify the merchant account.
 
-The real admin login URLs live **only** in environment variables
-(`OWNER_LOGIN_PATH`, `STAFF_LOGIN_PATH`), never in the committed source. In
-production the middleware rewrites the secret path onto the internal login route and
-bounces any direct hit on the generic route name (`/login`, `/owner-login`) to the
-homepage — so neither reading the repo nor guessing the obvious name reveals a
-working entrance. This is obscurity, not the security boundary; the real protection
-is below.
+Key Secrets and webhook secrets are read only in `"use server"` files and route
+handlers. They are never prefixed `NEXT_PUBLIC_`, logged or returned to the
+client. They live in environment variables, outside the `branches` table and
+database backups. Production error messages pass through a sanitiser that removes
+stack traces and database details.
+
+Admin login paths are stored only in `OWNER_LOGIN_PATH` and `STAFF_LOGIN_PATH`
+environment variables, outside the committed source. In production, middleware
+rewrites the configured paths to the internal login routes and redirects direct
+requests to `/login` or `/owner-login` to the homepage. Hidden paths add
+obscurity; authentication, permissions and the controls below provide the
+security boundary.
 
 ### Other security measures
 
-- Rate limiting on login — 5 attempts per IP within a 15-minute window, then a
-  30-minute block, tracked in the database (via an atomic upsert) rather than in
-  memory so it survives a serverless cold start — plus the per-address daily email
-  cap above
-- Email OTP as a second factor for owner login
-- **3-day sliding session** — the signed token is re-issued on every admin request,
-  so continuous use never logs you out but 3 days of inactivity does; `httpOnly` +
-  `secure` cookies
-- Sessions are signed *and* validated against the database, so editing the cookie
-  does not grant a role
-- Cloudflare Turnstile on login and password reset
-- Failed-login email alerts to the owner
-- Content Security Policy scoped tight — the Razorpay hosts are spliced in at build time
-  and dropped entirely when `PAYMENT_MODE=contact`, so a deployment that takes no online
-  payment ships no gateway origins at all
-- SQL injection handled by parameterised Drizzle queries
+- Login rate limiting: 5 attempts per IP within 15 minutes, followed by a
+  30-minute block. An atomic database upsert keeps the limit across serverless
+  cold starts. The separate per-address email cap applies as well.
+- Email OTP as a second factor for owner login.
+- A 3-day sliding session: the signed token is re-issued on every admin request.
+  Continued use extends the session; 3 days of inactivity expires it. Cookies use
+  `httpOnly` and `secure`.
+- Sessions are signed and validated against the database, so editing a cookie
+  does not grant a role.
+- Cloudflare Turnstile on login and password reset.
+- Failed-login email alerts to the owner.
+- A Content Security Policy that includes Razorpay hosts at build time and
+  excludes them entirely when `PAYMENT_MODE=contact`.
+- Parameterised Drizzle queries to prevent SQL injection.
 
 ### Mobile
 
-The admin panel is used on phones on the gym floor, so every table renders twice —
-a card list below `md` and a real table above it. Tap targets are at least 44px,
-and inputs use a 16px base size on mobile — including the `/join` form — because iOS
-Safari force-zooms into anything smaller on focus.
+The admin panel supports phone use on the gym floor. Each table has a card-list
+view below `md` and a table view above it. Tap targets are at least 44px. Mobile
+inputs, including the `/join` form, use a 16px base size to prevent iOS Safari from
+zooming on focus.
 
----
-
-## Running it locally
+## Local setup
 
 ```bash
 git clone <repo-url>
@@ -310,102 +304,96 @@ npx drizzle-kit migrate   # create the schema by replaying drizzle/*.sql
 npm run dev               # http://localhost:3000
 ```
 
-Use `migrate`, not `push`. `push` diffs `src/db/schema.ts` straight against the
-database and writes the difference — it drops columns it does not recognise, and
-it records nothing, so there is no history of what it did. `migrate` replays the
-journaled files in `drizzle/` (`0000_`–`0013_`) in order, which is reproducible
-and is what the deployed database was built from. `scripts/BACKUP.md` covers
-taking a dump first.
+Use `migrate` for this project's database setup. It replays the journaled files
+in `drizzle/` (`0000_`–`0018_`) in order, preserving a reproducible migration
+history. `push` compares `src/db/schema.ts` directly with the database and
+applies the differences without recording migrations; it can drop columns it
+does not recognise. See `scripts/BACKUP.md` for taking a dump first.
 
-`.env.example` documents every variable the app reads, including which are
-required and which are optional. With no secret login paths configured, the admin
-login is served directly at `/login` (staff) and `/owner-login` (owner).
+`.env.example` documents required and optional variables. Without configured
+secret login paths, local admin login is available at `/login` for staff and
+`/owner-login` for owners.
 
 ### Scripts
 
-| Command | Does |
+| Command | Purpose |
 | --- | --- |
-| `npm run dev` | Development server |
-| `npm run build` | Production build |
+| `npm run dev` | Start the development server |
+| `npm run build` | Create a production build |
 | `npm start` | Serve the production build |
-| `npm run lint` | ESLint |
-| `npm run typecheck` | `tsc --noEmit` |
-| `npm run audit:check` | `npm audit` at high severity and above |
-| `npm run audit:full` | Full `npm audit` |
-| `npm run db:backup` | Dump the database to `backups/` (gitignored). `-- --keep N`, `-- --label NAME` |
-| `npm run db:restore` | Restore a dump. **Drops and recreates every table** — see `scripts/BACKUP.md` |
-
----
+| `npm run lint` | Run ESLint |
+| `npm run typecheck` | Run `tsc --noEmit` |
+| `npm run audit:check` | Run `npm audit` for high severity and above |
+| `npm run audit:full` | Run the full `npm audit` |
+| `npm run db:backup` | Dump the database to `backups/` (gitignored); options: `-- --keep N`, `-- --label NAME` |
+| `npm run db:restore` | Restore a dump; **drops and recreates every table** — see `scripts/BACKUP.md` |
 
 ## Dashboard history
 
-Owners can open **History** in the menu or **Recent changes** on the dashboard.
-This release activates on **19 November 2026 at 12:00 pm IST** (06:30 UTC).
-The server checks the activation time on every request: the navigation, history
-page, recording and cleanup remain disabled before that time even if Netlify
-deploys the code early. No further deployment is needed at noon once this build is live.
-Today, This week (Monday onward), This month, and Last 31 days use Indian time.
-The page can also filter by the person making the change and the type of change.
-It shows member edits with their previous/new values, membership renewals,
-equipment purchases and corrections, and other dashboard changes. Each entry
-keeps the signed-in account's name and role, even if that account is later deleted.
-Branch owners see only their gym's history; staff cannot open this page.
-Tracking starts when migration `0018_activity_history.sql` and this version are installed.
+Owners can open **History** from the menu or **Recent changes** from the
+dashboard. Its configured activation time is **19 November 2026 at 12:00 pm
+IST** (06:30 UTC). The server checks this time on every request. Navigation,
+the history page, recording and cleanup stay disabled before activation, even
+if Netlify deploys the code early. Once this build is live, activation does not
+require another deployment.
 
-Before deploying this version, run `npx drizzle-kit migrate` to create the
-`activity_logs` table. The Netlify function `cleanup-activity` runs hourly on
-production deployments and deletes history entries older than 31 days. Set
-`DATABASE_URL` for both the build and Netlify Functions (including the scheduled
-function). Opening History also performs cleanup as a backstop. Other hosts must
-schedule the SQL from `src/lib/activity-retention.ts` hourly to get cleanup while
-the dashboard is idle. Only activity entries are deleted; members, payments and
-equipment expenses retain their existing records.
+The filters **Today**, **This week** (Monday onward), **This month**, and
+**Last 31 days** use Indian time. Owners can also filter by account and change
+type. Entries show member edits with previous/new values, renewals, equipment
+purchases and corrections, and other dashboard changes. Each entry retains the
+signed-in account's name and role even if the account is later deleted. Branch
+owners see only their own gym's history; staff cannot open the page.
 
----
+Tracking requires migration `0018_activity_history.sql` and this version of the
+application. Before deployment, run `npx drizzle-kit migrate` to create
+`activity_logs`.
+
+On Netlify production deployments, `cleanup-activity` runs hourly and deletes
+history entries older than 31 days. Set `DATABASE_URL` for both the build and
+Netlify Functions, including the scheduled function. Opening History also
+performs cleanup. Other hosts must schedule the SQL from
+`src/lib/activity-retention.ts` hourly to clean up while the dashboard is idle.
+Cleanup deletes only activity entries; member, payment and equipment-expense
+records remain intact.
 
 ## Known gaps
 
-Being honest about what is not done, because it is on the roadmap rather than
-hidden:
+- **Razorpay accounts await approval.** The gateway code is complete, but neither
+  branch's merchant account has been approved. Each owner needs separate KYC
+  with their own PAN and bank proof. Until keys are configured, that branch's
+  members receive the owner-contact screen and become call-back leads without
+  being charged. The site can launch with this fallback while KYC is pending.
+- **Webhooks have not been tested against live traffic.** Register each branch's
+  `POST /api/webhooks/razorpay/<CODE>` endpoint in that account's dashboard for
+  `payment.captured` events only. Without `RAZORPAY_WEBHOOK_SECRET_<CODE>`,
+  the branch endpoint returns `503` and refuses unsigned callbacks. A member
+  who closes the tab immediately after paying would therefore not be activated
+  automatically. The unsuffixed `/api/webhooks/razorpay` endpoint returns `410`
+  to identify stale dashboard registrations.
+- **Member email requires domain verification.** Resend's shared
+  `onboarding@resend.dev` sender delivers only to the Resend account owner's
+  address; other recipients receive a `403`. Admin OTP works because it goes
+  to that address. Member confirmations require `brothersgym.in` to be verified
+  at resend.com/domains.
+- **SMS reminders need configuration.** The MSG91 send path and `sms_logs`
+  table are in place, but DLT templates still need approval. Launch reminders
+  use WhatsApp links.
+- **Error monitoring requires configuration.** `@sentry/nextjs` is integrated
+  through `instrumentation.ts` for server and edge, `withSentryConfig` in
+  `next.config.ts`, and a `/monitoring` tunnel to avoid ad-blocker interference.
+  Reporting is inactive until `NEXT_PUBLIC_SENTRY_DSN` is set. See
+  `.env.example` for that variable and `SENTRY_ORG` / `SENTRY_PROJECT` /
+  `SENTRY_AUTH_TOKEN`.
+- **The background video needs compression.**
+  `public/videos/gym-background.mp4` is still served as-is at ~4.7 MB.
+  Connection checks limit which visitors download it, but the file itself
+  remains unoptimised.
 
-- **The Razorpay accounts are not live yet.** The gateway code is complete, but each
-  branch needs its own merchant account with its own KYC (each owner's own PAN and bank
-  proof), and neither is approved. Until a branch's keys are set, its members are shown
-  the contact-the-owner screen and become call-back leads — nothing is charged, so this
-  is a soft gap rather than a broken flow, and it is why the site can deploy before KYC
-  clears.
-- **The webhook has never fired against live traffic.** Each branch has its own endpoint
-  (`POST /api/webhooks/razorpay/<CODE>`, `payment.captured` only) and it must be
-  registered in that account's own dashboard. Until `RAZORPAY_WEBHOOK_SECRET_<CODE>` is
-  set, that branch's endpoint answers `503` deliberately — refusing is safer than
-  accepting unsigned callbacks — which means a member who closes the tab the instant they
-  pay would not be activated automatically. The unsuffixed `/api/webhooks/razorpay`
-  answers `410` so a stale dashboard entry fails loudly instead of 404-ing.
-- **Member emails stay dark until the domain is verified.** Resend's shared
-  `onboarding@resend.dev` sender only delivers to the address that owns the Resend
-  account; everyone else gets a `403`. Admin OTP works today because it goes to that
-  address. Member confirmations need `brothersgym.in` verified at resend.com/domains.
-- **SMS reminders (MSG91) are wired but unconfigured;** WhatsApp links are used
-  instead at launch. The send path and `sms_logs` table exist and are ready to
-  switch on once the DLT templates are approved.
-- **Error monitoring is live.** `@sentry/nextjs` is wired through `instrumentation.ts`
-  (server + edge), `withSentryConfig` in `next.config.ts`, and a `/monitoring` tunnel so
-  ad-blockers don't drop reports. It is inert until `NEXT_PUBLIC_SENTRY_DSN` is set —
-  see `.env.example` for it and `SENTRY_ORG` / `SENTRY_PROJECT` / `SENTRY_AUTH_TOKEN`.
-- **The background video file is still unoptimised** (`public/videos/gym-background.mp4`,
-  ~4.7 MB, served as-is). It is no longer downloaded by every visitor — only on
-  fast connections (see *Performance*) — but the file itself should still be
-  compressed.
+## Data and credentials
 
----
-
-## Note on data
-
-Built for a client. This repository contains no real credentials and no member
-data. `.env` is gitignored; only `.env.example`, which holds placeholders, is
-committed.
-
----
+This project was built for a client. The repository contains no real credentials
+or member data. `.env` is gitignored; the committed `.env.example` contains
+placeholders.
 
 ## Author
 

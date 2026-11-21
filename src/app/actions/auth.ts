@@ -48,7 +48,7 @@ const MAX_ATTEMPTS = 5;
  * No `last_activity` cookie: the idle timer used to read one, and a cookie the
  * client can delete is a check the client can skip. The timestamp now rides
  * inside the signed token as `iat`, which the middleware re-stamps on every
- * admin request — see section 1 of src/middleware.ts.
+ * admin request — see section 1 of src/proxy.ts.
  *
  * `subject` is "owner" for the env-based owner, or the appUsers id as a string.
  */

@@ -38,23 +38,6 @@ export function captureError(
   Sentry.captureException(err, context ? { extra: context } : undefined);
 }
 
-/**
- * Report something noteworthy that is not an exception — a webhook that failed
- * its signature check, a payment reconciliation that came back short. These are
- * the cases where nothing threw but someone still needs to know.
- */
-export function captureMessage(
-  message: string,
-  level: "info" | "warning" | "error" = "warning",
-  context?: Record<string, unknown>
-): void {
-  if (!SENTRY_ENABLED) return;
-  Sentry.captureMessage(message, {
-    level,
-    ...(context ? { extra: context } : {}),
-  });
-}
-
 function safeStringify(value: unknown): string {
   try {
     return JSON.stringify(value) ?? String(value);

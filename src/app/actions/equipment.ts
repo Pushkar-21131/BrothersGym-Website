@@ -2,7 +2,7 @@
 
 import { db } from "@/db";
 import { equipmentExpenses } from "@/db/schema";
-import { eq, inArray } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { getBranchScope, requireSingleBranch } from "@/lib/branch";
 import { sanitizeError } from "@/lib/errors";
@@ -47,33 +47,6 @@ async function loadEquipmentInScope(id: number) {
   }
 
   return rows[0];
-}
-
-// ===== LIST EQUIPMENT =====
-export async function listEquipmentAction() {
-  try {
-    const role = await assertAuthenticated();
-    if (role !== "owner") {
-      await assertPermission("equipment", "canView");
-    }
-  } catch (e) {
-    return { error: sanitizeError(e, "Not authorized") };
-  }
-
-  try {
-    const scope = await getBranchScope();
-    const rows = await db
-      .select()
-      .from(equipmentExpenses)
-      .where(
-        scope.type === "single"
-          ? eq(equipmentExpenses.branchId, scope.branchId)
-          : inArray(equipmentExpenses.branchId, scope.branchIds)
-      );
-    return { success: true, equipment: rows };
-  } catch (e) {
-    return { error: sanitizeError(e, "Failed to load equipment") };
-  }
 }
 
 // ===== ADD EQUIPMENT =====

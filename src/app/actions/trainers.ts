@@ -2,7 +2,7 @@
 
 import { db } from "@/db";
 import { trainers } from "@/db/schema";
-import { eq, inArray } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { getBranchScope, requireSingleBranch } from "@/lib/branch";
 import { sanitizeError } from "@/lib/errors";
@@ -35,72 +35,6 @@ function readPhotoIntent(formData: FormData): PhotoIntent {
   const v = validatePhotoImage(raw);
   if (!v.ok) return { kind: "error", error: v.error };
   return { kind: "set", base64: v.base64, mime: v.mime };
-}
-
-// ===== LIST TRAINERS (admin) =====
-export async function listTrainersForAdmin() {
-  try {
-    const role = await assertAuthenticated();
-    if (role !== "owner") {
-      await assertPermission("trainers", "canView");
-    }
-  } catch (e) {
-    return { error: sanitizeError(e, "Not authorized") };
-  }
-
-  try {
-    const scope = await getBranchScope();
-    const rows = await db
-      // Explicit column list, not select(): a bare select() would pull photoImage,
-      // which is ~60KB of base64 per trainer, into a list that only needs to know
-      // whether a photo exists. photoMime answers that.
-      .select({
-        id: trainers.id,
-        branchId: trainers.branchId,
-        name: trainers.name,
-        photoUrl: trainers.photoUrl,
-        photoMime: trainers.photoMime,
-        experience: trainers.experience,
-        ptFee: trainers.ptFee,
-        isOwner: trainers.isOwner,
-        instagramUrl: trainers.instagramUrl,
-        createdAt: trainers.createdAt,
-      })
-      .from(trainers)
-      .where(
-        scope.type === "single"
-          ? eq(trainers.branchId, scope.branchId)
-          : inArray(trainers.branchId, scope.branchIds)
-      );
-    return { success: true, trainers: rows };
-  } catch (e) {
-    return { error: sanitizeError(e, "Failed to load trainers") };
-  }
-}
-
-// PUBLIC — no auth needed for landing page
-export async function listPublicTrainers() {
-  try {
-    // Same reason as above, and it matters more here: this feeds the public site,
-    // so a bare select() would put every trainer's base64 into the HTML of the
-    // most-visited page. The browser fetches /api/trainer-photo/[id] instead.
-    return await db
-      .select({
-        id: trainers.id,
-        branchId: trainers.branchId,
-        name: trainers.name,
-        photoUrl: trainers.photoUrl,
-        photoMime: trainers.photoMime,
-        experience: trainers.experience,
-        ptFee: trainers.ptFee,
-        isOwner: trainers.isOwner,
-        instagramUrl: trainers.instagramUrl,
-        createdAt: trainers.createdAt,
-      })
-      .from(trainers);
-  } catch {
-    return [];
-  }
 }
 
 // ===== ADD TRAINER =====

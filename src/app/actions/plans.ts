@@ -2,10 +2,10 @@
 
 import { db } from "@/db";
 import { membershipPlans } from "@/db/schema";
-import { eq, and, inArray } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { assertOwner } from "@/lib/auth-check";
-import { getBranchScope, isBranchInScope } from "@/lib/branch";
+import { isBranchInScope } from "@/lib/branch";
 import { sanitizeError } from "@/lib/errors";
 import { withActivity } from "@/lib/activity";
 import { formatINR } from "@/lib/utils";
@@ -46,26 +46,6 @@ async function assertPlanInScope(id: number): Promise<{ error: string } | null> 
     return { error: "Plan not found." };
   }
   return null;
-}
-
-// ===== LIST PLANS (branch-scoped) =====
-export async function listPlansAction() {
-  try {
-    const scope = await getBranchScope();
-    const rows = await db
-      .select()
-      .from(membershipPlans)
-      .where(
-        scope.type === "single"
-          ? eq(membershipPlans.branchId, scope.branchId)
-          : inArray(membershipPlans.branchId, scope.branchIds)
-      )
-      .orderBy(membershipPlans.branchId, membershipPlans.displayOrder);
-
-    return { success: true, plans: rows };
-  } catch (e) {
-    return { error: sanitizeError(e, "Failed to load plans") };
-  }
 }
 
 /**

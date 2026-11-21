@@ -9,6 +9,7 @@ import { sanitizeError } from "@/lib/errors";
 import { recordActivity, withActivity } from "@/lib/activity";
 import { activityChanges } from "@/lib/activity-history";
 import { isHistoryEnabled } from "@/lib/history-release";
+import { validReceivedDate } from "@/lib/dashboard-finance";
 // The same whitelist the register import uses, so "Male" and "M" mean one thing
 // everywhere a member's gender can be set.
 import { parseSex } from "@/lib/import-parse";
@@ -426,7 +427,8 @@ export async function renewMemberAction(
   durationDays: number,
   planType?: "full" | "no_cardio" | "offline",
   paymentMethod: "cash" | "upi" | "razorpay" | "other" = "cash",
-  renewalStart: RenewalStart = "today"
+  renewalStart: RenewalStart = "today",
+  receivedDate?: string,
 ) {
   try {
     const role = await assertAuthenticated();
@@ -441,14 +443,19 @@ export async function renewMemberAction(
   // A zero or NaN amount writes a ₹0 payment row that counts as a real
   // collection in every revenue total, and zeroes the member's stored fee on
   // the way past.
-  if (!Number.isFinite(amount) || amount <= 0) {
+  if (!Number.isInteger(amount) || amount <= 0 || amount > 2_147_483_647) {
     return { error: "Enter the amount collected" };
   }
   if (!Number.isInteger(durationDays) || durationDays <= 0) {
     return { error: "Select a membership duration" };
   }
+  if (!["cash", "upi", "razorpay", "other"].includes(paymentMethod)) return { error: "Choose a valid payment method" };
   if (renewalStart !== "today" && renewalStart !== "due_date") {
     return { error: "Select whether to renew from today or the current due date" };
+  }
+  const paymentDate = receivedDate ?? istDateString();
+  if (!validReceivedDate(paymentDate, istDateString())) {
+    return { error: "Enter a valid payment received date on or before today" };
   }
 
   try {
@@ -494,8 +501,8 @@ export async function renewMemberAction(
       if (!canAccess) return { error: "You don't have access to this member" };
 
       // Use the locked row's due date, so another renewal cannot make the
-      // browser's preview overwrite days already added. The payment still
-      // belongs to today even when continued attendance is counted from expiry.
+      // browser's preview overwrite days already added. The received date is
+      // independent of the membership period and of when the renewal is entered.
       const todayStr = istDateString();
       const { newExpiry } = getMembershipRenewalDates(
         member.membershipExpiry,
@@ -519,11 +526,11 @@ export async function renewMemberAction(
         branchId: member.branchId,
         memberId: member.id,
         amount,
-        date: todayStr,
+        date: paymentDate,
         method: paymentMethod,
       });
 
-      await recordActivity(tx, "member.renewed", `Renewed ${member.name} · gym #${member.gymId} · ${formatINR(amount)} (${paymentMethod.toUpperCase()}) · ${durationDays} days`, {
+      await recordActivity(tx, "member.renewed", `Renewed ${member.name} · gym #${member.gymId} · ${formatINR(amount)} (${paymentMethod.toUpperCase()}) · received ${paymentDate} · ${durationDays} days`, {
         branchId: member.branchId, subjectId: member.id,
         changes: activityChanges(member, {
           membershipExpiry: newExpiry, feeAmount: amount,

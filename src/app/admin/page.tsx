@@ -2,31 +2,31 @@ import { redirect } from "next/navigation";
 import Link from "next/link";
 import { db } from "@/db";
 import { isHistoryEnabled } from "@/lib/history-release";
+import DashboardTransactions from "./dashboard-transactions";
+import { cycleTitle, dashboardCycles, dashboardHref, LEDGER_PAGE_SIZE, selectedDashboardCycle, type LedgerKind } from "@/lib/dashboard-finance";
+import { dashboardTransactions } from "@/lib/dashboard-transactions";
+import { formatDateIn } from "@/lib/whatsapp";
 import { members, payments, equipmentExpenses, staff } from "@/db/schema";
-import { sql, eq, and, lt, gte, lte, inArray, isNull } from "drizzle-orm";
+import { sql, eq, and, lt, gte, lte, isNull } from "drizzle-orm";
 import {
   Users,
   Wrench,
   HandCoins,
   UserX,
-  IndianRupee,
   AlertTriangle,
   ChevronRight,
-  Building2,
+  ChevronLeft,
   History,
 } from "lucide-react";
 import { getBranchScope, getAllBranches } from "@/lib/branch";
-import {
-  getVerifiedRole,
-  hasPermission,
-  getFirstAllowedAdminPath,
-} from "@/lib/auth-check";
+import { requireOwner } from "@/lib/auth-check";
 import {
   formatINR,
   istDateString,
   addDaysIso,
   gymCycle,
   salaryPayday,
+  addMonthsIso,
 } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -50,14 +50,20 @@ async function getBranchStats(
     // Dated to the cycle, like the spending below: every money figure on this
     // page answers "what did this month do", never "what have we ever done".
     db
-      .select({ total: sql<number>`coalesce(sum(${payments.amount}), 0)` })
+      .select({ total: sql<number>`coalesce(sum(${payments.amount}), 0)`,
+        paymentCount: sql<number>`count(*)`,
+        cash: sql<number>`coalesce(sum(case when ${payments.method} = 'cash' or ${payments.method} is null then ${payments.amount} else 0 end), 0)`,
+        upi: sql<number>`coalesce(sum(case when ${payments.method} = 'upi' then ${payments.amount} else 0 end), 0)`,
+        online: sql<number>`coalesce(sum(case when ${payments.method} = 'razorpay' then ${payments.amount} else 0 end), 0)`,
+        other: sql<number>`coalesce(sum(case when ${payments.method} not in ('cash', 'upi', 'razorpay') then ${payments.amount} else 0 end), 0)`,
+      })
       .from(payments)
       .where(
         and(
           eq(payments.branchId, branchId),
           isNull(payments.voidedAt),
           gte(payments.date, cycle.start),
-          lte(payments.date, cycle.end)
+          lte(payments.date, today < cycle.end ? today : cycle.end)
         )
       ),
     db
@@ -67,7 +73,7 @@ async function getBranchStats(
         and(
           eq(equipmentExpenses.branchId, branchId),
           gte(equipmentExpenses.date, cycle.start),
-          lte(equipmentExpenses.date, cycle.end)
+          lte(equipmentExpenses.date, today < cycle.end ? today : cycle.end)
         )
       ),
     // Who has been paid inside this cycle — which is not the whole roster. The
@@ -105,7 +111,7 @@ async function getBranchStats(
   // against his own pocket.
   const salariesDue = s.reduce(
     (sum, item) =>
-      salaryPayday(item.joinDate, cycle) <= today
+      salaryPayday(item.joinDate, cycle) <= (today < cycle.end ? today : cycle.end) && salaryPayday(item.joinDate, cycle) >= item.joinDate
         ? sum + (Number(item.salary) || 0)
         : sum,
     0
@@ -117,6 +123,11 @@ async function getBranchStats(
   return {
     totalMembers,
     totalRevenue,
+    paymentCount: Number(p[0]?.paymentCount) || 0,
+    cash: Number(p[0]?.cash) || 0,
+    upi: Number(p[0]?.upi) || 0,
+    online: Number(p[0]?.online) || 0,
+    other: Number(p[0]?.other) || 0,
     totalExpenses,
     salariesDue,
     profit,
@@ -125,13 +136,10 @@ async function getBranchStats(
   };
 }
 
-export default async function AdminDashboard() {
-  const role = await getVerifiedRole();
-  if (!role) redirect("/login");
-  if (role !== "owner") {
-    const canView = await hasPermission("dashboard", "canView");
-    if (!canView) redirect(await getFirstAllowedAdminPath());
-  }
+export default async function AdminDashboard({ searchParams }: {
+  searchParams: Promise<{ cycle?: string; type?: string; q?: string; page?: string }>;
+}) {
+  await requireOwner();
 
   const scope = await getBranchScope();
   const allBranches = await getAllBranches();
@@ -146,7 +154,14 @@ export default async function AdminDashboard() {
   // Every money figure on this page covers the gym's own month, 15th → 14th.
   // The owner counts a month's takings and a month's spending across that
   // boundary, so the calendar month is the wrong window for both.
-  const cycle = gymCycle(today);
+  const params = await searchParams;
+  const currentCycle = gymCycle(today);
+  const cycle = selectedDashboardCycle(params.cycle, today);
+  const kind: LedgerKind = params.type === "equipment" ? "equipment" : "payments";
+  const query = typeof params.q === "string" ? params.q.trim().slice(0, 80) : "";
+  const requestedPage = Number(params.page ?? 1);
+  const page = Number.isSafeInteger(requestedPage) && requestedPage > 0 ? Math.min(requestedPage, 100_000) : 1;
+  const receivedThrough = today < cycle.end ? today : cycle.end;
 
   // Only the branches this account may see. Filtering BEFORE the stats queries
   // (rather than after) means a branch owner's dashboard never reads the other
@@ -156,17 +171,25 @@ export default async function AdminDashboard() {
       ? allBranches.filter((b) => b.id === scope.branchId)
       : allBranches;
 
-  const perBranchStats = await Promise.all(
-    visibleBranches.map(async (b) => ({
+  const [perBranchStats, ledger] = await Promise.all([
+    Promise.all(visibleBranches.map(async (b) => ({
       branch: b,
       stats: await getBranchStats(b.id, today, soon, cycle),
-    }))
-  );
+    }))),
+    dashboardTransactions(visibleBranches.map((b) => b.id), cycle.start, receivedThrough, kind, query, page),
+  ]);
+  const pages = Math.max(1, Math.ceil(ledger.total / LEDGER_PAGE_SIZE));
+  if (page > pages) redirect(dashboardHref(cycle.start, kind, query, pages));
 
   const combined = perBranchStats.reduce(
     (acc, r) => ({
       totalMembers: acc.totalMembers + r.stats.totalMembers,
       totalRevenue: acc.totalRevenue + r.stats.totalRevenue,
+      paymentCount: acc.paymentCount + r.stats.paymentCount,
+      cash: acc.cash + r.stats.cash,
+      upi: acc.upi + r.stats.upi,
+      online: acc.online + r.stats.online,
+      other: acc.other + r.stats.other,
       totalExpenses: acc.totalExpenses + r.stats.totalExpenses,
       salariesDue: acc.salariesDue + r.stats.salariesDue,
       profit: acc.profit + r.stats.profit,
@@ -176,6 +199,11 @@ export default async function AdminDashboard() {
     {
       totalMembers: 0,
       totalRevenue: 0,
+      paymentCount: 0,
+      cash: 0,
+      upi: 0,
+      online: 0,
+      other: 0,
       totalExpenses: 0,
       salariesDue: 0,
       profit: 0,
@@ -187,298 +215,93 @@ export default async function AdminDashboard() {
   const scopeLabel =
     scope.type === "single" ? scope.branchName : "All Branches";
 
-  const outgoings = combined.totalExpenses + combined.salariesDue;
-  const barTotal = combined.totalRevenue + outgoings;
-  const revenueShare = barTotal > 0 ? (combined.totalRevenue / barTotal) * 100 : 0;
-
   return (
     <>
       <div className="adm-head">
         <h1 className="adm-h1">Dashboard</h1>
-        <p className="adm-sub">
-          Viewing <strong>{scopeLabel}</strong>
-        </p>
+        <p className="adm-sub"><strong>{scopeLabel}</strong> · collections and costs</p>
       </div>
-
-      {/* Two columns on a laptop, one on a phone. The split is by question:
-          the left column answers "how is the business doing", the right one
-          "where do I go next". Below 900px .adm-dash is not a grid, so the
-          columns simply stack and the phone reads the same order it always
-          did — hero, stats, money flow, branches, links. */}
-      <div className="adm-dash">
-        <div className="adm-dash-col">
-      {/* Net profit is the one number worth opening the app for, so it gets
-          the whole first screen. It is a cycle's net, not a lifetime one, and
-          the wage line in it is what falls due inside that cycle — a person is
-          charged from their own payday, not from the first day of the cycle. */}
-      <section className="adm-hero">
-        <div className="adm-hero-label">Net Profit · {cycle.label}</div>
-        <div
-          className={`adm-hero-value ${combined.profit >= 0 ? "pos" : "neg"}`}
-        >
-          {formatINR(combined.profit)}
+      <form className="adm-finance-cycle" method="get" action="/admin">
+        <div className="adm-finance-cycle-field">
+          <label className="adm-label" htmlFor="dashboard-cycle">Profit cycle · 15th to 14th</label>
+          <select id="dashboard-cycle" name="cycle" defaultValue={cycle.start} className="adm-select">
+            {dashboardCycles(today, cycle.start).map((item) => <option key={item.start} value={item.start}>
+              {cycleTitle(item)}{item.start === currentCycle.start ? " · Current" : ""}
+            </option>)}
+          </select>
         </div>
-
-        <div className="adm-hero-meta">
-          <div>
-            <div className="adm-hero-meta-k">Revenue</div>
-            <div className="adm-hero-meta-v" style={{ color: "var(--green2)" }}>
-              {formatINR(combined.totalRevenue)}
-            </div>
+        <input type="hidden" name="type" value={kind} />
+        <button type="submit" className="adm-btn primary">View cycle</button>
+        <div className="adm-finance-cycle-nav">
+          <Link href={dashboardHref(addMonthsIso(cycle.start, -1), kind).split("#")[0]} className="adm-btn" aria-label="Previous profit cycle"><ChevronLeft size={16} /></Link>
+          {cycle.start < currentCycle.start
+            ? <Link href={dashboardHref(addMonthsIso(cycle.start, 1), kind).split("#")[0]} className="adm-btn" aria-label="Next profit cycle"><ChevronRight size={16} /></Link>
+            : <button type="button" className="adm-btn" disabled aria-label="Next profit cycle"><ChevronRight size={16} /></button>}
+        </div>
+        {cycle.start !== currentCycle.start && <Link href="/admin" className="adm-btn">Current cycle</Link>}
+      </form>
+      <div className="adm-finance-layout">
+        <section className="adm-finance-statement" aria-labelledby="profit-title">
+          <h2 id="profit-title">Net profit</h2>
+          <p className={"adm-finance-profit" + (combined.profit < 0 ? " negative" : "")}>{formatINR(combined.profit)}</p>
+          <p className="adm-finance-period">{cycleTitle(cycle)}</p>
+          <p className="adm-finance-period-status">{cycle.end < today ? "Completed cycle" : "In progress"} · receipts through {formatDateIn(receivedThrough)}</p>
+          <dl className="adm-finance-breakdown">
+            <div><dt>Membership collections</dt><dd>{formatINR(combined.totalRevenue)}</dd></div>
+            <div><dt>Equipment expenses</dt><dd>−{formatINR(combined.totalExpenses)}</dd></div>
+            <div><dt>Scheduled payroll</dt><dd>−{formatINR(combined.salariesDue)}</dd></div>
+          </dl>
+          <Link href={dashboardHref(cycle.start)} className="adm-btn primary adm-finance-review">
+            Review {combined.paymentCount} {combined.paymentCount === 1 ? "payment" : "payments"} <ChevronRight size={15} />
+          </Link>
+          <div className="adm-finance-methods">
+            <h3>Collections by method</h3>
+            <dl>
+              <div><dt>Cash</dt><dd>{formatINR(combined.cash)}</dd></div>
+              <div><dt>UPI</dt><dd>{formatINR(combined.upi)}</dd></div>
+              <div><dt>Online</dt><dd>{formatINR(combined.online)}</dd></div>
+              <div><dt>Other</dt><dd>{formatINR(combined.other)}</dd></div>
+            </dl>
           </div>
-          <div>
-            <div className="adm-hero-meta-k">Equipment</div>
-            <div className="adm-hero-meta-v" style={{ color: "var(--red2)" }}>
-              {formatINR(combined.totalExpenses)}
-            </div>
-          </div>
-          <div>
-            <div className="adm-hero-meta-k">Salaries</div>
-            <div className="adm-hero-meta-v" style={{ color: "var(--blue2)" }}>
-              {formatINR(combined.salariesDue)}
-            </div>
-          </div>
+          <p className="adm-finance-footnote">Scheduled payroll uses the current active staff rates and their join-date paydays.</p>
+        </section>
+        <DashboardTransactions key={cycle.start + ":" + kind + ":" + query} rows={ledger.rows} total={ledger.total}
+          page={page} pages={pages} kind={kind} cycle={cycle.start} query={query} today={today} showBranch={scope.type === "all"} />
+      </div>
+      <section className="adm-finance-health" aria-labelledby="gym-today-title">
+        <h2 id="gym-today-title">Gym today</h2>
+        <p>Membership status as of {formatDateIn(today)}, across {scopeLabel}.</p>
+        <div>
+          <Link href="/admin/members"><Users size={17} /><strong>{combined.totalMembers}</strong><span>Members</span><ChevronRight size={14} /></Link>
+          <Link href="/admin/reminders"><AlertTriangle size={17} /><strong>{combined.expiringCount}</strong><span>Expiring in 7 days</span><ChevronRight size={14} /></Link>
+          <Link href="/admin/inactive"><UserX size={17} /><strong>{combined.expiredCount}</strong><span>Expired memberships</span><ChevronRight size={14} /></Link>
         </div>
       </section>
-
-      <div className="adm-qstats">
-        <QStat
-          tone="gold"
-          icon={<Users size={14} />}
-          value={String(combined.totalMembers)}
-          label="Members"
-        />
-        <QStat
-          tone="orange"
-          icon={<AlertTriangle size={14} />}
-          value={String(combined.expiringCount)}
-          label="Expiring ≤7d"
-        />
-        <QStat
-          tone="red"
-          icon={<UserX size={14} />}
-          value={String(combined.expiredCount)}
-          label="Expired"
-        />
-        {/* Same window as the hero, so it is no longer a lifetime figure
-            wearing a one-month label. */}
-        <QStat
-          tone="green"
-          icon={<IndianRupee size={14} />}
-          value={formatINR(combined.totalRevenue)}
-          label="Collected"
-        />
-      </div>
-
-      {/* Money in vs money out. The proportion lands faster than two figures.
-          Same cycle as the hero, which names the window. */}
-      <h2 className="adm-h2">Money Flow</h2>
+      {scope.type === "all" && perBranchStats.length > 1 && <section className="adm-finance-branches">
+        <h2>Accounts by branch</h2>
+        <div className="adm-table-wrap">
+          <table className="adm-table"><thead><tr><th>Branch</th><th>Collections</th><th>Equipment</th><th>Payroll</th><th>Net profit</th></tr></thead>
+            <tbody>{perBranchStats.map(({ branch, stats }) => <tr key={branch.id}>
+              <td>{branch.name}</td><td>{formatINR(stats.totalRevenue)}</td><td>{formatINR(stats.totalExpenses)}</td><td>{formatINR(stats.salariesDue)}</td><td>{formatINR(stats.profit)}</td>
+            </tr>)}</tbody>
+          </table>
+        </div>
+      </section>}
+      <h2 className="adm-h2 adm-finance-manage-title">Manage this gym</h2>
       <section className="adm-card">
-        <div className="adm-bar" aria-hidden="true">
-          <div
-            className="adm-bar-fill"
-            style={{
-              width: `${revenueShare}%`,
-              background: "linear-gradient(90deg, var(--green), var(--green2))",
-            }}
-          />
-          <div
-            className="adm-bar-fill"
-            style={{
-              width: `${100 - revenueShare}%`,
-              background: "linear-gradient(90deg, var(--red), var(--orange))",
-            }}
-          />
-        </div>
-        <div className="adm-bar-legend">
-          <span>
-            <i className="adm-dot" style={{ background: "var(--green)" }} />
-            In {formatINR(combined.totalRevenue)}
-          </span>
-          <span>
-            <i className="adm-dot" style={{ background: "var(--red)" }} />
-            Out {formatINR(outgoings)}
-          </span>
-        </div>
-
-        <div className="adm-kv" style={{ marginTop: 12 }}>
-          <span className="adm-kv-k">Equipment expenses</span>
-          <span className="adm-kv-v" style={{ color: "var(--red2)" }}>
-            −{formatINR(combined.totalExpenses)}
-          </span>
-        </div>
-        <div className="adm-kv">
-          <span className="adm-kv-k">Staff salaries (due so far)</span>
-          <span className="adm-kv-v" style={{ color: "var(--blue2)" }}>
-            −{formatINR(combined.salariesDue)}
-          </span>
-        </div>
-        <div className="adm-kv adm-kv-total">
-          <span className="adm-kv-k" style={{ color: "var(--text)" }}>
-            Net profit
-          </span>
-          <span
-            className="adm-kv-v"
-            style={{
-              color: combined.profit >= 0 ? "var(--green2)" : "var(--red2)",
-            }}
-          >
-            {formatINR(combined.profit)}
-          </span>
-        </div>
+        {isHistoryEnabled() && <Jump href="/admin/history" icon={<History size={16} />} title="History" sub="See who changed a payment or expense" />}
+        <Jump href="/admin/members" icon={<Users size={16} />} title="Members & renewals" sub="Renew a membership or update member details" />
+        <Jump href="/admin/equipment" icon={<Wrench size={16} />} title="Equipment expenses" sub="Record a purchase, repair or servicing cost" />
+        <Jump href="/admin/staff" icon={<HandCoins size={16} />} title="Staff & salaries" sub="Review current rates and scheduled paydays" />
       </section>
-
-        </div>
-
-        <div className="adm-dash-col">
-      {/* Per-branch breakdown, only when "All Branches" is selected. */}
-      {scope.type === "all" && perBranchStats.length > 1 && (
-        <>
-          <h2 className="adm-h2">
-            <Building2 size={13} />
-            Per Branch
-          </h2>
-          <div className="adm-bscroll">
-            {perBranchStats.map(({ branch, stats }) => (
-              <article key={branch.id} className="adm-bcard">
-                <div className="adm-bcard-head">
-                  <span className="adm-bcard-name">{branch.name}</span>
-                  <span className="adm-tag gold">{branch.code}</span>
-                </div>
-                <div className="adm-kv">
-                  <span className="adm-kv-k">Members</span>
-                  <span className="adm-kv-v">{stats.totalMembers}</span>
-                </div>
-                <div className="adm-kv">
-                  <span className="adm-kv-k">Revenue</span>
-                  <span className="adm-kv-v" style={{ color: "var(--green2)" }}>
-                    {formatINR(stats.totalRevenue)}
-                  </span>
-                </div>
-                <div className="adm-kv">
-                  <span className="adm-kv-k">Equipment</span>
-                  <span className="adm-kv-v" style={{ color: "var(--red2)" }}>
-                    −{formatINR(stats.totalExpenses)}
-                  </span>
-                </div>
-                <div className="adm-kv">
-                  <span className="adm-kv-k">Salaries</span>
-                  <span className="adm-kv-v" style={{ color: "var(--blue2)" }}>
-                    −{formatINR(stats.salariesDue)}
-                  </span>
-                </div>
-                <div className="adm-kv adm-kv-total">
-                  <span className="adm-kv-k" style={{ color: "var(--text)" }}>
-                    Net
-                  </span>
-                  <span
-                    className="adm-kv-v"
-                    style={{
-                      color:
-                        stats.profit >= 0 ? "var(--green2)" : "var(--red2)",
-                    }}
-                  >
-                    {formatINR(stats.profit)}
-                  </span>
-                </div>
-              </article>
-            ))}
-          </div>
-        </>
-      )}
-
-      <h2 className="adm-h2">Jump To</h2>
-      <section className="adm-card" style={{ padding: "4px 15px" }}>
-        {isHistoryEnabled() && <Jump
-          href="/admin/history"
-          tone="blue"
-          icon={<History size={15} />}
-          title="Recent changes"
-          sub="Member updates, renewals & expenses · who changed what"
-        />}
-        <Jump
-          href="/admin/reminders"
-          tone="orange"
-          icon={<AlertTriangle size={15} />}
-          title="Send expiry reminders"
-          sub={`${combined.expiringCount} expiring in 7 days`}
-        />
-        <Jump
-          href="/admin/inactive"
-          tone="red"
-          icon={<UserX size={15} />}
-          title="Inactive members"
-          sub={`${combined.expiredCount} expired or left`}
-        />
-        <Jump
-          href="/admin/equipment"
-          tone="blue"
-          icon={<Wrench size={15} />}
-          title="Equipment & servicing"
-          sub={`${formatINR(combined.totalExpenses)} spent this cycle`}
-        />
-        <Jump
-          href="/admin/staff"
-          tone="purple"
-          icon={<HandCoins size={15} />}
-          title="Staff & salaries"
-          sub={`${formatINR(combined.salariesDue)} due this cycle`}
-        />
-      </section>
-        </div>
-      </div>
     </>
   );
 }
 
-function QStat({
-  tone,
-  icon,
-  value,
-  label,
-}: {
-  tone: string;
-  icon: React.ReactNode;
-  value: string;
-  label: string;
-}) {
-  return (
-    <div className="adm-qstat">
-      <div className={`adm-qstat-icon tone-${tone}`}>{icon}</div>
-      <div className="adm-qstat-v">{value}</div>
-      <div className="adm-qstat-k">{label}</div>
-    </div>
-  );
-}
-
-function Jump({
-  href,
-  tone,
-  icon,
-  title,
-  sub,
-}: {
-  href: string;
-  tone: string;
-  icon: React.ReactNode;
-  title: string;
-  sub: string;
-}) {
-  return (
-    <Link href={href} className="adm-feed-row" style={{ alignItems: "center" }}>
-      <span className={`adm-feed-icon tone-${tone}`}>{icon}</span>
-      <span style={{ minWidth: 0 }}>
-        <span className="adm-feed-title" style={{ display: "block" }}>
-          {title}
-        </span>
-        <span className="adm-feed-sub" style={{ display: "block" }}>
-          {sub}
-        </span>
-      </span>
-      <ChevronRight
-        size={16}
-        style={{ marginLeft: "auto", color: "var(--text3)", flex: "0 0 auto" }}
-      />
-    </Link>
-  );
+function Jump({ href, icon, title, sub }: { href: string; icon: React.ReactNode; title: string; sub: string }) {
+  return <Link href={href} className="adm-feed-row">
+    <span className="adm-feed-icon tone-gold">{icon}</span>
+    <span className="adm-finance-jump-text"><span className="adm-feed-title">{title}</span><span className="adm-feed-sub">{sub}</span></span>
+    <ChevronRight size={16} />
+  </Link>;
 }

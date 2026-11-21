@@ -3,7 +3,8 @@ import Link from "next/link";
 import { db } from "@/db";
 import { isHistoryEnabled } from "@/lib/history-release";
 import DashboardTransactions from "./dashboard-transactions";
-import { cycleTitle, dashboardCycles, dashboardHref, LEDGER_PAGE_SIZE, selectedDashboardCycle, type LedgerKind } from "@/lib/dashboard-finance";
+import { DashboardPeriodForm, ReviewPaymentsButton } from "./dashboard-controls";
+import { dashboardHref, LEDGER_PAGE_SIZE, periodTitle, scheduledSalaryInPeriod, selectedDashboardPeriod, type LedgerKind } from "@/lib/dashboard-finance";
 import { dashboardTransactions } from "@/lib/dashboard-transactions";
 import { formatDateIn } from "@/lib/whatsapp";
 import { members, payments, equipmentExpenses, staff } from "@/db/schema";
@@ -15,7 +16,7 @@ import {
   UserX,
   AlertTriangle,
   ChevronRight,
-  ChevronLeft,
+  ChevronDown,
   History,
 } from "lucide-react";
 import { getBranchScope, getAllBranches } from "@/lib/branch";
@@ -24,9 +25,6 @@ import {
   formatINR,
   istDateString,
   addDaysIso,
-  gymCycle,
-  salaryPayday,
-  addMonthsIso,
 } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -47,8 +45,7 @@ async function getBranchStats(
     // on the dashboard that the member list cannot account for. Same filter as
     // the member's history — see the note on the column in schema.ts.
     //
-    // Dated to the cycle, like the spending below: every money figure on this
-    // page answers "what did this month do", never "what have we ever done".
+    // Collections and spending use the same owner-selected date range.
     db
       .select({ total: sql<number>`coalesce(sum(${payments.amount}), 0)`,
         paymentCount: sql<number>`count(*)`,
@@ -76,9 +73,7 @@ async function getBranchStats(
           lte(equipmentExpenses.date, today < cycle.end ? today : cycle.end)
         )
       ),
-    // Who has been paid inside this cycle — which is not the whole roster. The
-    // salary is charged from the person's own payday (the day of the month they
-    // joined), so a cycle that opened yesterday carries nobody's wages yet.
+    // Scheduled wages follow each person's payday inside the selected range.
     db
       .select({ salary: staff.salary, joinDate: staff.joinDate })
       .from(staff)
@@ -106,14 +101,8 @@ async function getBranchStats(
   const totalMembers = Number(m[0]?.count) || 0;
   const totalRevenue = Number(p[0]?.total) || 0;
   const totalExpenses = Number(e[0]?.total) || 0;
-  // Paid once the payday has arrived, not before: on the 16th of a cycle that
-  // opened on the 15th this is nobody, which is the number the owner can check
-  // against his own pocket.
   const salariesDue = s.reduce(
-    (sum, item) =>
-      salaryPayday(item.joinDate, cycle) <= (today < cycle.end ? today : cycle.end) && salaryPayday(item.joinDate, cycle) >= item.joinDate
-        ? sum + (Number(item.salary) || 0)
-        : sum,
+    (sum, item) => sum + scheduledSalaryInPeriod(item.joinDate, Number(item.salary) || 0, cycle, today),
     0
   );
   const expiredCount = Number(expired[0]?.count) || 0;
@@ -137,7 +126,7 @@ async function getBranchStats(
 }
 
 export default async function AdminDashboard({ searchParams }: {
-  searchParams: Promise<{ cycle?: string; type?: string; q?: string; page?: string }>;
+  searchParams: Promise<{ from?: string; to?: string; review?: string; cycle?: string; type?: string; q?: string; page?: string }>;
 }) {
   await requireOwner();
 
@@ -151,12 +140,9 @@ export default async function AdminDashboard({ searchParams }: {
   const today = istDateString();
   const soon = addDaysIso(today, 7);
 
-  // Every money figure on this page covers the gym's own month, 15th → 14th.
-  // The owner counts a month's takings and a month's spending across that
-  // boundary, so the calendar month is the wrong window for both.
   const params = await searchParams;
-  const currentCycle = gymCycle(today);
-  const cycle = selectedDashboardCycle(params.cycle, today);
+  const { period: cycle, error: periodError } = selectedDashboardPeriod(params.from, params.to, today, params.cycle);
+  const reviewOpen = params.review === "1";
   const kind: LedgerKind = params.type === "equipment" ? "equipment" : "payments";
   const query = typeof params.q === "string" ? params.q.trim().slice(0, 80) : "";
   const requestedPage = Number(params.page ?? 1);
@@ -176,10 +162,10 @@ export default async function AdminDashboard({ searchParams }: {
       branch: b,
       stats: await getBranchStats(b.id, today, soon, cycle),
     }))),
-    dashboardTransactions(visibleBranches.map((b) => b.id), cycle.start, receivedThrough, kind, query, page),
+    reviewOpen ? dashboardTransactions(visibleBranches.map((b) => b.id), cycle.start, receivedThrough, kind, query, page) : Promise.resolve(null),
   ]);
-  const pages = Math.max(1, Math.ceil(ledger.total / LEDGER_PAGE_SIZE));
-  if (page > pages) redirect(dashboardHref(cycle.start, kind, query, pages));
+  const pages = Math.max(1, Math.ceil((ledger?.total ?? 0) / LEDGER_PAGE_SIZE));
+  if (ledger && page > pages) redirect(dashboardHref(cycle, kind, query, pages));
 
   const combined = perBranchStats.reduce(
     (acc, r) => ({
@@ -221,64 +207,61 @@ export default async function AdminDashboard({ searchParams }: {
         <h1 className="adm-h1">Dashboard</h1>
         <p className="adm-sub"><strong>{scopeLabel}</strong> · collections and costs</p>
       </div>
-      <form className="adm-finance-cycle" method="get" action="/admin">
-        <div className="adm-finance-cycle-field">
-          <label className="adm-label" htmlFor="dashboard-cycle">Profit cycle · 15th to 14th</label>
-          <select id="dashboard-cycle" name="cycle" defaultValue={cycle.start} className="adm-select">
-            {dashboardCycles(today, cycle.start).map((item) => <option key={item.start} value={item.start}>
-              {cycleTitle(item)}{item.start === currentCycle.start ? " · Current" : ""}
-            </option>)}
-          </select>
-        </div>
-        <input type="hidden" name="type" value={kind} />
-        <button type="submit" className="adm-btn primary">View cycle</button>
-        <div className="adm-finance-cycle-nav">
-          <Link href={dashboardHref(addMonthsIso(cycle.start, -1), kind).split("#")[0]} className="adm-btn" aria-label="Previous profit cycle"><ChevronLeft size={16} /></Link>
-          {cycle.start < currentCycle.start
-            ? <Link href={dashboardHref(addMonthsIso(cycle.start, 1), kind).split("#")[0]} className="adm-btn" aria-label="Next profit cycle"><ChevronRight size={16} /></Link>
-            : <button type="button" className="adm-btn" disabled aria-label="Next profit cycle"><ChevronRight size={16} /></button>}
-        </div>
-        {cycle.start !== currentCycle.start && <Link href="/admin" className="adm-btn">Current cycle</Link>}
-      </form>
+      <DashboardPeriodForm key={`${cycle.start}:${cycle.end}:${periodError}`} period={cycle} today={today} error={periodError} reviewOpen={reviewOpen} kind={kind} />
       <div className="adm-finance-layout">
-        <section className="adm-finance-statement" aria-labelledby="profit-title">
-          <h2 id="profit-title">Net profit</h2>
-          <p className={"adm-finance-profit" + (combined.profit < 0 ? " negative" : "")}>{formatINR(combined.profit)}</p>
-          <p className="adm-finance-period">{cycleTitle(cycle)}</p>
-          <p className="adm-finance-period-status">{cycle.end < today ? "Completed cycle" : "In progress"} · receipts through {formatDateIn(receivedThrough)}</p>
-          <dl className="adm-finance-breakdown">
+        <section id="accounts" className="adm-finance-statement" aria-labelledby="profit-title">
+          <div className="adm-finance-statement-head">
+            <div><h2 id="profit-title">Net profit</h2>
+              <p className={"adm-finance-profit" + (combined.profit < 0 ? " negative" : "")}>{formatINR(combined.profit)}</p></div>
+            <div className="adm-finance-period-wrap"><p className="adm-finance-period">{periodTitle(cycle)}</p>
+              <p className="adm-finance-period-status">{cycle.end > today ? `Through ${formatDateIn(receivedThrough)}` : "Selected dates"}</p></div>
+          </div>
+          <div className="adm-finance-statement-body">
+            <dl className="adm-finance-breakdown">
             <div><dt>Membership collections</dt><dd>{formatINR(combined.totalRevenue)}</dd></div>
             <div><dt>Equipment expenses</dt><dd>−{formatINR(combined.totalExpenses)}</dd></div>
             <div><dt>Scheduled payroll</dt><dd>−{formatINR(combined.salariesDue)}</dd></div>
-          </dl>
-          <Link href={dashboardHref(cycle.start)} className="adm-btn primary adm-finance-review">
-            Review {combined.paymentCount} {combined.paymentCount === 1 ? "payment" : "payments"} <ChevronRight size={15} />
-          </Link>
-          <div className="adm-finance-methods">
-            <h3>Collections by method</h3>
-            <dl>
+            </dl>
+            <div className="adm-finance-statement-actions">
+              <ReviewPaymentsButton href={dashboardHref(cycle)} count={combined.paymentCount} open={reviewOpen} />
+              <details className="adm-finance-methods">
+                <summary>Collections by method <ChevronDown size={15} aria-hidden="true" /></summary>
+                <dl>
               <div><dt>Cash</dt><dd>{formatINR(combined.cash)}</dd></div>
               <div><dt>UPI</dt><dd>{formatINR(combined.upi)}</dd></div>
               <div><dt>Online</dt><dd>{formatINR(combined.online)}</dd></div>
               <div><dt>Other</dt><dd>{formatINR(combined.other)}</dd></div>
-            </dl>
+                </dl>
+              </details>
+              <p className="adm-finance-footnote">Scheduled payroll uses current active staff rates and their join-date paydays.</p>
+            </div>
           </div>
-          <p className="adm-finance-footnote">Scheduled payroll uses the current active staff rates and their join-date paydays.</p>
         </section>
-        <DashboardTransactions key={cycle.start + ":" + kind + ":" + query} rows={ledger.rows} total={ledger.total}
-          page={page} pages={pages} kind={kind} cycle={cycle.start} query={query} today={today} showBranch={scope.type === "all"} />
+        {ledger && <DashboardTransactions key={cycle.start + ":" + cycle.end + ":" + kind + ":" + query} rows={ledger.rows} total={ledger.total}
+          page={page} pages={pages} kind={kind} period={cycle} query={query} today={today} showBranch={scope.type === "all"} />}
       </div>
       <section className="adm-finance-health" aria-labelledby="gym-today-title">
         <h2 id="gym-today-title">Gym today</h2>
-        <p>Membership status as of {formatDateIn(today)}, across {scopeLabel}.</p>
+        <p>Membership status · {formatDateIn(today)}</p>
         <div>
-          <Link href="/admin/members"><Users size={17} /><strong>{combined.totalMembers}</strong><span>Members</span><ChevronRight size={14} /></Link>
-          <Link href="/admin/reminders"><AlertTriangle size={17} /><strong>{combined.expiringCount}</strong><span>Expiring in 7 days</span><ChevronRight size={14} /></Link>
-          <Link href="/admin/inactive"><UserX size={17} /><strong>{combined.expiredCount}</strong><span>Expired memberships</span><ChevronRight size={14} /></Link>
+          <Link href="/admin/members"><div><Users size={17} aria-hidden="true" /><strong>{combined.totalMembers}</strong></div><span>Members</span></Link>
+          <Link href="/admin/reminders"><div><AlertTriangle size={17} aria-hidden="true" /><strong>{combined.expiringCount}</strong></div><span>Expiring in 7 days</span></Link>
+          <Link href="/admin/inactive"><div><UserX size={17} aria-hidden="true" /><strong>{combined.expiredCount}</strong></div><span>Expired memberships</span></Link>
         </div>
       </section>
       {scope.type === "all" && perBranchStats.length > 1 && <section className="adm-finance-branches">
         <h2>Accounts by branch</h2>
+        <div className="adm-finance-branch-list">
+          {perBranchStats.map(({ branch, stats }) => <article key={branch.id}>
+            <h3>{branch.name}</h3>
+            <dl>
+              <div><dt>Collections</dt><dd>{formatINR(stats.totalRevenue)}</dd></div>
+              <div><dt>Equipment</dt><dd>{formatINR(stats.totalExpenses)}</dd></div>
+              <div><dt>Payroll</dt><dd>{formatINR(stats.salariesDue)}</dd></div>
+              <div><dt>Net profit</dt><dd className={stats.profit < 0 ? "negative" : "profit"}>{formatINR(stats.profit)}</dd></div>
+            </dl>
+          </article>)}
+        </div>
         <div className="adm-table-wrap">
           <table className="adm-table"><thead><tr><th>Branch</th><th>Collections</th><th>Equipment</th><th>Payroll</th><th>Net profit</th></tr></thead>
             <tbody>{perBranchStats.map(({ branch, stats }) => <tr key={branch.id}>

@@ -31,7 +31,7 @@ export async function correctPaymentDateAction(paymentId: number, receivedDate: 
       if (payment.date !== expectedDate) return { error: "This payment was changed by someone else. Refresh the dashboard and try again." };
       const [member] = payment.memberId ? await tx.select({ name: members.name, gymId: members.gymId }).from(members).where(eq(members.id, payment.memberId)) : [];
       await tx.update(payments).set({ date: receivedDate }).where(eq(payments.id, paymentId));
-      await recordActivity(tx, "payment.updated", `Corrected received date · ${member?.name ?? "Deleted member"}${member ? ` · gym #${member.gymId}` : ""} · ${formatINR(payment.amount)} · counted in ${cycle.label}`, {
+      await recordActivity(tx, "payment.updated", `Corrected received date · ${member?.name ?? "Deleted member"}${member ? ` · gym #${member.gymId}` : ""} · ${formatINR(payment.amount)} · received ${receivedDate}`, {
         branchId: payment.branchId, subjectId: payment.id,
         changes: [{ field: "receivedDate", label: "Received date", before: payment.date, after: receivedDate }],
       });

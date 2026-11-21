@@ -59,7 +59,7 @@ below. In local development, the defaults are `/login` for staff and
 
 | Route | Purpose |
 | --- | --- |
-| `/admin` | Owner accounts for a selected 15th-to-14th cycle, searchable payments and expenses, received-date corrections, expense editing, collection methods and current membership status; branch-scoped or all-branches |
+| `/admin` | Owner accounts for any selected start and end dates; payments and expenses open on demand with close controls, received-date corrections, expense editing, collection methods and current membership status; branch-scoped or all-branches |
 | `/admin/history` | Changes with the responsible account and before/after values; automatically removed after 31 days |
 | `/admin/join-requests` | Owner-only queue for online joins where no gateway payment was taken. A navigation badge counts open leads. Marking a lead paid creates the membership and provides a WhatsApp link to send the Gym ID |
 | `/admin/members` | Create, view, edit and delete members; search; renew from today or the previous due date with a date preview; record departures and returns; show or hide columns; manage branch-specific Gym IDs; export Excel/PDF |
